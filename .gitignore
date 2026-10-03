@@ -35,6 +35,11 @@ bot_log.csv
 *.swo
 *~
 
+# Local personal notes
+publish_instructions.txt
+PUBLISH_NOTES.txt
+*.local.txt
+
 # OS
 .DS_Store
 Thumbs.db
