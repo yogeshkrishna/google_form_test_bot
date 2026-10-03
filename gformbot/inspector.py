@@ -93,21 +93,33 @@ def inspect_form(url: str, browser: str = "auto", headless: bool = True,
         page_num = 1
         question_index = 1
 
-        while True:
+        MAX_PAGES = 200  # safety net — no real form has more than this
+
+        while page_num <= MAX_PAGES:
             _status(f"Scraping page {page_num}…")
             questions_on_page = _scrape_page(driver, page_num, question_index)
             schema.questions.extend(questions_on_page)
             question_index += len(questions_on_page)
 
-            # Try to advance to next page
+            # A Submit button means this is the last page — stop here
+            if _find_button(driver, "Submit") is not None:
+                break
+
+            # No Next button either — also the end
             next_btn = _find_button(driver, "Next")
             if next_btn is None:
                 break
 
+            # Click Next, wait for the page to change
+            prev_url = driver.current_url
             next_btn.click()
-            time.sleep(1.2)
+            time.sleep(1.5)
             page_num += 1
             schema.pages = page_num
+
+            # If the URL didn't change at all, we're stuck — stop
+            if driver.current_url == prev_url:
+                break
 
         schema.pages = page_num
         _status(f"Inspection complete — {len(schema.questions)} questions across {schema.pages} page(s).")
