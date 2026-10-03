@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gformbot"
+version = "0.1.0"
+description = "A general-purpose Google Form auto-filler CLI — inspect any form, supply a response pool, and submit at scale."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "yogeshkrishna" }]
+keywords = ["google-forms", "automation", "selenium", "cli", "bot"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+    "Topic :: Software Development :: Testing",
+]
+requires-python = ">=3.9"
+
+dependencies = [
+    "selenium>=4.25,<5",
+    "click>=8.1",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "InquirerPy>=0.3.4",
+]
+
+[project.optional-dependencies]
+clipboard = ["pyperclip"]
+dev = [
+    "pytest",
+    "build",
+    "twine",
+]
+
+[project.urls]
+Homepage = "https://github.com/yogeshkrishna/google_form_test_bot"
+Repository = "https://github.com/yogeshkrishna/google_form_test_bot"
+"Bug Tracker" = "https://github.com/yogeshkrishna/google_form_test_bot/issues"
+
+[project.scripts]
+gformbot = "gformbot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gformbot*"]
