@@ -38,12 +38,12 @@ from gformbot.config import (
 
 # Matches the public respondent URL (both /d/e/ID/viewform and /d/ID/viewform)
 _FORM_VIEWFORM_RE = re.compile(
-    r"^https?://docs\.google\.com/forms/d/(?:e/)?[A-Za-z0-9_\-]+/viewform",
+    r"^https?://docs\.google\.com/forms/d/(?:e/)?[A-Za-z0-9_-]+/viewform",
     re.IGNORECASE,
 )
 # Matches the form editor URL — common mistake to copy this instead of the share link
 _FORM_EDIT_RE = re.compile(
-    r"^https?://docs\.google\.com/forms/d/[A-Za-z0-9_\-]+/edit",
+    r"^https?://docs\.google\.com/forms/d/[A-Za-z0-9_-]+/edit",
     re.IGNORECASE,
 )
 # Matches forms.gle short links — we can't validate the ID locally, browser follows redirect
@@ -321,10 +321,6 @@ def inspect(url, browser, save, output):
         if not url:
             url = _ask_text("Google Form URL")
 
-    if not url:
-        _error("No URL provided.")
-        raise SystemExit(1)
-
     valid, msg = _validate_form_url(url)
     if not valid:
         _error(msg)
@@ -525,7 +521,7 @@ def _wizard():
 
     valid, msg = _validate_form_url(url)
     if not valid:
-        _error(msg or "That doesn't look like a Google Form URL. Please try again.")
+        _error(msg)
         raise SystemExit(1)
     if msg:  # valid short link with an info note
         _info(msg)
