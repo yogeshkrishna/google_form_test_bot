@@ -33,6 +33,65 @@ from gformbot.config import (
 
 
 # ---------------------------------------------------------------------------
+# Google Form URL validation
+# ---------------------------------------------------------------------------
+
+# Matches the public respondent URL (both /d/e/ID/viewform and /d/ID/viewform)
+_FORM_VIEWFORM_RE = re.compile(
+    r"^https?://docs\.google\.com/forms/d/(?:e/)?[A-Za-z0-9_\-]+/viewform",
+    re.IGNORECASE,
+)
+# Matches the form editor URL — common mistake to copy this instead of the share link
+_FORM_EDIT_RE = re.compile(
+    r"^https?://docs\.google\.com/forms/d/[A-Za-z0-9_\-]+/edit",
+    re.IGNORECASE,
+)
+# Matches forms.gle short links — we can't validate the ID locally, browser follows redirect
+_FORMS_SHORT_RE = re.compile(
+    r"^https?://forms\.gle/[A-Za-z0-9]+",
+    re.IGNORECASE,
+)
+
+
+def _validate_form_url(url: str) -> tuple[bool, str | None]:
+    """
+    Validate a Google Form URL.
+
+    Returns
+    -------
+    (is_valid: bool, error_or_note: str | None)
+        If valid, error_or_note may still contain a non-fatal info note.
+        If invalid, error_or_note contains a specific, actionable message.
+    """
+    if not url:
+        return False, "No URL provided."
+
+    if _FORM_VIEWFORM_RE.match(url):
+        return True, None
+
+    if _FORMS_SHORT_RE.match(url):
+        # Short links are valid — the browser will follow the redirect
+        return True, (
+            "Short link detected (forms.gle) — the browser will follow "
+            "the redirect automatically."
+        )
+
+    if _FORM_EDIT_RE.match(url):
+        return False, (
+            "That looks like the form editor URL (/edit). "
+            "Open the form in a browser, click Send or the share icon, "
+            "and copy the link ending in /viewform."
+        )
+
+    if "docs.google.com/forms" in url:
+        return False, (
+            "Unrecognized Google Forms URL format. "
+            "Make sure the URL ends with /viewform (the public respondent link)."
+        )
+
+    return False, "That doesn't look like a Google Form URL."
+
+# ---------------------------------------------------------------------------
 # Rich / fallback terminal styling
 # ---------------------------------------------------------------------------
 
@@ -266,6 +325,13 @@ def inspect(url, browser, save, output):
         _error("No URL provided.")
         raise SystemExit(1)
 
+    valid, msg = _validate_form_url(url)
+    if not valid:
+        _error(msg)
+        raise SystemExit(1)
+    if msg:  # valid but has an info note (e.g. forms.gle short link)
+        _info(msg)
+
     _run_inspect(url, browser, save, output)
 
 
@@ -457,9 +523,12 @@ def _wizard():
     if not url:
         url = _ask_text("Paste the Google Form URL")
 
-    if not url or "docs.google.com/forms" not in url:
-        _error("That doesn't look like a Google Form URL. Please try again.")
+    valid, msg = _validate_form_url(url)
+    if not valid:
+        _error(msg or "That doesn't look like a Google Form URL. Please try again.")
         raise SystemExit(1)
+    if msg:  # valid short link with an info note
+        _info(msg)
 
     # ── Step 2: Config ───────────────────────────────────────────────────────
     _section("Step 2 — Config")
