@@ -20,6 +20,9 @@ pip install "gformbot[clipboard]"
 > **Requirements:** Python ≥ 3.9 · Google Chrome, Firefox, or Edge installed on your system.  
 > ChromeDriver / GeckoDriver are managed automatically by Selenium Manager (no manual download needed).
 
+> **Windows users:** If `gformbot` isn't recognized after installing, run it as `python -m gformbot` instead.  
+> This happens when pip's Scripts folder isn't on your PATH (common with the Windows Store version of Python).
+
 ---
 
 ## Quick Start
