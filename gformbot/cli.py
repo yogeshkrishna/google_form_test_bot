@@ -15,6 +15,7 @@ from __future__ import annotations
 import sys
 import os
 import re
+import shutil
 import subprocess
 import platform
 from pathlib import Path
@@ -551,14 +552,12 @@ def _wizard():
     # ── Step 6: Confirm & Run ────────────────────────────────────────────────
     _section("Step 6 — Submit")
 
-    dry_run = _ask_confirm(
+    will_submit = _ask_confirm(
         f"Submit {config.count} response(s) to the form? (No = dry-run only)",
         default=True,
     )
+    dry_run = not will_submit
     if dry_run:
-        dry_run = False
-    else:
-        dry_run = True
         _warn("Dry-run mode — no browser will open, no submissions will happen.")
 
     save_config(config, config_path)
@@ -618,18 +617,18 @@ def _run_fill(config: RunConfig, dry_run: bool = False):
     else:
         for i in range(1, config.count + 1):
             answer = next(gen)
-            print(f"  [{i}/{config.count}] launching…")
+            print(f"  [{i}/{config.count}] launching...")
             try:
                 ok, message = submit_response(config, answer)
                 log_result(config.log_file, i, answer, ok, message)
-                print(f"  [{i}/{config.count}] submitted ✔")
+                print(f"  [{i}/{config.count}] submitted {_SYM_CHECK}")
             except KeyboardInterrupt:
                 print("\n  Stopped.")
                 break
             except Exception as e:
                 msg = str(e)
                 log_result(config.log_file, i, answer, False, msg)
-                print(f"  [{i}/{config.count}] ERROR: {msg}")
+                print(f"  [{i}/{config.count}] {_SYM_CROSS} {msg}")
                 print("  Stopping to prevent repeated failures.")
                 break
 
