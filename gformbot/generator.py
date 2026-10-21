@@ -1,4 +1,5 @@
 """Prepare and validate complete response profiles before opening a browser."""
+
 from __future__ import annotations
 
 import csv
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import QuestionConfig, RunConfig, clean_path, validate_config
-from .validation import EMAIL_PATTERN, needs_email, parse_date, normalize_csv_dates
+from .validation import EMAIL_PATTERN, needs_email, normalize_csv_dates, parse_date
 
 CHOICE_TYPES = {"radio", "checkbox", "dropdown", "scale"}
 TEXT_TYPES = {"text", "textarea", "date"}
@@ -59,9 +60,13 @@ def map_columns(config: RunConfig, headers: list[str], mapping: dict | None = No
     result = {}
     used = {}
     known = {str(q.index) for q in config.questions}
+    mapped_indexes = set()
     for key in supplied:
         if str(key) not in known:
             raise ValueError(f"Unknown question in column mapping: {key}")
+        if str(key) in mapped_indexes:
+            raise ValueError(f"Q{key}: duplicate column mapping keys.")
+        mapped_indexes.add(str(key))
     by_name = {}
     for header in headers:
         by_name.setdefault(_normal(header), []).append(header)
@@ -93,10 +98,12 @@ def mapping_diagnostics(config: RunConfig, headers: list[str], mapping: dict | N
     """Describe accepted mappings so callers can make blank/dropped data explicit."""
     columns = map_columns(config, headers, mapping)
     used = {column for column in columns.values() if column is not None}
-    return {"mapping": columns,
-            "unmatched_questions": [index for index, column in columns.items() if column is None],
-            "unused_columns": [header for header in headers if header not in used],
-            "matched_count": len(used)}
+    return {
+        "mapping": columns,
+        "unmatched_questions": [index for index, column in columns.items() if column is None],
+        "unused_columns": [header for header in headers if header not in used],
+        "matched_count": len(used),
+    }
 
 
 def parse_checkbox(q: QuestionConfig, value: Any) -> list[str]:
@@ -112,7 +119,9 @@ def parse_checkbox(q: QuestionConfig, value: Any) -> list[str]:
             try:
                 selected = json.loads(raw)
             except ValueError as exc:
-                raise ValueError(f"Q{q.index}: invalid checkbox JSON; use an array of exact option labels.") from exc
+                raise ValueError(
+                    f"Q{q.index}: invalid checkbox JSON; use an array of exact option labels."
+                ) from exc
             if not isinstance(selected, list):
                 raise ValueError(f"Q{q.index}: checkbox answer must be a JSON array.")
         else:
@@ -159,7 +168,9 @@ def parse_checkbox(q: QuestionConfig, value: Any) -> list[str]:
                 paths[start] = matches
             interpretations = paths[0]
             if len(interpretations) != 1:
-                raise ValueError(f"Q{q.index}: unknown or ambiguous checkbox labels. Store exact selections as a JSON array.")
+                raise ValueError(
+                    f"Q{q.index}: unknown or ambiguous checkbox labels. Store exact selections as a JSON array."
+                )
             selected, tail = [], interpretations[0]
             while tail is not None:
                 option, tail = tail
@@ -171,7 +182,9 @@ def parse_checkbox(q: QuestionConfig, value: Any) -> list[str]:
     return selected
 
 
-def validate_answer(config: RunConfig, answer: dict, *, repair: bool = False, changes: list[str] | None = None) -> dict[int, Any]:
+def validate_answer(
+    config: RunConfig, answer: dict, *, repair: bool = False, changes: list[str] | None = None
+) -> dict[int, Any]:
     if config.unsupported:
         raise ValueError("Unsupported form: " + "; ".join(config.unsupported))
     if not config.questions:
@@ -204,7 +217,7 @@ def validate_answer(config: RunConfig, answer: dict, *, repair: bool = False, ch
             if q.max_select is not None and len(value) > q.max_select:
                 if not repair:
                     raise CheckboxRepairError(f"{label}: at most {q.max_select} selections are allowed.")
-                value = value[:q.max_select]
+                value = value[: q.max_select]
                 changes.append(f"Q{q.index}: capped selections at {q.max_select}")
             minimum = max(q.min_select, int(q.required))
             if (value or q.required) and len(value) < minimum:
@@ -232,23 +245,42 @@ def validate_answer(config: RunConfig, answer: dict, *, repair: bool = False, ch
     return result
 
 
-def load_reference(config: RunConfig, path: str | Path, mapping: dict | None = None, repair: bool = False, changes: list[str] | None = None) -> list[dict[int, Any]]:
+def load_reference(
+    config: RunConfig,
+    path: str | Path,
+    mapping: dict | None = None,
+    repair: bool = False,
+    changes: list[str] | None = None,
+) -> list[dict[int, Any]]:
     validate_config(config)
     headers, rows = read_pool(path)
     columns = map_columns(config, headers, mapping)
-    if not any(column is not None for column in columns.values()) and mapping is None and not config.pool_column_map:
-        raise ValueError("No CSV columns match the form. Map columns explicitly before importing blank responses.")
+    if (
+        not any(column is not None for column in columns.values())
+        and mapping is None
+        and not config.pool_column_map
+    ):
+        raise ValueError(
+            "No CSV columns match the form. Map columns explicitly before importing blank responses."
+        )
     for question in config.questions:
         column = columns[question.index]
         if question.qtype == "date" and column:
             normalized = normalize_csv_dates(question, [row[column] for row in rows], config.csv_date_order)
-            for row, value in zip(rows, normalized):
+            for row, value in zip(rows, normalized, strict=True):
                 row[column] = value
     result = []
     for line, row in enumerate(rows, 2):
         local_changes = []
         try:
-            result.append(validate_answer(config, {q.index: row[columns[q.index]] if columns[q.index] else "" for q in config.questions}, repair=repair, changes=local_changes))
+            result.append(
+                validate_answer(
+                    config,
+                    {q.index: row[columns[q.index]] if columns[q.index] else "" for q in config.questions},
+                    repair=repair,
+                    changes=local_changes,
+                )
+            )
         except ValueError as exc:
             raise type(exc)(f"CSV row {line}: {exc}") from exc
         if changes is not None:
@@ -276,17 +308,17 @@ def _random_from_options(q: QuestionConfig) -> Any:
     weights = q.weights or [1] * len(q.options)
     if q.qtype != "checkbox":
         return random.choices(q.options, weights=weights, k=1)[0]
-    available = [o for o, w in zip(q.options, weights) if w > 0]
+    available = [o for o, w in zip(q.options, weights, strict=True) if w > 0]
     exclusive = set(q.exclusive_options)
     regular = [o for o in available if o not in exclusive]
     minimum = max(q.min_select, int(q.required))
-    maximum = min(q.max_select if q.max_select is not None else max(3, minimum), len(available))
+    maximum = min(q.max_select if q.max_select is not None else len(available), len(available))
     feasible = [n for n in range(minimum, maximum + 1) if n < 2 or n <= len(regular)]
     if not feasible:
         raise ValueError(f"Q{q.index}: weights and checkbox bounds cannot produce valid answers.")
     count = random.choice(feasible)
     remaining = available[:] if count < 2 else regular[:]
-    weight_by_option = dict(zip(q.options, weights))
+    weight_by_option = dict(zip(q.options, weights, strict=True))
     selected = []
     for _ in range(count):
         option = random.choices(remaining, weights=[weight_by_option[o] for o in remaining], k=1)[0]
@@ -298,7 +330,10 @@ def _random_from_options(q: QuestionConfig) -> Any:
 def make_answer(config: RunConfig, pool_row: dict | None = None) -> dict[int, Any]:
     if pool_row is not None:
         mapping = map_columns(config, list(pool_row))
-        return validate_answer(config, {q.index: pool_row[mapping[q.index]] if mapping[q.index] else "" for q in config.questions})
+        return validate_answer(
+            config,
+            {q.index: pool_row[mapping[q.index]] if mapping[q.index] else "" for q in config.questions},
+        )
     answer = {}
     for q in config.questions:
         if q.fixed_value is not None:
@@ -313,8 +348,13 @@ def make_answer(config: RunConfig, pool_row: dict | None = None) -> dict[int, An
     return validate_answer(config, answer)
 
 
-def prepare_responses(config: RunConfig, profiles: list[dict[int, Any]] | None = None, *, ordered: bool = False,
-                      sampling: str | None = None) -> list[dict[int, Any]]:
+def prepare_responses(
+    config: RunConfig,
+    profiles: list[dict[int, Any]] | None = None,
+    *,
+    ordered: bool = False,
+    sampling: str | None = None,
+) -> list[dict[int, Any]]:
     validate_config(config)
     if sampling is None:
         sampling = "ordered" if ordered else "sample"
@@ -329,11 +369,20 @@ def prepare_responses(config: RunConfig, profiles: list[dict[int, Any]] | None =
             raise ValueError("The response pool is empty.")
         profiles = [validate_answer(config, row) for row in profiles]
         if sampling in {"ordered", "shuffle"} and config.count > len(profiles):
-            raise ValueError(f"{sampling.capitalize()} mode needs {config.count} rows; the CSV has {len(profiles)}.")
-        chosen = (profiles[:config.count] if sampling == "ordered" else
-                  random.sample(profiles, k=config.count) if sampling == "shuffle" else
-                  random.choices(profiles, k=config.count))
-        return [dict(row) for row in chosen]
+            raise ValueError(
+                f"{sampling.capitalize()} mode needs {config.count} rows; the CSV has {len(profiles)}."
+            )
+        chosen = (
+            profiles[: config.count]
+            if sampling == "ordered"
+            else random.sample(profiles, k=config.count)
+            if sampling == "shuffle"
+            else random.choices(profiles, k=config.count)
+        )
+        return [
+            {key: value.copy() if isinstance(value, list) else value for key, value in row.items()}
+            for row in chosen
+        ]
     return [make_answer(config) for _ in range(config.count)]
 
 
@@ -351,7 +400,14 @@ def write_csv(config: RunConfig, answers: list[dict], path: str | Path) -> Path:
         writer.writerow(headers)
         for answer in answers:
             row = validate_answer(config, answer)
-            writer.writerow([json.dumps(row[q.index], ensure_ascii=False) if isinstance(row[q.index], list) else row[q.index] for q in config.questions])
+            writer.writerow(
+                [
+                    json.dumps(row[q.index], ensure_ascii=False)
+                    if isinstance(row[q.index], list)
+                    else row[q.index]
+                    for q in config.questions
+                ]
+            )
     temporary.replace(target)
     return target
 
@@ -359,4 +415,10 @@ def write_csv(config: RunConfig, answers: list[dict], path: str | Path) -> Path:
 def answer_stream(config: RunConfig):
     profiles = load_reference(config, config.pool_file) if config.pool_file else None
     while True:
-        yield dict(random.choice(profiles)) if profiles else make_answer(config)
+        if profiles:
+            yield {
+                key: value.copy() if isinstance(value, list) else value
+                for key, value in random.choice(profiles).items()
+            }
+        else:
+            yield make_answer(config)
