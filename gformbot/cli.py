@@ -600,6 +600,7 @@ def _load_plan(path):
         if payload.get("schema_version") != 1 or payload.get("kind") != "gformbot-run":
             raise ValueError("Unknown response plan format.")
         config = config_from_dict(payload["config"])
+        config._instructions_known = "instructions" in payload["config"]
         if schema_fingerprint(config) != payload["form_fingerprint"]:
             raise ValueError("The plan's form schema was changed; prepare a fresh plan.")
         answers = [validate_answer(config, answer) for answer in payload["responses"]]
@@ -737,7 +738,7 @@ def _edit_batch(config, answers, path):
     return fresh, rows, _save_plan(fresh, rows, source="edited")
 
 
-def _manage_batch(config, answers, path, *, saved=False):
+def _manage_batch(config, answers, path, *, saved=False, keep_files=False):
     from .artifacts import digest
 
     _pending_preview(config, answers)
@@ -780,7 +781,9 @@ def _manage_batch(config, answers, path, *, saved=False):
         _confirm_submit(config, action == "submit")
         save_config(config, DEFAULT_CONFIG_NAME)
         finished = _run_fill(config, answers=remaining, submit=action == "submit")
-        _finish_plan(path, config._plan_digest, keep_files=action == "test" or finished is False)
+        _finish_plan(
+            path, config._plan_digest, keep_files=keep_files or action == "test" or finished is False
+        )
         return
 
 
@@ -1015,7 +1018,7 @@ def _wizard():
             [
                 _choice("new", "Create a new response batch"),
                 _choice("saved", "Resume a saved batch"),
-                _choice("generation", "Resume interrupted generation"),
+                _choice("generation", "Resume or export generation"),
                 _choice("inspect", "Inspect a form"),
                 _choice("doctor", "Check setup"),
                 _choice("exit", "Exit"),
@@ -1039,15 +1042,11 @@ def _wizard():
                     payload = json.loads(path.read_text(encoding="utf-8-sig"))
                     if payload.get("kind") == "gformbot-generation":
                         done = sum(row is not None for row in payload["responses"])
-                        if done < payload["request"]["count"]:
-                            jobs.append(
-                                (
-                                    path.stat().st_mtime,
-                                    _choice(
-                                        path, f"{path.name}: {done}/{payload['request']['count']} prepared"
-                                    ),
-                                )
-                            )
+                        count = payload["request"]["count"]
+                        status = "ready to save/export" if done == count else "prepared"
+                        jobs.append(
+                            (path.stat().st_mtime, _choice(path, f"{path.name}: {done}/{count} {status}"))
+                        )
                 except (OSError, ValueError, KeyError, TypeError, AttributeError):
                     continue
             if not jobs:
@@ -1341,7 +1340,7 @@ def run(plan, browser, headless, dry_run, submit, yes, keep_files):
         dry_run or submit or yes or browser is not None or headless is not None
     )
     if interactive:
-        _manage_batch(config, answers, clean_path(plan), saved=True)
+        _manage_batch(config, answers, clean_path(plan), saved=True, keep_files=keep_files)
         return
     if browser:
         _apply_browser(config, browser)
@@ -1419,7 +1418,12 @@ def generation(checkpoint, resume, export):
         choice = _ask_select(
             "Generation checkpoint",
             [
-                _choice("resume", "Resume missing profiles"),
+                _choice(
+                    "resume",
+                    "Resume missing profiles"
+                    if len(valid) < len(rows)
+                    else "Save completed profiles as a batch",
+                ),
                 _choice("export", "Export valid profiles only"),
                 _choice("back", "Back"),
             ],
@@ -1447,7 +1451,10 @@ def generation(checkpoint, resume, export):
         "attention": _chatgpt_attention if sys.stdin.isatty() else None,
         "progress": lambda done, total: _info(f"Generating responses: {done}/{total}"),
     }
-    _info("Resuming through ChatGPT; the saved form, instructions and reference context will be sent.")
+    if len(valid) < len(rows):
+        _info("Resuming through ChatGPT; the saved form, instructions and reference context will be sent.")
+    else:
+        _info("All profiles are ready. Saving the completed batch without opening a browser.")
     partials = request.get("partials")
     answers = (
         complete_responses(config, partials, **options)

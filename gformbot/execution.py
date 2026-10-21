@@ -222,6 +222,10 @@ class Runner:
         current = ui.config_from_schema(inspect_form(c.url))
         if schema_fingerprint(current) != schema_fingerprint(c):
             raise ValueError("The form has changed since inspection. Prepare a new response plan.")
+        if getattr(c, "_instructions_known", True) and current.instructions != c.instructions:
+            raise ValueError(
+                "The form instructions have changed since inspection. Prepare a new response plan."
+            )
         review = self.review_mode(submit)
         # Quiet review needs no hidden browser pass. Open fills each requested profile once.
         if not submit and c.background and review != "check":

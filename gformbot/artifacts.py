@@ -40,6 +40,7 @@ def cleanup(plan, expected_digest):
             path = directory / name
             if (
                 not name
+                or "\\" in name
                 or Path(name).name != name
                 or path.suffix.lower() != ".csv"
                 or path.is_symlink()
