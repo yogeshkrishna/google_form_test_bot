@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Local form fixture</title>
+<style>body{font:16px system-ui;max-width:750px;margin:40px auto} [role=listitem]{padding:16px;border:1px solid #aaa;margin:12px 0} [role=radio],[role=checkbox],[role=option],[role=button]{padding:9px;cursor:pointer;border:1px solid #ccc;margin:5px} [aria-checked=true]{background:#bcd} [role=alert]{color:#b00} textarea,input{display:block;width:90%;margin:10px} [hidden]{display:none!important}</style>
+<body><h1>Local form fixture</h1><main id="form"></main>
+<script>
+const questions = [
+ {id:'1',title:'Repeated title',kind:'radio',page:0,required:true,options:['A','B']},
+ {id:'2',title:'Where?',kind:'checkbox',page:0,required:true,options:['Roads, footpaths or crossings','Bus stops','Other']},
+ {id:'3',title:'Repeated title',kind:'radio',page:1,required:true,options:['A','B']},
+ {id:'4',title:'Optional note',kind:'short',page:1,required:false},
+ {id:'5',title:'How often?',kind:'dropdown',page:1,required:true,options:['Always','Sometimes','Never']},
+ {id:'6',title:'Comment',kind:'paragraph',page:2,required:true},
+ {id:'7',title:'Comfort',kind:'scale',page:2,required:true,options:['1','2','3']}
+];
+const answers = {}; let page = 0;
+const main = document.getElementById('form');
+function node(tag,attrs={},text='') {const e=document.createElement(tag);for(const [k,v] of Object.entries(attrs))e.setAttribute(k,v);e.textContent=text;return e;}
+function render() {
+ main.replaceChildren();
+ main.append(node('h2',{},'Section '+(page+1)));
+ for(const q of questions.filter(q=>q.page===page)) {
+  const box=node('div',{role:'listitem','data-item-id':q.id});
+  box.append(node('span',{class:'M7eMe'},q.title));
+  box.append(node('input',{type:'hidden',name:'entry.'+q.id+'_sentinel'}));
+  if(q.kind==='short'||q.kind==='paragraph') {
+   answers[q.id]='';
+   const control=node(q.kind==='short'?'input':'textarea',{'aria-label':q.title});
+   control.addEventListener('input',()=>answers[q.id]=control.value);box.append(control);
+  } else if(q.kind==='dropdown') {
+   const control=node('div',{role:'listbox',tabindex:'0'}),label=node('span',{},'Choose');
+   const popup=node('div',{hidden:''});control.append(label,popup);
+   control.onclick=()=>popup.toggleAttribute('hidden');
+   for(const text of q.options) {
+    const option=node('div',{role:'option','data-value':text,'aria-selected':'false'},text);
+    option.onclick=event=>{event.stopPropagation();answers[q.id]=text;label.textContent=text;control.setAttribute('data-value',text);for(const x of popup.children)x.setAttribute('aria-selected',String(x===option));popup.hidden=true;};
+    popup.append(option);
+   } box.append(control);
+  } else {
+   const role=q.kind==='checkbox'?'checkbox':'radio';
+   for(const text of q.options) {
+    const control=node('div',{role,tabindex:'0','data-value':text,'aria-label':text,'aria-checked':'false'},text);
+    control.onclick=()=>{
+     if(role==='checkbox') {const set=new Set(answers[q.id]||[]);set.has(text)?set.delete(text):set.add(text);answers[q.id]=[...set];control.setAttribute('aria-checked',String(set.has(text)));}
+     else {answers[q.id]=text;for(const x of box.querySelectorAll('[role=radio]'))x.setAttribute('aria-checked',String(x===control));}
+    };
+    if(role==='checkbox') {const wrapper=node('div',{role:'listitem'});wrapper.append(control);box.append(wrapper);}
+    else box.append(control);
+   }
+  }
+  main.append(box);
+ }
+ const error=node('div',{role:'alert'}); main.append(error);
+ const label=page===2?'Submit':'Next';
+ const button=node('div',{role:'button',tabindex:'0','aria-label':label},label);
+ button.onclick=()=>{
+  const missing=questions.filter(q=>q.page===page&&q.required&&!answers[q.id]?.length);
+  if(missing.length) {error.textContent='This is a required question';return;}
+  if(page===0&&(answers['2']||[]).length>2) {error.textContent='Select at most 2';return;}
+  if(page<2) {page++;setTimeout(render,40);}
+  else window.location.assign('/formResponse?answers='+encodeURIComponent(JSON.stringify(answers)));
+ };
+ main.append(button);
+}
+if(location.pathname.endsWith('/formResponse')) {main.replaceChildren(node('div',{class:'vHW8K'},'Your response has been recorded.'));}
+else render();
+</script></body></html>

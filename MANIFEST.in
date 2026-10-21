@@ -1,0 +1,5 @@
+recursive-include tests *.py *.html
+exclude response_pool.csv gformbot_config.yaml gformbot_log.csv gformbot-runs.csv
+exclude gformbot-responses*.json gformbot-generated*.csv gformbot-additional*.csv
+prune .work
+prune .venv

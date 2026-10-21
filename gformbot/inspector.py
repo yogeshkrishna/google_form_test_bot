@@ -1,36 +1,41 @@
+"""Read a public responder page's complete schema without advancing or submitting.
+
+Google embeds all sections in FB_PUBLIC_LOAD_DATA_. This is an undocumented
+format, so shape changes and unsupported controls are reported explicitly.
 """
-Google Form inspector.
-
-Opens a form URL and scrapes:
-- All question texts
-- All answer options (radio, checkbox, dropdown)
-- Which questions are multi-select
-- Which questions are text fields
-- Page boundaries (multi-page forms)
-
-Returns a FormSchema that the filler, config generator, and wizard all use.
-"""
-
 from __future__ import annotations
 
-import time
-from dataclasses import dataclass, field
-from typing import Optional
+import html
+from html.parser import HTMLParser
+import json
+import re
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
-from selenium.common.exceptions import TimeoutException
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
+from dataclasses import dataclass, field
+import hashlib
+from typing import Optional
+from .validation import is_email_rule
 
 
 @dataclass
 class QuestionSchema:
-    index: int                          # 1-based
-    text: str                           # Full question label
-    qtype: str                          # "radio" | "checkbox" | "text" | "textarea" | "dropdown" | "unknown"
+    index: int
+    text: str
+    qtype: str
     required: bool = False
     options: list[str] = field(default_factory=list)
     page: int = 1
+    entry_id: str = ""
+    item_id: str = ""
+    description: str = ""
+    min_select: int = 0
+    max_select: Optional[int] = None
+    exclusive_options: list[str] = field(default_factory=list)
+    validation: list = field(default_factory=list)
+    date_include_year: bool = True
+    date_include_time: bool = False
 
 
 @dataclass
@@ -39,201 +44,215 @@ class FormSchema:
     title: str
     questions: list[QuestionSchema] = field(default_factory=list)
     pages: int = 1
+    description: str = ""
+    sections: list[str] = field(default_factory=lambda: ["Section 1"])
+    unsupported: list[str] = field(default_factory=list)
+    confirmation_text: str = ""
 
     def get(self, index: int) -> Optional[QuestionSchema]:
-        for q in self.questions:
-            if q.index == index:
-                return q
-        return None
+        return next((q for q in self.questions if q.index == index), None)
+
+    def require_supported(self) -> None:
+        if self.unsupported:
+            raise ValueError("This form cannot be filled reliably: " + "; ".join(self.unsupported))
+        if not self.questions:
+            raise ValueError("No answerable questions were found in this form.")
 
 
-def inspect_form(url: str, browser: str = "auto", headless: bool = True,
-                 status_cb=None) -> FormSchema:
-    """
-    Scrape a Google Form and return a FormSchema.
+KINDS = {0: "text", 1: "textarea", 2: "radio", 3: "dropdown", 4: "checkbox", 5: "scale", 9: "date"}
+UNSUPPORTED = {7: "grid", 10: "time", 13: "file upload", 18: "rating"}
 
-    Parameters
-    ----------
-    url       : Google Form viewform URL
-    browser   : browser name passed to get_driver()
-    headless  : run headless (recommended for inspection)
-    status_cb : optional callable(message: str) for progress reporting
-    """
-    from gformbot.browser import get_driver
 
-    def _status(msg: str):
-        if status_cb:
-            status_cb(msg)
+class _PlainText(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.parts = []
 
-    _status("Launching browser to inspect form…")
-    driver = get_driver(browser=browser, headless=headless)
+    def handle_data(self, data):
+        self.parts.append(data)
 
-    schema = FormSchema(url=url, title="")
+    def handle_starttag(self, tag, attrs):
+        if tag == "br":
+            self.parts.append("\n")
 
+
+def plain_text(value) -> str:
+    value = str(value or "")
+    if re.search(r"</?[a-zA-Z][^>]*>", value):
+        parser = _PlainText()
+        parser.feed(value)
+        return html.unescape("".join(parser.parts)).strip()
+    return html.unescape(value).strip()
+
+
+def clean_url(value: str, allow_short=True) -> str:
+    value = value.strip().strip('"\'').strip()
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        raise ValueError("Paste an HTTPS Google Forms responder URL (ending in /viewform).")
+    if allow_short and parsed.hostname == "forms.gle":
+        return value
+    if parsed.hostname != "docs.google.com":
+        raise ValueError("Use a docs.google.com/forms/.../viewform URL or a forms.gle short link.")
+    match = re.fullmatch(r"(/forms/(?:u/\d+/)?d/(?:e/)?[A-Za-z0-9_-]+)/viewform/?", parsed.path)
+    if not match:
+        raise ValueError("Use the responder link ending in /viewform, rather than the editor link.")
+    # Tracking and pre-filled query parameters must not affect a schema or run.
+    return "https://docs.google.com" + match.group(1) + "/viewform"
+
+
+def _get(seq, index, default=None):
+    return seq[index] if isinstance(seq, list) and len(seq) > index else default
+
+
+def _checkbox_rules(question: QuestionSchema) -> None:
+    text = f"{question.text} {question.description}"
+    # Infer only explicit natural-language instructions; never assume the last
+    # option is exclusive just because of its position.
+    if re.search(r"(?:either of |one of )?(?:the )?last two options?.{0,55}choose (?:it |them )?alone", text, re.I):
+        question.exclusive_options = question.options[-2:]
+    elif re.search(r"(?:the )?last option.{0,55}choose (?:it )?alone", text, re.I):
+        question.exclusive_options = question.options[-1:]
+    match = re.search(r"(?:choose|select|pick)\s+(?:up to|at most|no more than)\s+(\d+)", text, re.I)
+    if match:
+        question.max_select = int(match.group(1))
+    for rule in question.validation:
+        if not isinstance(rule, list) or len(rule) < 3 or rule[0] != 7 or rule[1] not in (200, 201, 202):
+            continue
+        args = rule[2]
+        if (not isinstance(args, list) or len(args) != 1
+                or isinstance(args[0], bool) or not re.fullmatch(r"\d+", str(args[0]))):
+            raise ValueError(f"Invalid checkbox selection constraint for {question.text!r}; inspection stopped.")
+        n = int(args[0])
+        if rule[1] == 200:
+            question.min_select = max(question.min_select, n)
+        elif rule[1] == 201:
+            question.max_select = n if question.max_select is None else min(question.max_select, n)
+        elif rule[1] == 202:
+            question.min_select = question.max_select = n
+
+
+def parse_form_html(document: str, url: str) -> FormSchema:
+    marker = re.search(r"\bFB_PUBLIC_LOAD_DATA_\s*=\s*", document)
+    if not marker:
+        if "accounts.google.com" in document and ("Sign in" in document or "ServiceLogin" in document):
+            raise ValueError("This form requires sign-in or access permission. Use a public test copy.")
+        raise ValueError("No public form schema was found. The form may be closed, unavailable, or have changed format.")
     try:
-        driver.get(url)
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
-        time.sleep(1.5)
-
-        # Title
-        try:
-            schema.title = driver.find_element(
-                By.CSS_SELECTOR, "[data-params] .e8F0yb, .freebirdFormviewerViewHeaderTitle"
-            ).text.strip()
-        except Exception:
-            try:
-                schema.title = driver.title.replace(" - Google Forms", "").strip()
-            except Exception:
-                schema.title = "Google Form"
-
-        _status(f"Detected form: \"{schema.title}\"")
-
-        page_num = 1
-        question_index = 1
-
-        MAX_PAGES = 200  # safety net — no real form has more than this
-
-        while page_num <= MAX_PAGES:
-            _status(f"Scraping page {page_num}…")
-            questions_on_page = _scrape_page(driver, page_num, question_index)
-            schema.questions.extend(questions_on_page)
-            question_index += len(questions_on_page)
-
-            # A Submit button means this is the last page — stop here
-            if _find_button(driver, "Submit") is not None:
-                break
-
-            # No Next button either — also the end
-            next_btn = _find_button(driver, "Next")
-            if next_btn is None:
-                break
-
-            # Click Next, wait for the page to change
-            prev_url = driver.current_url
-            next_btn.click()
-            time.sleep(1.5)
-            page_num += 1
-            schema.pages = page_num
-
-            # If the URL didn't change at all, we're stuck — stop
-            if driver.current_url == prev_url:
-                break
-
-        schema.pages = page_num
-        _status(f"Inspection complete — {len(schema.questions)} questions across {schema.pages} page(s).")
-        return schema
-
-    finally:
-        driver.quit()
-
-
-# ---------------------------------------------------------------------------
-# Page scraping helpers
-# ---------------------------------------------------------------------------
-
-def _scrape_page(driver, page_num: int, start_index: int) -> list[QuestionSchema]:
-    questions = []
-
-    # Each question lives in a [role=listitem] container
-    items = driver.find_elements(By.XPATH, "//*[@role='listitem']")
-
-    for item in items:
-        q = _parse_question(driver, item, start_index + len(questions), page_num)
-        if q is not None:
-            questions.append(q)
-
-    return questions
-
-
-def _parse_question(driver, item, index: int, page: int) -> Optional[QuestionSchema]:
-    # Find the question label text
-    label_text = ""
-    for sel in [
-        ".freebirdFormviewerComponentsQuestionBaseTitle",
-        "[data-params] .M7eMe",
-        ".M7eMe",
-    ]:
-        try:
-            el = item.find_element(By.CSS_SELECTOR, sel)
-            label_text = el.text.strip()
-            if label_text:
-                break
-        except Exception:
-            pass
-
-    if not label_text:
-        return None  # Not a question container
-
-    # Check required
-    required = False
-    try:
-        item.find_element(By.XPATH, ".//*[contains(@aria-label,'Required') or contains(text(),'*')]")
-        required = True
-    except Exception:
-        pass
-
-    # Detect type & options
-    radios = item.find_elements(By.XPATH, ".//*[@role='radio']")
-    checkboxes = item.find_elements(By.XPATH, ".//*[@role='checkbox']")
-    dropdowns = item.find_elements(By.XPATH, ".//*[@role='option']")
-    textareas = item.find_elements(By.XPATH, ".//textarea")
-    text_inputs = item.find_elements(By.XPATH, ".//input[not(@type='hidden')]")
-
-    if checkboxes:
-        qtype = "checkbox"
-        options = _extract_option_labels(checkboxes)
-    elif radios:
-        qtype = "radio"
-        options = _extract_option_labels(radios)
-    elif dropdowns:
-        qtype = "dropdown"
-        options = [el.text.strip() for el in dropdowns if el.text.strip()]
-    elif textareas:
-        qtype = "textarea"
-        options = []
-    elif text_inputs:
-        qtype = "text"
-        options = []
-    else:
-        qtype = "unknown"
-        options = []
-
-    return QuestionSchema(
-        index=index,
-        text=label_text,
-        qtype=qtype,
-        required=required,
-        options=options,
-        page=page,
+        data, _ = json.JSONDecoder().raw_decode(document[marker.end():])
+        meta = data[1]
+        items = meta[1]
+        if not isinstance(items, list):
+            raise ValueError("missing question list")
+    except (IndexError, TypeError, ValueError) as exc:
+        raise ValueError("Google's form metadata has an unrecognized structure; inspection stopped.") from exc
+    form = FormSchema(
+        url=url,
+        title=plain_text(_get(meta, 8) or _get(data, 3) or "Google Form"),
+        description=plain_text(_get(meta, 0)),
+        questions=[], sections=["Section 1"],
+        confirmation_text=plain_text(_get(_get(meta, 2), 0)),
     )
+    seen_ids = set()
+    for item in items:
+        if not isinstance(item, list) or len(item) < 4:
+            raise ValueError("Unrecognized question metadata; inspection stopped instead of guessing.")
+        item_id, title, description, type_code = item[:4]
+        # These fields are already plain text in Google's JSON. Treating
+        # literal code/entity examples as HTML would change CSV headers.
+        title, description = str(title or "").strip(), str(description or "").strip()
+        if type_code == 8:
+            form.sections.append(title or f"Section {len(form.sections) + 1}")
+            if _get(item, 5) not in (None, -2):
+                form.unsupported.append(f"section routing at {title!r}")
+            continue
+        if type_code in (6, 11, 12):  # headings, images, video: no answer field
+            continue
+        entries = _get(item, 4)
+        if type_code not in KINDS or not isinstance(entries, list) or len(entries) != 1:
+            name = UNSUPPORTED.get(type_code, f"question type {type_code}")
+            form.unsupported.append(f"{name}: {title}")
+            form.questions.append(QuestionSchema(len(form.questions) + 1, title, name,
+                page=len(form.sections), item_id=str(item_id), description=description))
+            continue
+        entry = entries[0]
+        if not isinstance(entry, list) or len(entry) < 3:
+            raise ValueError(f"Unrecognized answer field for {title!r}.")
+        entry_id = str(entry[0])
+        if entry_id in seen_ids:
+            raise ValueError(f"Duplicate answer field ID {entry_id}; inspection stopped.")
+        seen_ids.add(entry_id)
+        option_data = _get(entry, 1) or []
+        options = [str(opt[0]) for opt in option_data if isinstance(opt, list) and opt]
+        other = any(_get(opt, 4) == 1 for opt in option_data)
+        if other:
+            form.unsupported.append(f"free-text Other option: {title}")
+        if any(_get(opt, 2) is not None for opt in option_data):
+            form.unsupported.append(f"answer-based section branching: {title}")
+        if len(options) != len(set(options)):
+            form.unsupported.append(f"duplicate option labels: {title}")
+        validation = _get(entry, 4) or []
+        q = QuestionSchema(len(form.questions) + 1, title, KINDS[type_code], bool(entry[2]),
+                           options=options, page=len(form.sections), entry_id=entry_id,
+                           item_id=str(item_id), description=description,
+                           min_select=1 if entry[2] and type_code == 4 else 0, validation=validation)
+        if q.qtype == "date":
+            flags = _get(entry, 7)
+            if not isinstance(flags, list) or len(flags) != 2 or any(v not in (0, 1) for v in flags):
+                form.unsupported.append(f"unrecognized date settings: {title}")
+            else:
+                q.date_include_time, q.date_include_year = map(bool, flags)
+        if q.qtype == "checkbox":
+            _checkbox_rules(q)
+            for rule in validation:
+                if not isinstance(rule, list) or len(rule) < 3 or rule[:2] not in ([7, 200], [7, 201], [7, 202]):
+                    form.unsupported.append(f"unrecognized checkbox validation: {title}")
+        elif validation and not (q.qtype in ("text", "textarea") and all(is_email_rule(rule) for rule in validation)):
+            form.unsupported.append(f"custom validation on {title!r}")
+        if q.qtype in ("radio", "checkbox", "dropdown", "scale") and not q.options:
+            form.unsupported.append(f"missing option labels: {title}")
+        form.questions.append(q)
+    form.pages = len(form.sections)
+    return form
 
 
-def _extract_option_labels(elements) -> list[str]:
-    labels = []
-    for el in elements:
-        label = el.get_attribute("aria-label") or ""
-        if not label:
-            try:
-                label = el.find_element(By.XPATH, "./ancestor::label[1]").text.strip()
-            except Exception:
-                label = el.text.strip()
-        if label:
-            labels.append(label.strip())
-    return labels
+def inspect_form(url: str, browser: str = "auto", headless: bool = True, status_cb=None, timeout: int = 30) -> FormSchema:
+    requested = clean_url(url)
+    if status_cb:
+        status_cb("Reading all form questions and constraints…")
+    try:
+        request = Request(requested, headers={"User-Agent": "gformbot (form inspection)"})
+        with urlopen(request, timeout=timeout) as response:
+            final_url = clean_url(response.url, allow_short=False)
+            raw = response.read(10_000_001)
+            if len(raw) > 10_000_000:
+                raise ValueError("The responder page is too large to inspect safely.")
+            encoding = response.headers.get_content_charset() or "utf-8"
+        schema = parse_form_html(raw.decode(encoding), final_url)
+        if status_cb:
+            status_cb(f"Read {len(schema.questions)} questions across {schema.pages} section(s).")
+        return schema
+    except ValueError:
+        raise
+    except (HTTPError, URLError, TimeoutError, OSError, UnicodeError) as exc:
+        raise ValueError(f"Could not open the form: {exc}. Check the responder URL and connection.") from exc
 
 
-def _find_button(driver, label: str):
-    from selenium.common.exceptions import NoSuchElementException
-    xpaths = [
-        f"//*[@role='button'][.//*[normalize-space(text())='{label}']]",
-        f"//*[@role='button' and normalize-space(.)='{label}']",
-        f"//span[normalize-space(text())='{label}']/ancestor::*[@role='button'][1]",
-    ]
-    for xp in xpaths:
-        try:
-            return driver.find_element(By.XPATH, xp)
-        except NoSuchElementException:
-            pass
-    return None
+
+def schema_fingerprint(schema_or_config) -> str:
+    """Compare form contents, ignoring response-generation preferences."""
+    source = schema_or_config
+    fields = ("index", "text", "qtype", "required", "options", "page", "entry_id", "item_id",
+              "description", "min_select", "max_select", "exclusive_options", "validation")
+    payload = {
+        "url": source.url,
+        "title": getattr(source, "title", getattr(source, "form_title", "Google Form")),
+        "description": getattr(source, "description", getattr(source, "form_description", "")),
+        "sections": source.sections,
+        "unsupported": source.unsupported,
+        "confirmation_text": source.confirmation_text,
+        "questions": [{**{key: getattr(q, key) for key in fields},
+                       **({"date_include_year": q.date_include_year, "date_include_time": q.date_include_time} if q.qtype == "date" else {})}
+                      for q in source.questions],
+    }
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()

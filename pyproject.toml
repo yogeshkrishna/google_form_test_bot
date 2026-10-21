@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "gformbot"
-version = "0.1.0"
-description = "A general-purpose Google Form auto-filler CLI — inspect any form, supply a response pool, and submit at scale."
+version = "0.2.0"
+description = "Prepare validated Google Forms responses with ChatGPT or CSV data, preview, and fill from your terminal."
 readme = "README.md"
 license = "Apache-2.0"
 authors = [{ name = "yogeshkrishna" }]
@@ -15,21 +15,20 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Internet :: WWW/HTTP :: Browsers",
     "Topic :: Software Development :: Testing",
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 
 dependencies = [
     "selenium>=4.25,<5",
-    "click>=8.1",
-    "pyyaml>=6.0",
-    "rich>=13.0",
-    "InquirerPy>=0.3.4",
+    "click>=8.1,<9",
+    "pyyaml>=6.0,<7",
+    "rich>=13.0,<15",
+    "InquirerPy>=0.3.4,<0.4",
 ]
 
 [project.optional-dependencies]
@@ -51,3 +50,7 @@ gformbot = "gformbot.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["gformbot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["browser: starts a local headless Chrome session"]

@@ -24,6 +24,12 @@ ENV/
 # Bot runtime output
 gformbot_log.csv
 gformbot_config.yaml
+gformbot-runs.csv
+gformbot-responses*.json
+gformbot-generated*.csv
+gformbot-additional*.csv
+.work/
+response_pool.csv
 
 # Keep the example pool but not user-generated logs
 bot_log.csv

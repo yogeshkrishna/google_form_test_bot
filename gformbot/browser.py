@@ -1,20 +1,10 @@
-"""
-Browser driver factory.
-
-Priority:
-  1. User-requested browser (via --browser flag or wizard prompt).
-  2. Auto-detect system default browser.
-  3. Graceful fallback to headless Chromium.
-"""
+"""Fresh private Selenium sessions for supported installed browsers."""
 
 from __future__ import annotations
 
-import platform
 import shutil
 import subprocess
 import sys
-import winreg
-from pathlib import Path
 from typing import Literal
 
 BrowserName = Literal["chrome", "firefox", "edge", "auto", "headless"]
@@ -29,13 +19,14 @@ _MACOS = sys.platform == "darwin"
 
 def _default_browser_windows() -> BrowserName:
     """Read the Windows registry to figure out the default browser."""
+    import winreg
+
     try:
-        key = winreg.OpenKey(
+        with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice",
-        )
-        prog_id, _ = winreg.QueryValueEx(key, "ProgId")
-        winreg.CloseKey(key)
+        ) as key:
+            prog_id, _ = winreg.QueryValueEx(key, "ProgId")
         prog_id = prog_id.lower()
         if "firefox" in prog_id:
             return "firefox"
@@ -108,8 +99,6 @@ def get_driver(browser: BrowserName = "auto", headless: bool = False):
     browser  : "auto" | "chrome" | "firefox" | "edge" | "headless"
     headless : Force headless mode even if browser is named.
     """
-    from selenium import webdriver  # imported here so the module loads without selenium
-
     if browser == "headless":
         headless = True
         browser = "chrome"
@@ -117,13 +106,16 @@ def get_driver(browser: BrowserName = "auto", headless: bool = False):
     if browser == "auto":
         browser = detect_default_browser()
 
-    if browser == "firefox":
-        return _firefox_driver(headless)
-    if browser == "edge":
-        return _edge_driver(headless)
-
-    # Default / chrome
-    return _chrome_driver(headless)
+    factories = {"chrome": _chrome_driver, "firefox": _firefox_driver, "edge": _edge_driver}
+    if browser not in factories:
+        raise ValueError("Browser must be auto, headless, chrome, firefox, or edge.")
+    try:
+        driver = factories[browser](headless)
+        driver.set_page_load_timeout(30)
+        driver.set_script_timeout(30)
+        return driver
+    except Exception as exc:
+        raise RuntimeError(f"Could not start {browser}: {exc}. Check that the browser is installed.") from exc
 
 
 def _chrome_driver(headless: bool):
@@ -134,6 +126,9 @@ def _chrome_driver(headless: bool):
     opts.add_argument("--incognito")
     opts.add_argument("--start-maximized")
     opts.add_argument("--disable-notifications")
+    opts.add_argument("--lang=en-US")
+    opts.add_argument("--no-first-run")
+    opts.add_experimental_option("prefs", {"intl.accept_languages": "en-US,en"})
     opts.add_experimental_option("excludeSwitches", ["enable-logging"])
     if headless:
         opts.add_argument("--headless=new")
@@ -146,6 +141,8 @@ def _firefox_driver(headless: bool):
     from selenium.webdriver.firefox.options import Options
 
     opts = Options()
+    opts.add_argument("-private")
+    opts.set_preference("intl.accept_languages", "en-US,en")
     if headless:
         opts.add_argument("--headless")
     return webdriver.Firefox(options=opts)
@@ -159,6 +156,8 @@ def _edge_driver(headless: bool):
     opts.add_argument("--inprivate")
     opts.add_argument("--start-maximized")
     opts.add_argument("--disable-notifications")
+    opts.add_argument("--lang=en-US")
+    opts.add_experimental_option("prefs", {"intl.accept_languages": "en-US,en"})
     if headless:
         opts.add_argument("--headless=new")
         opts.add_argument("--window-size=1920,1080")

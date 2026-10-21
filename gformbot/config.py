@@ -1,192 +1,169 @@
-"""
-Config schema — the YAML/JSON config file that describes a form run.
-
-A config file is automatically generated from `gformbot inspect <url>` and
-stored in the current directory as `gformbot_config.yaml`.
-
-Users edit the config to:
-  - Set their response pool CSV (or leave blank for pure synthetic)
-  - Set per-question weights / biases
-  - Set run settings (count, delay, browser, headless)
-"""
-
+"""Form constraints and run settings, persisted without losing inspected metadata."""
 from __future__ import annotations
 
-import yaml
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field, fields
+import math
+import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
+import yaml
 
 DEFAULT_CONFIG_NAME = "gformbot_config.yaml"
+
+
+def clean_path(value: str | Path) -> Path:
+    raw = str(value).strip()
+    if len(raw) > 1 and raw[0] == raw[-1] and raw[0] in "\"'":
+        raw = raw[1:-1]
+    return Path(os.path.expandvars(raw)).expanduser()
 
 
 @dataclass
 class QuestionConfig:
     index: int
     text: str
-    qtype: str                          # radio | checkbox | text | textarea | dropdown
+    qtype: str
     required: bool = False
     options: list[str] = field(default_factory=list)
     page: int = 1
-    # Optional override: fixed value(s) to always use. None = draw from pool/random.
-    fixed_value: Optional[Any] = None
-    # Weights for random selection (parallel list to options). None = uniform.
-    weights: Optional[list[float]] = None
-    # Max selections for checkbox questions. None = no limit (up to all).
-    max_select: Optional[int] = None
-    # Pool column name override. None = auto-match by question text.
-    pool_column: Optional[str] = None
-    # For text fields: a list of strings to randomly pick from. None = use pool or empty.
-    text_pool: Optional[list[str]] = None
+    fixed_value: Any = None
+    weights: list[float] | None = None
+    max_select: int | None = None
+    pool_column: str | None = None
+    text_pool: list[str] | None = None
+    entry_id: str = ""
+    item_id: str = ""
+    description: str = ""
+    min_select: int = 0
+    exclusive_options: list[str] = field(default_factory=list)
+    validation: list = field(default_factory=list)
+    date_include_year: bool = True
+    date_include_time: bool = False
 
 
 @dataclass
 class RunConfig:
     url: str
     form_title: str = "Google Form"
-
-    # ---- response pool ----
-    pool_file: Optional[str] = None          # path to CSV; None = synthetic only
-    pool_column_map: dict = field(default_factory=dict)  # {q_index: csv_column_name}
-
-    # ---- questions ----
+    pool_file: str | None = None
+    pool_column_map: dict = field(default_factory=dict)
+    csv_date_order: str | None = None
     questions: list[QuestionConfig] = field(default_factory=list)
-
-    # ---- run settings ----
     count: int = 1
-    browser: str = "auto"                   # auto | chrome | firefox | edge | headless
-    headless: bool = False
+    browser: str = "headless"
+    headless: bool = True
+    background: bool = False
     min_delay: float = 0.25
     max_delay: float = 0.75
-    page_delay_min: float = 0.8
-    page_delay_max: float = 1.4
+    page_delay_min: float = 0.0
+    page_delay_max: float = 0.0
     max_runs: int = 500
-
-    # ---- logging ----
-    log_file: str = "gformbot_log.csv"
-
-
-# ---------------------------------------------------------------------------
-# Persistence
-# ---------------------------------------------------------------------------
-
-def save_config(config: RunConfig, path: Path) -> None:
-    data = _config_to_dict(config)
-    with path.open("w", encoding="utf-8") as f:
-        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    log_file: str = "gformbot-runs.csv"
+    sections: list[str] = field(default_factory=list)
+    unsupported: list[str] = field(default_factory=list)
+    confirmation_text: str = ""
+    form_description: str = ""
 
 
-def load_config(path: Path) -> RunConfig:
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    return _dict_to_config(data)
+def validate_config(config: RunConfig) -> None:
+    if config.csv_date_order not in (None, "mdy", "dmy"):
+        raise ValueError("CSV date order must be mdy, dmy, or unspecified for automatic detection.")
+    if not isinstance(config.url, str) or not config.url.strip():
+        raise ValueError("A public Google Form URL is required.")
+    if isinstance(config.max_runs, bool) or not isinstance(config.max_runs, int) or not 1 <= config.max_runs <= 500:
+        raise ValueError("max_runs must be between 1 and 500.")
+    if isinstance(config.count, bool) or not isinstance(config.count, int) or not 1 <= config.count <= config.max_runs:
+        raise ValueError(f"Response count must be between 1 and {config.max_runs}.")
+    if config.browser not in {"auto", "headless", "chrome", "firefox", "edge"}:
+        raise ValueError("Browser must be auto, headless, chrome, firefox or edge.")
+    if not isinstance(config.headless, bool):
+        raise ValueError("headless must be true or false.")
+    if not isinstance(config.background, bool):
+        raise ValueError("background must be true or false.")
+    for low, high in ((config.min_delay, config.max_delay), (config.page_delay_min, config.page_delay_max)):
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in (low, high)) or not 0 <= low <= high <= 60:
+            raise ValueError("Delays must be finite numbers with 0 <= minimum <= maximum <= 60.")
+    indexes = [q.index for q in config.questions]
+    if any(isinstance(i, bool) or not isinstance(i, int) or i < 1 for i in indexes) or len(set(indexes)) != len(indexes):
+        raise ValueError("Question indexes must be distinct positive integers.")
+    for q in config.questions:
+        if not isinstance(q.min_select, int) or isinstance(q.min_select, bool) or q.min_select < 0:
+            raise ValueError(f"Q{q.index}: min_select must be a nonnegative integer.")
+        if q.max_select is not None and (isinstance(q.max_select, bool) or not isinstance(q.max_select, int) or q.max_select < max(q.min_select, int(q.required and q.qtype == "checkbox"))):
+            raise ValueError(f"Q{q.index}: invalid checkbox selection bounds.")
+        if len(q.options) != len(set(q.options)):
+            raise ValueError(f"Q{q.index}: duplicate options are ambiguous.")
+        if q.weights is not None:
+            if len(q.weights) != len(q.options) or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0 for v in q.weights) or not any(q.weights):
+                raise ValueError(f"Q{q.index}: weights need one finite nonnegative value per option and at least one positive value.")
 
 
 def config_from_schema(schema) -> RunConfig:
-    """Build a default RunConfig from an inspected FormSchema."""
-    from gformbot.inspector import FormSchema
     questions = []
     for q in schema.questions:
-        qc = QuestionConfig(
-            index=q.index,
-            text=q.text,
-            qtype=q.qtype,
-            required=q.required,
-            options=q.options,
-            page=q.page,
-        )
-        # Sensible defaults for checkboxes
-        if q.qtype == "checkbox" and q.options:
-            qc.max_select = min(3, len(q.options) - 1)
-        questions.append(qc)
-
-    return RunConfig(
-        url=schema.url,
-        form_title=schema.title,
-        questions=questions,
-    )
+        values = {name: getattr(q, name) for name in ("index", "text", "qtype", "required", "options", "page", "entry_id", "item_id", "description", "min_select", "max_select", "exclusive_options", "validation", "date_include_year", "date_include_time")}
+        questions.append(QuestionConfig(**values))
+    return RunConfig(url=schema.url, form_title=schema.title, questions=questions,
+                     sections=schema.sections, unsupported=schema.unsupported,
+                     confirmation_text=schema.confirmation_text, form_description=schema.description)
 
 
-# ---------------------------------------------------------------------------
-# Serialization helpers
-# ---------------------------------------------------------------------------
-
-def _config_to_dict(c: RunConfig) -> dict:
-    d = {
-        "url": c.url,
-        "form_title": c.form_title,
-        "pool_file": c.pool_file,
-        "run_settings": {
-            "count": c.count,
-            "browser": c.browser,
-            "headless": c.headless,
-            "min_delay": c.min_delay,
-            "max_delay": c.max_delay,
-            "page_delay_min": c.page_delay_min,
-            "page_delay_max": c.page_delay_max,
-            "max_runs": c.max_runs,
-            "log_file": c.log_file,
-        },
-        "questions": [_qc_to_dict(q) for q in c.questions],
-    }
-    return d
+def config_to_dict(config: RunConfig) -> dict:
+    value = asdict(config)
+    value["questions"] = [dict(asdict(q), type=q.qtype) for q in config.questions]
+    for q in value["questions"]:
+        q.pop("qtype")
+    setting_names = ("count", "browser", "headless", "background", "min_delay", "max_delay", "page_delay_min", "page_delay_max", "max_runs", "log_file")
+    value["run_settings"] = {name: value.pop(name) for name in setting_names}
+    return value
 
 
-def _qc_to_dict(q: QuestionConfig) -> dict:
-    d: dict = {
-        "index": q.index,
-        "text": q.text,
-        "type": q.qtype,
-        "page": q.page,
-        "required": q.required,
-    }
-    if q.options:
-        d["options"] = q.options
-    if q.weights:
-        d["weights"] = q.weights
-    if q.fixed_value is not None:
-        d["fixed_value"] = q.fixed_value
-    if q.max_select is not None:
-        d["max_select"] = q.max_select
-    if q.pool_column:
-        d["pool_column"] = q.pool_column
-    if q.text_pool:
-        d["text_pool"] = q.text_pool
-    return d
+def config_from_dict(value: dict) -> RunConfig:
+    if not isinstance(value, dict):
+        raise ValueError("Configuration must be an object.")
+    data = dict(value)
+    settings = data.pop("run_settings", {})
+    if not isinstance(settings, dict):
+        raise ValueError("run_settings must be an object.")
+    data.update(settings)
+    questions = data.pop("questions", [])
+    if not isinstance(questions, list):
+        raise ValueError("questions must be a list.")
+    parsed = []
+    allowed_q = {f.name for f in fields(QuestionConfig)}
+    for question in questions:
+        if not isinstance(question, dict):
+            raise ValueError("Each question must be an object.")
+        q = dict(question)
+        q["qtype"] = q.pop("type", q.get("qtype", "unknown"))
+        unknown = set(q) - allowed_q
+        if unknown:
+            raise ValueError(f"Unknown question settings: {sorted(unknown)}")
+        parsed.append(QuestionConfig(**q))
+    config = RunConfig(questions=parsed, **data)
+    validate_config(config)
+    return config
 
 
-def _dict_to_config(d: dict) -> RunConfig:
-    rs = d.get("run_settings", {})
-    questions = [_dict_to_qc(q) for q in d.get("questions", [])]
-    return RunConfig(
-        url=d.get("url", ""),
-        form_title=d.get("form_title", "Google Form"),
-        pool_file=d.get("pool_file"),
-        questions=questions,
-        count=rs.get("count", 1),
-        browser=rs.get("browser", "auto"),
-        headless=rs.get("headless", False),
-        min_delay=rs.get("min_delay", 0.25),
-        max_delay=rs.get("max_delay", 0.75),
-        page_delay_min=rs.get("page_delay_min", 0.8),
-        page_delay_max=rs.get("page_delay_max", 1.4),
-        max_runs=rs.get("max_runs", 500),
-        log_file=rs.get("log_file", "gformbot_log.csv"),
-    )
+def save_config(config: RunConfig, path: str | Path) -> None:
+    validate_config(config)
+    target = clean_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + ".tmp")
+    temporary.write_text(yaml.safe_dump(config_to_dict(config), allow_unicode=True, sort_keys=False), encoding="utf-8")
+    temporary.replace(target)
 
 
-def _dict_to_qc(d: dict) -> QuestionConfig:
-    return QuestionConfig(
-        index=d.get("index", 0),
-        text=d.get("text", ""),
-        qtype=d.get("type", "unknown"),
-        required=d.get("required", False),
-        options=d.get("options", []),
-        page=d.get("page", 1),
-        fixed_value=d.get("fixed_value"),
-        weights=d.get("weights"),
-        max_select=d.get("max_select"),
-        pool_column=d.get("pool_column"),
-        text_pool=d.get("text_pool"),
-    )
+def load_config(path: str | Path) -> RunConfig:
+    target = clean_path(path).resolve()
+    try:
+        config = config_from_dict(yaml.safe_load(target.read_text(encoding="utf-8-sig")))
+    except (OSError, yaml.YAMLError, TypeError, ValueError) as exc:
+        raise ValueError(f"Cannot read config {target}: {exc}") from exc
+    for name in ("pool_file", "log_file"):
+        value = getattr(config, name)
+        if value:
+            p = clean_path(value)
+            setattr(config, name, str(p if p.is_absolute() else target.parent / p))
+    return config
