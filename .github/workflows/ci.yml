@@ -1,0 +1,87 @@
+name: CI
+
+"on":
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Python ${{ matrix.python }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.12", "3.13"]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install ".[dev]"
+      - run: python -m pytest -q -m "not browser"
+      - name: Lint
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        run: python -m ruff check .
+      - name: Formatting
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        run: python -m ruff format --check .
+
+  distributions:
+    name: Build and install wheel
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install build twine
+      - run: python -m build
+      - run: python -m twine check dist/*
+      - name: Smoke-test the installed wheel outside the checkout
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/gformbot-wheel"
+          "$RUNNER_TEMP/gformbot-wheel/bin/python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/gformbot-wheel/bin/python" -m pip check
+          "$RUNNER_TEMP/gformbot-wheel/bin/python" -m gformbot --version
+          "$RUNNER_TEMP/gformbot-wheel/bin/gformbot" --help
+          for command in inspect fill preview generate generation run batches doctor config log; do
+            "$RUNNER_TEMP/gformbot-wheel/bin/gformbot" "$command" --help
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  browser:
+    name: Local Chrome integration
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      GFORMBOT_BROWSER_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install ".[dev]"
+      - run: google-chrome --version
+      - run: python -m pytest -q -m browser

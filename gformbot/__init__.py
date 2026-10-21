@@ -2,5 +2,19 @@
 gformbot — A general-purpose Google Form auto-filler CLI.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
+
+
+def main():
+    """Keep version checks independent of optional UI and browser imports."""
+    import sys
+
+    if sys.argv[1:] == ["--version"]:
+        print(f"gformbot, version {__version__}")
+        return
+    from .cli import main as invoke
+
+    invoke()
+
+
 __author__ = "yogeshkrishna"
