@@ -1,5 +1,6 @@
 import io
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -8,16 +9,23 @@ from prompt_toolkit.application import create_app_session
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from gformbot import cli, browser, filler, inspector, logger, previews
+from gformbot import browser, cli, filler, inspector, logger, previews
 from gformbot.artifacts import digest
-from gformbot.config import RunConfig, QuestionConfig
+from gformbot.config import QuestionConfig, RunConfig
 
 
 @pytest.fixture
 def batch():
-    config = RunConfig("https://docs.google.com/forms/d/e/test/viewform", "Review form",
-                       browser="chrome", headless=False, count=2, min_delay=0, max_delay=0,
-                       questions=[QuestionConfig(1, "Name", "text", entry_id="1", item_id="1")])
+    config = RunConfig(
+        "https://docs.google.com/forms/d/e/test/viewform",
+        "Review form",
+        browser="chrome",
+        headless=False,
+        count=2,
+        min_delay=0,
+        max_delay=0,
+        questions=[QuestionConfig(1, "Name", "text", entry_id="1", item_id="1")],
+    )
     return config, [{1: "First"}, {1: "Second"}]
 
 
@@ -55,25 +63,33 @@ def execution(config, monkeypatch, mode):
     monkeypatch.setattr(cli, "_ask_select", lambda *args, **kwargs: mode)
     monkeypatch.setattr(logger, "validate_log_path", lambda *args: None)
     logs = []
-    monkeypatch.setattr(logger, "log_result", lambda *args: logs.append(args))
+    monkeypatch.setattr(logger, "log_result", lambda *args, **kwargs: logs.append(args))
+
     def fill(c, answer, submit, driver):
         assert submit is False
         driver.events.append(("fill", driver.current_window_handle, answer[1]))
         return True, "filled"
+
     monkeypatch.setattr(filler, "submit_response", fill)
-    monkeypatch.setattr(filler, "_positive_confirmation", lambda d, *args: d.current_window_handle in d.confirmed)
+    monkeypatch.setattr(
+        filler, "_positive_confirmation", lambda d, *args: d.current_window_handle in d.confirmed
+    )
     return driver, logs
 
 
 def test_tabs_keep_distinct_responses_and_do_not_switch_until_user_checks(batch, monkeypatch):
     config, answers = batch
     driver, logs = execution(config, monkeypatch, "tabs")
+
     def check(message):
         assert [e for e in driver.events if e[0] == "fill"] == [
-            ("fill", "tab1", "First"), ("fill", "tab2", "Second")]
+            ("fill", "tab1", "First"),
+            ("fill", "tab2", "Second"),
+        ]
         assert ("quit",) not in driver.events
         driver.confirmed.update(driver.window_handles)
         return ""
+
     monkeypatch.setattr(cli, "_ask_text", check)
     assert cli._run_fill(config, answers=answers) is True
     assert [row[4] for row in logs] == ["filled", "filled", "submitted manually", "submitted manually"]
@@ -83,10 +99,12 @@ def test_tabs_keep_distinct_responses_and_do_not_switch_until_user_checks(batch,
 def test_sequential_does_not_fill_next_before_confirmation(batch, monkeypatch):
     config, answers = batch
     driver, logs = execution(config, monkeypatch, "wait")
+
     def pause(seconds):
         assert len([e for e in driver.events if e[0] == "fill"]) == 1
         driver.confirmed.add("tab1")
-    monkeypatch.setattr(cli.time, "sleep", pause)
+
+    monkeypatch.setattr(time, "sleep", pause)
     assert cli._run_fill(config, answers=answers)
     assert [row[4] for row in logs] == ["filled", "submitted manually", "filled", "submitted manually"]
 
@@ -95,14 +113,16 @@ def test_closed_tab_does_not_discard_other_pending_tabs(batch, monkeypatch):
     config, answers = batch
     driver, logs = execution(config, monkeypatch, "tabs")
     checks = []
+
     def check(message):
         checks.append(message)
         driver.window_handles = ["tab2"]
         if len(checks) == 2:
             driver.confirmed.add("tab2")
         return ""
+
     monkeypatch.setattr(cli, "_ask_text", check)
-    monkeypatch.setattr(cli.time, "sleep", lambda _: None)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
     assert cli._run_fill(config, answers=answers) is False
     assert len(checks) == 2
     assert [(r[1], r[4]) for r in logs if r[4] == "submitted manually"] == [(2, "submitted manually")]
@@ -118,17 +138,20 @@ def test_stop_keeps_plan_and_resume_skips_confirmed_rows(batch, monkeypatch, tmp
     selections = iter(["tabs", "stop"])
     monkeypatch.setattr(cli, "_ask_select", lambda *a, **kw: next(selections))
     checks = []
+
     def check(message):
         checks.append(message)
         if len(checks) == 1:
             driver.confirmed.add("tab1")
             return ""
         raise KeyboardInterrupt()
+
     monkeypatch.setattr(cli, "_ask_text", check)
-    monkeypatch.setattr(cli.time, "sleep", lambda _: None)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
     assert cli._run_fill(config, answers=answers) is False
     cli._finish_plan(target, config._plan_digest, keep_files=True)
     restored, original = cli._load_plan(target)
+    monkeypatch.setattr(cli, "_ask_select", lambda *a, **kw: "no")
     assert cli._track_plan(restored, original, target, digest(target)) == [{1: "Second"}]
     assert restored.count == 1
     restored._record_submission(1)
@@ -147,7 +170,9 @@ def test_preview_changes_during_review_stop_execution(batch, tmp_path):
         cli._track_plan(config, answers, path, expected)
 
 
-def test_saved_previews_sorted_by_creation_not_edit_time_and_found_from_other_folder(batch, monkeypatch, tmp_path):
+def test_saved_previews_sorted_by_creation_not_edit_time_and_found_from_other_folder(
+    batch, monkeypatch, tmp_path
+):
     config, answers = batch
     old = cli._save_plan(config, answers, tmp_path / "old.json")
     new = cli._save_plan(config, answers, tmp_path / "new.json")
@@ -158,9 +183,11 @@ def test_saved_previews_sorted_by_creation_not_edit_time_and_found_from_other_fo
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
     seen = []
+
     def select(message, choices, **kwargs):
         seen.extend(choices)
         return choices[0].value
+
     monkeypatch.setattr(cli, "_ask_select", select)
     selected = cli._select_saved_preview(config)
     assert selected.path == new
@@ -176,9 +203,11 @@ def test_missing_corrupt_and_other_form_previews_are_skipped(batch, monkeypatch,
     cli._save_plan(config, answers, tmp_path / "other.json")
     config.url = config.url.replace("other", "test")
     monkeypatch.chdir(tmp_path)
+
     def select(message, choices, **kwargs):
         assert not any(isinstance(c.value, cli.SavedPreview) for c in choices)
         return "back"
+
     monkeypatch.setattr(cli, "_ask_select", select)
     assert cli._select_saved_preview(config) is None
 
@@ -265,12 +294,16 @@ def test_invalid_submission_progress_is_rejected(batch, tmp_path, progress):
 
 def test_saved_preview_menu_does_not_offer_save_again(monkeypatch):
     seen = []
+
     def select(message, choices, **kwargs):
         seen.extend(c.value for c in choices)
         return "fill"
+
     monkeypatch.setattr(cli, "_ask_select", select)
     assert cli._next_action(saved=True) == "fill"
-    assert seen == ["fill", "submit"]
+    assert seen[:2] == ["fill", "submit"]
+    assert "preview" not in seen
+    assert {"inspect", "edit", "test", "export"}.issubset(seen)
 
 
 def test_background_preparation_never_launches_visible_browser_without_open(batch, monkeypatch):
@@ -282,9 +315,9 @@ def test_background_preparation_never_launches_visible_browser_without_open(batc
     selections = iter(["tabs", "stop"])
     monkeypatch.setattr(cli, "_ask_select", lambda *a, **kw: next(selections))
     assert cli._run_fill(config, answers=answers) is False
-    assert launches == [True]
+    assert launches == []
     assert len(driver.window_handles) == 1
-    assert [e for e in driver.events if e[0] == "fill"] == [("fill", "tab1", "First"), ("fill", "tab1", "Second")]
+    assert not [e for e in driver.events if e[0] == "fill"]
 
 
 def test_background_open_requires_explicit_choice_and_preserves_edits_on_reopen(batch, monkeypatch):

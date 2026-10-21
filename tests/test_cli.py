@@ -1,24 +1,32 @@
 import io
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
-from click.testing import CliRunner
-import pytest
 import click
+import pytest
+from click.testing import CliRunner
 from rich.console import Console
 
-from gformbot import cli, generator, inspector, filler, browser, logger, ai
+from gformbot import ai, browser, cli, filler, generator, inspector, logger
 from gformbot.config import QuestionConfig, RunConfig, save_config
 
 
 @pytest.fixture
 def config():
-    return RunConfig(url="https://docs.google.com/forms/d/e/test/viewform", form_title="Survey",
-                     count=2, sections=["Section 1"], min_delay=0, max_delay=0,
-                     questions=[QuestionConfig(1, "Activity", "radio", True, ["Study", "Work"], entry_id="11", item_id="21"),
-                                QuestionConfig(2, "Comment", "text", False, entry_id="12", item_id="22")])
+    return RunConfig(
+        url="https://docs.google.com/forms/d/e/test/viewform",
+        form_title="Survey",
+        count=2,
+        sections=["Section 1"],
+        min_delay=0,
+        max_delay=0,
+        questions=[
+            QuestionConfig(1, "Activity", "radio", True, ["Study", "Work"], entry_id="11", item_id="21"),
+            QuestionConfig(2, "Comment", "text", False, entry_id="12", item_id="22"),
+        ],
+    )
 
 
 def profiles():
@@ -36,14 +44,24 @@ def test_file_picker_opens_only_after_enter_and_closes_hidden_root(monkeypatch, 
     events = []
     path = tmp_path / "pool.csv"
     path.write_text("Q1\nStudy\n", encoding="utf-8")
+
     class Root:
-        def withdraw(self): events.append("withdraw")
-        def attributes(self, *args): pass
-        def destroy(self): events.append("destroy")
+        def withdraw(self):
+            events.append("withdraw")
+
+        def attributes(self, *args):
+            pass
+
+        def destroy(self):
+            events.append("destroy")
+
     def ask(**kwargs):
         events.append("dialog")
         return str(path)
-    monkeypatch.setitem(sys.modules, "tkinter", SimpleNamespace(Tk=Root, filedialog=SimpleNamespace(askopenfilename=ask)))
+
+    monkeypatch.setitem(
+        sys.modules, "tkinter", SimpleNamespace(Tk=Root, filedialog=SimpleNamespace(askopenfilename=ask))
+    )
     monkeypatch.setattr(cli, "_ask_text", lambda *args: events.append("enter") or "")
     assert cli._select_csv() == path
     assert events == ["enter", "withdraw", "dialog", "destroy"]
@@ -51,35 +69,45 @@ def test_file_picker_opens_only_after_enter_and_closes_hidden_root(monkeypatch, 
 
 def test_picker_cancel_returns_to_source_selection(config, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    choices = iter(["own", "generate", "preview"])
+    choices = iter(["own", "generate", "fresh", "preview"])
     monkeypatch.setattr(cli, "_ask_select", lambda *args, **kwargs: next(choices))
     monkeypatch.setattr(cli, "_url_prompt", lambda: config.url)
     monkeypatch.setattr(cli, "_run_inspect", lambda _: config)
     monkeypatch.setattr(cli, "_ask_number", lambda *args, **kwargs: 2)
     calls = []
+
     def prepare(c, source):
         calls.append(source)
         if source == "own":
             raise cli.FileSelectionCancelled()
         return profiles()
+
     monkeypatch.setattr(cli, "_prepare_source", prepare)
-    cli._wizard()
-    assert calls == ["own", "generate"]
+    cli._new_batch_wizard()
+    assert calls == ["own", "fresh"]
     assert (tmp_path / "gformbot-responses.json").is_file()
 
 
-@pytest.mark.parametrize("source, filename", [("generate", "gformbot-generated.csv"), ("enlarge", "gformbot-additional.csv")])
-def test_generation_and_enlarge_write_csv_without_changing_reference(config, monkeypatch, tmp_path, source, filename):
+@pytest.mark.parametrize(
+    "source, filename", [("generate", "gformbot-generated.csv"), ("enlarge", "gformbot-additional.csv")]
+)
+def test_generation_and_enlarge_write_csv_without_changing_reference(
+    config, monkeypatch, tmp_path, source, filename
+):
     monkeypatch.chdir(tmp_path)
     seen = []
-    monkeypatch.setattr(cli, "_reference_prompt", lambda c, required=False: seen.append(required) or profiles())
+    monkeypatch.setattr(
+        cli, "_reference_prompt", lambda c, required=False: seen.append(required) or profiles()
+    )
     monkeypatch.setattr(cli, "_ask_text", lambda *args: "Match the style")
+
     def generate(c, reference, instructions):
         assert reference == profiles()
         assert "Match the style" in instructions
         if source == "enlarge":
             assert "additional" in instructions
         return profiles()
+
     monkeypatch.setattr(cli, "_generate", generate)
     assert cli._prepare_source(config, source) == profiles()
     assert generator.load_reference(config, tmp_path / filename) == profiles()
@@ -102,15 +130,18 @@ def test_random_mixed_form_completes_text_preserving_choice_profiles(config, mon
     monkeypatch.setattr(cli, "_reference_prompt", lambda c: profiles())
     monkeypatch.setattr(cli, "_ask_text", lambda *args: "Student language")
     monkeypatch.setattr(cli, "_ask_select", lambda *args, **kwargs: "auto")
+
     def complete(c, partials, **kwargs):
         assert len(partials) == 2
         assert kwargs["instructions"] == "Student language"
         return [{**row, 2: "Student" if row[1] == "Study" else "Worker"} for row in partials]
+
     monkeypatch.setattr(ai, "complete_responses", complete)
     assert all(row in profiles() for row in cli._prepare_source(config, "random"))
 
 
-def test_random_declining_text_generation_returns_to_sources(config, monkeypatch):
+def test_random_declining_required_text_generation_returns_to_sources(config, monkeypatch):
+    config.questions[1].required = True
     monkeypatch.setattr(cli, "_ask_confirm", lambda *args: False)
     assert cli._prepare_source(config, "random") is None
 
@@ -145,12 +176,18 @@ def test_existing_artifacts_are_not_overwritten(config, tmp_path):
 
 def setup_execution(config, monkeypatch):
     state = SimpleNamespace(launches=0, calls=[], logs=[], quit_count=0)
+
     class Driver:
-        def quit(self): state.quit_count += 1
-        def execute_script(self, *args): pass
+        def quit(self):
+            state.quit_count += 1
+
+        def execute_script(self, *args):
+            pass
+
     def launch(*args, **kwargs):
         state.launches += 1
         return Driver()
+
     monkeypatch.setattr(browser, "get_driver", launch)
     monkeypatch.setattr(inspector, "inspect_form", lambda url: config)
     monkeypatch.setattr(cli, "config_from_schema", lambda value: value)
@@ -161,9 +198,11 @@ def setup_execution(config, monkeypatch):
 
 def test_batch_reuses_one_browser_and_exact_answers(config, monkeypatch):
     state = setup_execution(config, monkeypatch)
+
     def execute(c, answer, submit, driver):
         state.calls.append((dict(answer), submit, driver))
         return True, "filled"
+
     monkeypatch.setattr(filler, "submit_response", execute)
     cli._run_fill(config, answers=profiles())
     assert state.launches == state.quit_count == 1
@@ -184,9 +223,11 @@ def test_false_result_stops_with_honest_count(config, monkeypatch):
 
 def test_uncertain_submit_is_logged_once_and_never_retried(config, monkeypatch):
     state = setup_execution(config, monkeypatch)
+
     def execute(*args, **kwargs):
         state.calls.append(1)
         raise filler.SubmissionUncertainError("Check the form before retrying")
+
     monkeypatch.setattr(filler, "submit_response", execute)
     with pytest.raises(ValueError, match="Check the form"):
         cli._run_fill(config, answers=profiles(), submit=True)
@@ -211,7 +252,9 @@ def test_changed_live_form_stops_before_browser(config, monkeypatch):
 
 def test_log_preflight_happens_before_browser(config, monkeypatch):
     state = setup_execution(config, monkeypatch)
-    monkeypatch.setattr(logger, "validate_log_path", lambda path: (_ for _ in ()).throw(ValueError("Old log")))
+    monkeypatch.setattr(
+        logger, "validate_log_path", lambda path: (_ for _ in ()).throw(ValueError("Old log"))
+    )
     with pytest.raises(ValueError, match="Old log"):
         cli._run_fill(config, answers=profiles())
     assert state.launches == 0
@@ -256,7 +299,9 @@ def test_cli_rejects_invalid_count_before_work(count):
 
 
 def test_main_error_exit_is_nonzero(monkeypatch):
-    def fail(**kwargs): raise ValueError("broken input")
+    def fail(**kwargs):
+        raise ValueError("broken input")
+
     monkeypatch.setattr(cli, "cli", fail)
     with pytest.raises(SystemExit) as error:
         cli.main()
@@ -270,17 +315,21 @@ def test_visible_rehearsal_waits_for_each_manual_submission(config, monkeypatch)
     monkeypatch.setattr(filler, "submit_response", lambda *args, **kwargs: (True, "filled"))
     monkeypatch.setattr(cli, "_ask_select", lambda *args, **kwargs: "wait")
     state.driver = None
+
     def execute(c, answer, **kwargs):
         state.driver = kwargs["driver"]
         state.driver.current_window_handle = "first"
         state.driver.window_handles = ["first"]
         state.calls.append(dict(answer))
         return True, "filled"
+
     monkeypatch.setattr(filler, "submit_response", execute)
     checked = []
+
     def confirmed(*args):
         checked.append(len(state.calls))
         return True
+
     monkeypatch.setattr(filler, "_positive_confirmation", confirmed)
     output = io.StringIO()
     monkeypatch.setattr(cli, "console", Console(file=output))
@@ -299,8 +348,12 @@ def test_saved_plan_interactive_next_choices(config, monkeypatch, tmp_path, acti
     monkeypatch.setattr(cli, "_choose_browser", lambda: "chrome")
     monkeypatch.setattr(cli, "_confirm_submit", lambda *args: None)
     calls = []
-    monkeypatch.setattr(cli, "_run_fill", lambda c, **kwargs: calls.append((c.browser, c.headless, kwargs["submit"])))
-    cli.run.callback(str(target), browser=None, headless=None, dry_run=False, submit=False, yes=False, keep_files=False)
+    monkeypatch.setattr(
+        cli, "_run_fill", lambda c, **kwargs: calls.append((c.browser, c.headless, kwargs["submit"]))
+    )
+    cli.run.callback(
+        str(target), browser=None, headless=None, dry_run=False, submit=False, yes=False, keep_files=False
+    )
     if action == "preview":
         assert target.exists() and not calls
     else:
@@ -314,7 +367,9 @@ def test_run_success_cleanup_and_keep_files(config, monkeypatch, tmp_path, keep)
     generated = generator.write_csv(config, profiles(), tmp_path / "generated.csv")
     target = cli._save_plan(config, profiles(), artifacts=[generated])
     calls = []
-    monkeypatch.setattr(cli, "_run_fill", lambda c, **kwargs: calls.append((c.browser, c.headless, kwargs["submit"])))
+    monkeypatch.setattr(
+        cli, "_run_fill", lambda c, **kwargs: calls.append((c.browser, c.headless, kwargs["submit"]))
+    )
     args = ["run", str(target), "--browser", "chrome"] + (["--keep-files"] if keep else [])
     result = CliRunner().invoke(cli.cli, args)
     assert result.exit_code == 0, result.exception
@@ -327,8 +382,10 @@ def test_run_failures_preserve_batch(config, monkeypatch, tmp_path, abort):
     monkeypatch.chdir(tmp_path)
     generated = generator.write_csv(config, profiles(), tmp_path / "generated.csv")
     target = cli._save_plan(config, profiles(), artifacts=[generated])
+
     def fail(*args, **kwargs):
         raise abort
+
     monkeypatch.setattr(cli, "_run_fill", fail)
     result = CliRunner().invoke(cli.cli, ["run", str(target), "--headless"])
     assert result.exit_code != 0
@@ -340,18 +397,20 @@ def test_wizard_visible_default_and_completed_files_removed(config, monkeypatch,
     monkeypatch.setattr(cli, "_url_prompt", lambda: config.url)
     monkeypatch.setattr(cli, "_run_inspect", lambda _: config)
     monkeypatch.setattr(cli, "_ask_number", lambda *args, **kwargs: 2)
-    choices = iter(["generate", "fill", "chrome"])
+    choices = iter(["generate", "fresh", "fill", "chrome"])
     defaults = []
+
     def select(*args, **kwargs):
         defaults.append(kwargs.get("default"))
         return next(choices)
+
     monkeypatch.setattr(cli, "_ask_select", select)
     generated = generator.write_csv(config, profiles(), tmp_path / "generated.csv")
     config._generated_artifacts = [generated]
     monkeypatch.setattr(cli, "_prepare_source", lambda *args: profiles())
     calls = []
     monkeypatch.setattr(cli, "_run_fill", lambda c, **kwargs: calls.append((c.browser, c.headless)))
-    cli._wizard()
-    assert defaults[-1] == "chrome-background"
+    cli._new_batch_wizard()
+    assert defaults[-1] == "auto-background"
     assert calls == [("chrome", False)]
     assert not generated.exists() and not list(tmp_path.glob("gformbot-responses*.json"))
