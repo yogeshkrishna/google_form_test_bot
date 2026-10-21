@@ -1,4 +1,5 @@
 """Remove only unchanged output files owned by a completed response plan."""
+
 import hashlib
 import json
 from pathlib import Path
@@ -37,8 +38,14 @@ def cleanup(plan, expected_digest):
         for item in payload.get("temporary_files", []):
             name = item.get("name", "") if isinstance(item, dict) else ""
             path = directory / name
-            if (not name or Path(name).name != name or path.suffix.lower() != ".csv"
-                    or path.is_symlink() or path.resolve().parent != directory or path.resolve() == source):
+            if (
+                not name
+                or Path(name).name != name
+                or path.suffix.lower() != ".csv"
+                or path.is_symlink()
+                or path.resolve().parent != directory
+                or path.resolve() == source
+            ):
                 preserved.append(path)
                 continue
             if not path.exists():

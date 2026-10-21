@@ -1,8 +1,9 @@
 """Remember preview locations; the saved plan remains the source of truth."""
+
 import json
 import os
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 
 def index_path():
@@ -25,8 +26,9 @@ def remember(path):
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent,
-                                         delete=False) as stream:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=target.parent, delete=False
+        ) as stream:
             temporary = Path(stream.name)
             json.dump(sorted(paths), stream)
         temporary.replace(target)

@@ -1,9 +1,10 @@
 """Form constraints and run settings, persisted without losing inspected metadata."""
+
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields
 import math
 import os
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -74,11 +75,25 @@ def validate_config(config: RunConfig) -> None:
         raise ValueError("CSV date order must be mdy, dmy, or unspecified for automatic detection.")
     if not isinstance(config.url, str) or not config.url.strip():
         raise ValueError("A public Google Form URL is required.")
-    if isinstance(config.max_runs, bool) or not isinstance(config.max_runs, int) or not 1 <= config.max_runs <= 500:
+    if (
+        isinstance(config.max_runs, bool)
+        or not isinstance(config.max_runs, int)
+        or not 1 <= config.max_runs <= 500
+    ):
         raise ValueError("max_runs must be between 1 and 500.")
-    if isinstance(config.count, bool) or not isinstance(config.count, int) or not 1 <= config.count <= config.max_runs:
+    if (
+        isinstance(config.count, bool)
+        or not isinstance(config.count, int)
+        or not 1 <= config.count <= config.max_runs
+    ):
         raise ValueError(f"Response count must be between 1 and {config.max_runs}.")
-    if not isinstance(config.browser, str) or config.browser not in {"auto", "headless", "chrome", "firefox", "edge"}:
+    if not isinstance(config.browser, str) or config.browser not in {
+        "auto",
+        "headless",
+        "chrome",
+        "firefox",
+        "edge",
+    }:
         raise ValueError("Browser must be auto, headless, chrome, firefox or edge.")
     if not isinstance(config.headless, bool):
         raise ValueError("headless must be true or false.")
@@ -99,21 +114,37 @@ def validate_config(config: RunConfig) -> None:
             raise ValueError(f"{name} must be a list of text values.")
     if not isinstance(config.pool_column_map, dict):
         raise ValueError("pool_column_map must be an object mapping question indexes to columns.")
-    if not isinstance(config.questions, list) or any(not isinstance(q, QuestionConfig) for q in config.questions):
+    if not isinstance(config.questions, list) or any(
+        not isinstance(q, QuestionConfig) for q in config.questions
+    ):
         raise ValueError("questions must be a list of QuestionConfig objects.")
     if not isinstance(config.instructions, list):
         raise ValueError("instructions must be a list of form instruction objects.")
     for note in config.instructions:
-        if (not isinstance(note, dict) or set(note) != {"page", "before_question", "title", "description"}
-                or type(note["page"]) is not int or note["page"] < 1
-                or type(note["before_question"]) is not int or note["before_question"] < 1
-                or not isinstance(note["title"], str) or not isinstance(note["description"], str)):
+        if (
+            not isinstance(note, dict)
+            or set(note) != {"page", "before_question", "title", "description"}
+            or type(note["page"]) is not int
+            or note["page"] < 1
+            or type(note["before_question"]) is not int
+            or note["before_question"] < 1
+            or not isinstance(note["title"], str)
+            or not isinstance(note["description"], str)
+        ):
             raise ValueError("Each instruction needs page, before_question, title, and description.")
     for low, high in ((config.min_delay, config.max_delay), (config.page_delay_min, config.page_delay_max)):
-        if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in (low, high)) or not 0 <= low <= high <= 60:
+        if (
+            any(
+                isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                for v in (low, high)
+            )
+            or not 0 <= low <= high <= 60
+        ):
             raise ValueError("Delays must be finite numbers with 0 <= minimum <= maximum <= 60.")
     indexes = [q.index for q in config.questions]
-    if any(isinstance(i, bool) or not isinstance(i, int) or i < 1 for i in indexes) or len(set(indexes)) != len(indexes):
+    if any(isinstance(i, bool) or not isinstance(i, int) or i < 1 for i in indexes) or len(
+        set(indexes)
+    ) != len(indexes):
         raise ValueError("Question indexes must be distinct positive integers.")
     known_indexes = {str(index) for index in indexes}
     for key, column in config.pool_column_map.items():
@@ -125,7 +156,10 @@ def validate_config(config: RunConfig) -> None:
         label = f"Q{q.index}"
         if not isinstance(q.text, str) or not isinstance(q.description, str):
             raise ValueError(f"{label}: question and description must be text.")
-        if not isinstance(q.qtype, str) or (q.qtype not in {"text", "textarea", "date", "radio", "checkbox", "dropdown", "scale"} and not config.unsupported):
+        if not isinstance(q.qtype, str) or (
+            q.qtype not in {"text", "textarea", "date", "radio", "checkbox", "dropdown", "scale"}
+            and not config.unsupported
+        ):
             raise ValueError(f"{label}: unsupported question type {q.qtype!r}.")
         if type(q.page) is not int or q.page < 1:
             raise ValueError(f"{label}: page must be a positive integer.")
@@ -137,31 +171,52 @@ def validate_config(config: RunConfig) -> None:
                 raise ValueError(f"{label}: {name} must be text.")
         if q.pool_column is not None and (not isinstance(q.pool_column, str) or not q.pool_column.strip()):
             raise ValueError(f"{label}: pool_column must be nonempty text or null.")
-        if not isinstance(q.options, list) or any(not isinstance(option, str) or not option.strip() for option in q.options):
+        if not isinstance(q.options, list) or any(
+            not isinstance(option, str) or not option.strip() for option in q.options
+        ):
             raise ValueError(f"{label}: options must be a list of nonempty text labels.")
         if q.qtype in {"radio", "checkbox", "dropdown", "scale"} and not q.options and not config.unsupported:
             raise ValueError(f"{label}: choice questions need at least one option.")
-        if (not isinstance(q.exclusive_options, list)
-                or any(not isinstance(option, str) or option not in q.options for option in q.exclusive_options)
-                or len(set(q.exclusive_options)) != len(q.exclusive_options)):
+        if (
+            not isinstance(q.exclusive_options, list)
+            or any(not isinstance(option, str) or option not in q.options for option in q.exclusive_options)
+            or len(set(q.exclusive_options)) != len(q.exclusive_options)
+        ):
             raise ValueError(f"{label}: exclusive_options must contain distinct known option labels.")
         if not isinstance(q.validation, list) or any(not isinstance(rule, list) for rule in q.validation):
             raise ValueError(f"{label}: validation must be a list of rules.")
         if not isinstance(q.min_select, int) or isinstance(q.min_select, bool) or q.min_select < 0:
             raise ValueError(f"Q{q.index}: min_select must be a nonnegative integer.")
-        if q.max_select is not None and (isinstance(q.max_select, bool) or not isinstance(q.max_select, int) or q.max_select < max(q.min_select, int(q.required and q.qtype == "checkbox"))):
+        if q.max_select is not None and (
+            isinstance(q.max_select, bool)
+            or not isinstance(q.max_select, int)
+            or q.max_select < max(q.min_select, int(q.required and q.qtype == "checkbox"))
+        ):
             raise ValueError(f"Q{q.index}: invalid checkbox selection bounds.")
         if len(q.options) != len(set(q.options)):
             raise ValueError(f"Q{q.index}: duplicate options are ambiguous.")
         if q.weights is not None:
-            if not isinstance(q.weights, list) or len(q.weights) != len(q.options) or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0 for v in q.weights) or not any(q.weights):
-                raise ValueError(f"Q{q.index}: weights need one finite nonnegative value per option and at least one positive value.")
-        if q.text_pool is not None and (not isinstance(q.text_pool, list) or any(not isinstance(text, str) for text in q.text_pool)):
+            if (
+                not isinstance(q.weights, list)
+                or len(q.weights) != len(q.options)
+                or any(
+                    isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0
+                    for v in q.weights
+                )
+                or not any(q.weights)
+            ):
+                raise ValueError(
+                    f"Q{q.index}: weights need one finite nonnegative value per option and at least one positive value."
+                )
+        if q.text_pool is not None and (
+            not isinstance(q.text_pool, list) or any(not isinstance(text, str) for text in q.text_pool)
+        ):
             raise ValueError(f"{label}: text_pool must be a list of text values.")
         if q.fixed_value is not None or q.text_pool:
             # Keep config import lightweight; only configured generated values
             # need the answer validator, which deliberately does not recurse.
             from .generator import validate_answer
+
             single = RunConfig(config.url, questions=[q])
             values = [q.fixed_value] if q.fixed_value is not None else q.text_pool
             for value in values:
@@ -171,12 +226,37 @@ def validate_config(config: RunConfig) -> None:
 def config_from_schema(schema) -> RunConfig:
     questions = []
     for q in schema.questions:
-        values = {name: getattr(q, name) for name in ("index", "text", "qtype", "required", "options", "page", "entry_id", "item_id", "description", "min_select", "max_select", "exclusive_options", "validation", "date_include_year", "date_include_time")}
+        values = {
+            name: getattr(q, name)
+            for name in (
+                "index",
+                "text",
+                "qtype",
+                "required",
+                "options",
+                "page",
+                "entry_id",
+                "item_id",
+                "description",
+                "min_select",
+                "max_select",
+                "exclusive_options",
+                "validation",
+                "date_include_year",
+                "date_include_time",
+            )
+        }
         questions.append(QuestionConfig(**values))
-    return RunConfig(url=schema.url, form_title=schema.title, questions=questions,
-                     sections=schema.sections, unsupported=schema.unsupported,
-                     confirmation_text=schema.confirmation_text, form_description=schema.description,
-                     instructions=getattr(schema, "instructions", []))
+    return RunConfig(
+        url=schema.url,
+        form_title=schema.title,
+        questions=questions,
+        sections=schema.sections,
+        unsupported=schema.unsupported,
+        confirmation_text=schema.confirmation_text,
+        form_description=schema.description,
+        instructions=getattr(schema, "instructions", []),
+    )
 
 
 def config_to_dict(config: RunConfig) -> dict:
@@ -187,7 +267,16 @@ def config_to_dict(config: RunConfig) -> dict:
     value.pop("page_delay_max")
     for q in value["questions"]:
         q["type"] = q.pop("qtype")
-    setting_names = ("count", "browser", "headless", "background", "min_delay", "max_delay", "max_runs", "log_file")
+    setting_names = (
+        "count",
+        "browser",
+        "headless",
+        "background",
+        "min_delay",
+        "max_delay",
+        "max_runs",
+        "log_file",
+    )
     value["run_settings"] = {name: value.pop(name) for name in setting_names}
     for name in ("pool_file",):
         if value[name] is not None:
@@ -237,7 +326,9 @@ def save_config(config: RunConfig, path: str | Path) -> None:
     target = clean_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(target.name + ".tmp")
-    temporary.write_text(yaml.safe_dump(config_to_dict(config), allow_unicode=True, sort_keys=False), encoding="utf-8")
+    temporary.write_text(
+        yaml.safe_dump(config_to_dict(config), allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
     temporary.replace(target)
 
 

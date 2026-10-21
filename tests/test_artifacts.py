@@ -9,9 +9,17 @@ def plan(tmp_path, *, managed=True, source=None):
     csv = tmp_path / "generated.csv"
     csv.write_text("Q1\nSynthetic\n")
     path = tmp_path / "plan.json"
-    path.write_text(json.dumps({"kind": "gformbot-run", "schema_version": 1,
-                               "cleanup_on_success": managed, "config": {"pool_file": str(source) if source else None},
-                               "temporary_files": describe([csv], tmp_path)}))
+    path.write_text(
+        json.dumps(
+            {
+                "kind": "gformbot-run",
+                "schema_version": 1,
+                "cleanup_on_success": managed,
+                "config": {"pool_file": str(source) if source else None},
+                "temporary_files": describe([csv], tmp_path),
+            }
+        )
+    )
     return path, csv, digest(path)
 
 
@@ -71,10 +79,12 @@ def test_invalid_manifest_path_preserves_files(tmp_path, name):
 def test_unlink_failure_preserves_manifest(tmp_path, monkeypatch):
     path, csv, before = plan(tmp_path)
     original = type(path).unlink
+
     def unlink(p, *args, **kwargs):
         if p == csv:
             raise PermissionError("In use")
         return original(p, *args, **kwargs)
+
     monkeypatch.setattr(type(path), "unlink", unlink)
     removed, preserved = cleanup(path, before)
     assert not removed and csv in preserved and path in preserved

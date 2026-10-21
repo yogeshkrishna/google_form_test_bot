@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from gformbot.inspector import clean_url, parse_form_html, schema_fingerprint
 from gformbot.config import config_from_schema
+from gformbot.inspector import clean_url, parse_form_html, schema_fingerprint
 
 GFormBotError = ValueError
 
@@ -16,20 +16,42 @@ def document(items, title="A form"):
 
 
 def item(identifier, title, kind, options=None, required=True, rules=None):
-    return [identifier + 100, title, None, kind,
-            [[identifier, [[s, None, None, None, 0] for s in options] if options else None,
-              int(required), None, rules]]]
+    return [
+        identifier + 100,
+        title,
+        None,
+        kind,
+        [
+            [
+                identifier,
+                [[s, None, None, None, 0] for s in options] if options else None,
+                int(required),
+                None,
+                rules,
+            ]
+        ],
+    ]
 
 
 def test_inspection_reads_every_required_page_without_navigating():
-    form = parse_form_html(document([
-        item(1, "First required", 2, ["A", "B"]),
-        [1000, "Page two", None, 8],
-        item(2, "Choose up to 2. If choosing the last option, choose it alone.", 4,
-             ["Roads, footpaths or crossings", "Trees", "None"], rules=[[7, 201, ["2"]]]),
-        [1001, "Page three", None, 8],
-        item(3, "Optional comment", 1, required=False),
-    ]), URL)
+    form = parse_form_html(
+        document(
+            [
+                item(1, "First required", 2, ["A", "B"]),
+                [1000, "Page two", None, 8],
+                item(
+                    2,
+                    "Choose up to 2. If choosing the last option, choose it alone.",
+                    4,
+                    ["Roads, footpaths or crossings", "Trees", "None"],
+                    rules=[[7, 201, ["2"]]],
+                ),
+                [1001, "Page three", None, 8],
+                item(3, "Optional comment", 1, required=False),
+            ]
+        ),
+        URL,
+    )
     assert len(form.questions) == 3
     assert form.sections == ["Section 1", "Page two", "Page three"]
     assert [(q.page - 1) for q in form.questions] == [0, 1, 2]
@@ -41,7 +63,9 @@ def test_inspection_reads_every_required_page_without_navigating():
 
 
 def test_last_option_is_not_exclusive_without_instruction():
-    form = parse_form_html(document([item(1, "What provided shade?", 4, ["Trees", "Other shade structures"])]), URL)
+    form = parse_form_html(
+        document([item(1, "What provided shade?", 4, ["Trees", "Other shade structures"])]), URL
+    )
     assert form.questions[0].exclusive_options == []
 
 
@@ -54,9 +78,20 @@ def test_literal_code_and_entities_in_question_and_options_stay_exact():
 
 
 def test_two_explicit_exclusive_options_and_minimum_validation():
-    form = parse_form_html(document([item(1,
-        "Select all. If choosing either of the last two options, choose it alone.", 4,
-        ["Trees", "Shelters", "None", "Not sure"], rules=[[7, 200, ["1"]]])]), URL)
+    form = parse_form_html(
+        document(
+            [
+                item(
+                    1,
+                    "Select all. If choosing either of the last two options, choose it alone.",
+                    4,
+                    ["Trees", "Shelters", "None", "Not sure"],
+                    rules=[[7, 200, ["1"]]],
+                )
+            ]
+        ),
+        URL,
+    )
     assert form.questions[0].exclusive_options == ["None", "Not sure"]
     assert form.questions[0].min_select == 1
 
@@ -68,8 +103,10 @@ def test_malformed_checkbox_constraint_is_not_silently_ignored(args):
 
 
 def test_common_field_types_roundtrip():
-    items = [item(i + 1, f"Question {i}", code, ["1", "2"] if code in (2, 3, 4, 5) else None)
-             for i, code in enumerate([0, 1, 2, 3, 4, 5])]
+    items = [
+        item(i + 1, f"Question {i}", code, ["1", "2"] if code in (2, 3, 4, 5) else None)
+        for i, code in enumerate([0, 1, 2, 3, 4, 5])
+    ]
     form = parse_form_html(document(items, "Test &amp; Check"), URL)
     assert [q.qtype for q in form.questions] == ["text", "textarea", "radio", "dropdown", "checkbox", "scale"]
     assert form.title == "Test & Check"
@@ -86,9 +123,16 @@ def test_unsupported_controls_and_branching_are_visible():
         form.require_supported()
 
 
-@pytest.mark.parametrize("value", ["https://example.com/forms/d/e/id/viewform",
-    "https://docs.google.com/forms/d/id/edit", "http://docs.google.com/forms/d/e/id/viewform",
-    "https://docs.google.com.evil.test/forms/d/id/viewform", "https://u:p@docs.google.com/forms/d/id/viewform"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://example.com/forms/d/e/id/viewform",
+        "https://docs.google.com/forms/d/id/edit",
+        "http://docs.google.com/forms/d/e/id/viewform",
+        "https://docs.google.com.evil.test/forms/d/id/viewform",
+        "https://u:p@docs.google.com/forms/d/id/viewform",
+    ],
+)
 def test_bad_urls_are_actionable(value):
     with pytest.raises(GFormBotError):
         clean_url(value)
@@ -103,7 +147,6 @@ def test_unavailable_or_changed_schema_is_not_an_empty_success():
         parse_form_html("<h1>Form closed</h1>", URL)
     with pytest.raises(GFormBotError, match="unrecognized structure"):
         parse_form_html("FB_PUBLIC_LOAD_DATA_ = [null,[]]", URL)
-
 
 
 def test_unsupported_questions_are_still_available_for_display():
@@ -126,17 +169,37 @@ def test_schema_fingerprint_ignores_sampling_preferences_but_detects_form_change
 
 
 def test_instruction_blocks_and_section_descriptions_preserve_order_and_context():
-    schema = parse_form_html(document([
-        [100, "Read first", "Only answer for your current household.", 6],
-        item(1, "Choose", 2, ["A", "B"]),
-        [101, "Employment", "Answer about your main job.", 8],
-        item(2, "Job", 0),
-        [102, "End note", "Do not include personal identifiers.", 6],
-    ]), URL)
+    schema = parse_form_html(
+        document(
+            [
+                [100, "Read first", "Only answer for your current household.", 6],
+                item(1, "Choose", 2, ["A", "B"]),
+                [101, "Employment", "Answer about your main job.", 8],
+                item(2, "Job", 0),
+                [102, "End note", "Do not include personal identifiers.", 6],
+            ]
+        ),
+        URL,
+    )
     assert schema.instructions == [
-        {"page": 1, "before_question": 1, "title": "Read first", "description": "Only answer for your current household."},
-        {"page": 2, "before_question": 2, "title": "Employment", "description": "Answer about your main job."},
-        {"page": 2, "before_question": 3, "title": "End note", "description": "Do not include personal identifiers."},
+        {
+            "page": 1,
+            "before_question": 1,
+            "title": "Read first",
+            "description": "Only answer for your current household.",
+        },
+        {
+            "page": 2,
+            "before_question": 2,
+            "title": "Employment",
+            "description": "Answer about your main job.",
+        },
+        {
+            "page": 2,
+            "before_question": 3,
+            "title": "End note",
+            "description": "Do not include personal identifiers.",
+        },
     ]
     config = config_from_schema(schema)
     assert config.instructions == schema.instructions
@@ -147,10 +210,16 @@ def test_instruction_blocks_and_section_descriptions_preserve_order_and_context(
 
 def test_sign_in_redirect_is_reported_as_access_requirement(monkeypatch):
     from gformbot import inspector
+
     class Response:
         url = "https://accounts.google.com/ServiceLogin"
-        def __enter__(self): return self
-        def __exit__(self, *args): pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
     monkeypatch.setattr(inspector, "urlopen", lambda *args, **kwargs: Response())
     with pytest.raises(ValueError, match="sign-in or access permission"):
         inspector.inspect_form(URL)

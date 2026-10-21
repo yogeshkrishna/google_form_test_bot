@@ -1,13 +1,19 @@
 """Supported email and calendar constraints shared by preparation and execution."""
-from datetime import datetime
+
 import re
+from datetime import datetime
 
 # HTML email input syntax; unlike a delivery check, this needs no network.
 EMAIL_PATTERN = r"[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*"
 
 
 def is_email_rule(rule):
-    return isinstance(rule, list) and len(rule) >= 2 and rule[:2] == [2, 102] and (len(rule) < 3 or rule[2] in (None, []))
+    return (
+        isinstance(rule, list)
+        and len(rule) >= 2
+        and rule[:2] == [2, 102]
+        and (len(rule) < 3 or rule[2] in (None, []))
+    )
 
 
 def needs_email(question):
@@ -15,11 +21,15 @@ def needs_email(question):
 
 
 def date_format(question):
-    return ("YYYY-MM-DD" if question.date_include_year else "MM-DD") + (" HH:MM" if question.date_include_time else "")
+    return ("YYYY-MM-DD" if question.date_include_year else "MM-DD") + (
+        " HH:MM" if question.date_include_time else ""
+    )
 
 
 def date_pattern(question):
-    return (r"\d{4}-\d{2}-\d{2}" if question.date_include_year else r"\d{2}-\d{2}") + (r" \d{2}:\d{2}" if question.date_include_time else "")
+    return (r"\d{4}-\d{2}-\d{2}" if question.date_include_year else r"\d{2}-\d{2}") + (
+        r" \d{2}:\d{2}" if question.date_include_time else ""
+    )
 
 
 def parse_date(question, value):
@@ -45,9 +55,15 @@ def _csv_date(question, value, order):
         return ""
     if re.fullmatch(date_pattern(question), value):
         return parse_date(question, value)[0]
-    match = re.fullmatch(r"(\d{1,4})[/-](\d{1,2})(?:[/-](\d{1,4}))?(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM))?)?", value, re.I)
+    match = re.fullmatch(
+        r"(\d{1,4})[/-](\d{1,2})(?:[/-](\d{1,4}))?(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM))?)?",
+        value,
+        re.I,
+    )
     if not match:
-        raise ValueError(f"Use {date_format(question)} or a Google Forms export date for {question.text!r}: {value!r}.")
+        raise ValueError(
+            f"Use {date_format(question)} or a Google Forms export date for {question.text!r}: {value!r}."
+        )
     first, second, third, hour, minute, seconds, period = match.groups()
     if len(first) == 4:
         year, month, day = int(first), int(second), int(third or 0)
@@ -66,7 +82,9 @@ def _csv_date(question, value, order):
             raise ValueError(f"Invalid 12-hour clock for {question.text!r}.")
         h = h % 12 + (12 if period.upper() == "PM" else 0)
     if s:
-        raise ValueError(f"Nonzero seconds cannot be represented by {question.text!r}; the form accepts minutes only.")
+        raise ValueError(
+            f"Nonzero seconds cannot be represented by {question.text!r}; the form accepts minutes only."
+        )
     if not question.date_include_time and (h or m):
         raise ValueError(f"{question.text!r} accepts a date without a time.")
     try:
@@ -82,7 +100,7 @@ def _csv_date(question, value, order):
 def normalize_csv_dates(question, values, order=None):
     """Infer one consistent date order for an entire column, never per cell."""
     possibilities, errors = {}, []
-    for candidate in ([order] if order else ["mdy", "dmy"]):
+    for candidate in [order] if order else ["mdy", "dmy"]:
         normalized = []
         for row, value in enumerate(values, 2):
             try:
@@ -95,5 +113,7 @@ def normalize_csv_dates(question, values, order=None):
     if not possibilities:
         raise ValueError(" ".join(dict.fromkeys(errors)))
     if len(possibilities) == 2 and possibilities["mdy"] != possibilities["dmy"]:
-        raise AmbiguousDateError(f"The CSV date order for {question.text!r} is ambiguous. Choose month/day/year or day/month/year; scripted commands accept --date-order mdy or dmy.")
+        raise AmbiguousDateError(
+            f"The CSV date order for {question.text!r} is ambiguous. Choose month/day/year or day/month/year; scripted commands accept --date-order mdy or dmy."
+        )
     return next(iter(possibilities.values()))

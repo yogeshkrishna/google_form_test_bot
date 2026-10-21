@@ -3,19 +3,19 @@
 Google embeds all sections in FB_PUBLIC_LOAD_DATA_. This is an undocumented
 format, so shape changes and unsupported controls are reported explicitly.
 """
+
 from __future__ import annotations
 
+import hashlib
 import html
-from html.parser import HTMLParser
 import json
 import re
+from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from dataclasses import dataclass, field
-import hashlib
-from typing import Optional
 from .validation import is_email_rule
 
 
@@ -31,7 +31,7 @@ class QuestionSchema:
     item_id: str = ""
     description: str = ""
     min_select: int = 0
-    max_select: Optional[int] = None
+    max_select: int | None = None
     exclusive_options: list[str] = field(default_factory=list)
     validation: list = field(default_factory=list)
     date_include_year: bool = True
@@ -50,7 +50,7 @@ class FormSchema:
     confirmation_text: str = ""
     instructions: list[dict] = field(default_factory=list)
 
-    def get(self, index: int) -> Optional[QuestionSchema]:
+    def get(self, index: int) -> QuestionSchema | None:
         return next((q for q in self.questions if q.index == index), None)
 
     def require_supported(self) -> None:
@@ -87,7 +87,7 @@ def plain_text(value) -> str:
 
 
 def clean_url(value: str, allow_short=True) -> str:
-    value = value.strip().strip('"\'').strip()
+    value = value.strip().strip("\"'").strip()
     parsed = urlparse(value)
     if parsed.scheme != "https" or parsed.username or parsed.password:
         raise ValueError("Paste an HTTPS Google Forms responder URL (ending in /viewform).")
@@ -110,7 +110,9 @@ def _checkbox_rules(question: QuestionSchema) -> None:
     text = f"{question.text} {question.description}"
     # Infer only explicit natural-language instructions; never assume the last
     # option is exclusive just because of its position.
-    if re.search(r"(?:either of |one of )?(?:the )?last two options?.{0,55}choose (?:it |them )?alone", text, re.I):
+    if re.search(
+        r"(?:either of |one of )?(?:the )?last two options?.{0,55}choose (?:it |them )?alone", text, re.I
+    ):
         question.exclusive_options = question.options[-2:]
     elif re.search(r"(?:the )?last option.{0,55}choose (?:it )?alone", text, re.I):
         question.exclusive_options = question.options[-1:]
@@ -121,9 +123,15 @@ def _checkbox_rules(question: QuestionSchema) -> None:
         if not isinstance(rule, list) or len(rule) < 3 or rule[0] != 7 or rule[1] not in (200, 201, 202):
             continue
         args = rule[2]
-        if (not isinstance(args, list) or len(args) != 1
-                or isinstance(args[0], bool) or not re.fullmatch(r"\d+", str(args[0]))):
-            raise ValueError(f"Invalid checkbox selection constraint for {question.text!r}; inspection stopped.")
+        if (
+            not isinstance(args, list)
+            or len(args) != 1
+            or isinstance(args[0], bool)
+            or not re.fullmatch(r"\d+", str(args[0]))
+        ):
+            raise ValueError(
+                f"Invalid checkbox selection constraint for {question.text!r}; inspection stopped."
+            )
         n = int(args[0])
         if rule[1] == 200:
             question.min_select = max(question.min_select, n)
@@ -138,9 +146,11 @@ def parse_form_html(document: str, url: str) -> FormSchema:
     if not marker:
         if "accounts.google.com" in document and ("Sign in" in document or "ServiceLogin" in document):
             raise ValueError("This form requires sign-in or access permission. Use a public test copy.")
-        raise ValueError("No public form schema was found. The form may be closed, unavailable, or have changed format.")
+        raise ValueError(
+            "No public form schema was found. The form may be closed, unavailable, or have changed format."
+        )
     try:
-        data, _ = json.JSONDecoder().raw_decode(document[marker.end():])
+        data, _ = json.JSONDecoder().raw_decode(document[marker.end() :])
         meta = data[1]
         items = meta[1]
         if not isinstance(items, list):
@@ -151,7 +161,8 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         url=url,
         title=plain_text(_get(meta, 8) or _get(data, 3) or "Google Form"),
         description=plain_text(_get(meta, 0)),
-        questions=[], sections=["Section 1"],
+        questions=[],
+        sections=["Section 1"],
         confirmation_text=plain_text(_get(_get(meta, 2), 0)),
     )
     seen_ids = set()
@@ -165,14 +176,26 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         if type_code == 8:
             form.sections.append(title or f"Section {len(form.sections) + 1}")
             if description:
-                form.instructions.append({"page": len(form.sections), "before_question": len(form.questions) + 1,
-                                          "title": title, "description": description})
+                form.instructions.append(
+                    {
+                        "page": len(form.sections),
+                        "before_question": len(form.questions) + 1,
+                        "title": title,
+                        "description": description,
+                    }
+                )
             if _get(item, 5) not in (None, -2):
                 form.unsupported.append(f"section routing at {title!r}")
             continue
         if type_code == 6:
-            form.instructions.append({"page": len(form.sections), "before_question": len(form.questions) + 1,
-                                      "title": title, "description": description})
+            form.instructions.append(
+                {
+                    "page": len(form.sections),
+                    "before_question": len(form.questions) + 1,
+                    "title": title,
+                    "description": description,
+                }
+            )
             continue
         if type_code in (11, 12):  # media have no answer field
             continue
@@ -180,8 +203,16 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         if type_code not in KINDS or not isinstance(entries, list) or len(entries) != 1:
             name = UNSUPPORTED.get(type_code, f"question type {type_code}")
             form.unsupported.append(f"{name}: {title}")
-            form.questions.append(QuestionSchema(len(form.questions) + 1, title, name,
-                page=len(form.sections), item_id=str(item_id), description=description))
+            form.questions.append(
+                QuestionSchema(
+                    len(form.questions) + 1,
+                    title,
+                    name,
+                    page=len(form.sections),
+                    item_id=str(item_id),
+                    description=description,
+                )
+            )
             continue
         entry = entries[0]
         if not isinstance(entry, list) or len(entry) < 3:
@@ -200,10 +231,19 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         if len(options) != len(set(options)):
             form.unsupported.append(f"duplicate option labels: {title}")
         validation = _get(entry, 4) or []
-        q = QuestionSchema(len(form.questions) + 1, title, KINDS[type_code], bool(entry[2]),
-                           options=options, page=len(form.sections), entry_id=entry_id,
-                           item_id=str(item_id), description=description,
-                           min_select=1 if entry[2] and type_code == 4 else 0, validation=validation)
+        q = QuestionSchema(
+            len(form.questions) + 1,
+            title,
+            KINDS[type_code],
+            bool(entry[2]),
+            options=options,
+            page=len(form.sections),
+            entry_id=entry_id,
+            item_id=str(item_id),
+            description=description,
+            min_select=1 if entry[2] and type_code == 4 else 0,
+            validation=validation,
+        )
         if q.qtype == "date":
             flags = _get(entry, 7)
             if not isinstance(flags, list) or len(flags) != 2 or any(v not in (0, 1) for v in flags):
@@ -213,9 +253,15 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         if q.qtype == "checkbox":
             _checkbox_rules(q)
             for rule in validation:
-                if not isinstance(rule, list) or len(rule) < 3 or rule[:2] not in ([7, 200], [7, 201], [7, 202]):
+                if (
+                    not isinstance(rule, list)
+                    or len(rule) < 3
+                    or rule[:2] not in ([7, 200], [7, 201], [7, 202])
+                ):
                     form.unsupported.append(f"unrecognized checkbox validation: {title}")
-        elif validation and not (q.qtype in ("text", "textarea") and all(is_email_rule(rule) for rule in validation)):
+        elif validation and not (
+            q.qtype in ("text", "textarea") and all(is_email_rule(rule) for rule in validation)
+        ):
             form.unsupported.append(f"custom validation on {title!r}")
         if q.qtype in ("radio", "checkbox", "dropdown", "scale") and not q.options:
             form.unsupported.append(f"missing option labels: {title}")
@@ -224,7 +270,9 @@ def parse_form_html(document: str, url: str) -> FormSchema:
     return form
 
 
-def inspect_form(url: str, browser: str = "auto", headless: bool = True, status_cb=None, timeout: int = 30) -> FormSchema:
+def inspect_form(
+    url: str, browser: str = "auto", headless: bool = True, status_cb=None, timeout: int = 30
+) -> FormSchema:
     requested = clean_url(url)
     if status_cb:
         status_cb("Reading all form questions and constraints…")
@@ -248,12 +296,24 @@ def inspect_form(url: str, browser: str = "auto", headless: bool = True, status_
         raise ValueError(f"Could not open the form: {exc}. Check the responder URL and connection.") from exc
 
 
-
 def schema_fingerprint(schema_or_config) -> str:
     """Compare form contents, ignoring response-generation preferences."""
     source = schema_or_config
-    fields = ("index", "text", "qtype", "required", "options", "page", "entry_id", "item_id",
-              "description", "min_select", "max_select", "exclusive_options", "validation")
+    fields = (
+        "index",
+        "text",
+        "qtype",
+        "required",
+        "options",
+        "page",
+        "entry_id",
+        "item_id",
+        "description",
+        "min_select",
+        "max_select",
+        "exclusive_options",
+        "validation",
+    )
     payload = {
         "url": source.url,
         "title": getattr(source, "title", getattr(source, "form_title", "Google Form")),
@@ -261,8 +321,16 @@ def schema_fingerprint(schema_or_config) -> str:
         "sections": source.sections,
         "unsupported": source.unsupported,
         "confirmation_text": source.confirmation_text,
-        "questions": [{**{key: getattr(q, key) for key in fields},
-                       **({"date_include_year": q.date_include_year, "date_include_time": q.date_include_time} if q.qtype == "date" else {})}
-                      for q in source.questions],
+        "questions": [
+            {
+                **{key: getattr(q, key) for key in fields},
+                **(
+                    {"date_include_year": q.date_include_year, "date_include_time": q.date_include_time}
+                    if q.qtype == "date"
+                    else {}
+                ),
+            }
+            for q in source.questions
+        ],
     }
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
