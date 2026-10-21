@@ -5,19 +5,29 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from test_inspector import URL, document, item
 
 from gformbot import ai, filler, inspector
 from gformbot.config import QuestionConfig, RunConfig, config_from_schema, load_config, save_config
 from gformbot.generator import load_reference, validate_answer, write_csv
-from test_inspector import URL, document, item
 
 
 def config(year=True, time=True, required=True):
-    return RunConfig(URL, questions=[
-        QuestionConfig(1, "Email", "text", required, entry_id="1", validation=[[2, 102]]),
-        QuestionConfig(2, "Date needed", "date", required, entry_id="2",
-                       date_include_year=year, date_include_time=time),
-    ])
+    return RunConfig(
+        URL,
+        questions=[
+            QuestionConfig(1, "Email", "text", required, entry_id="1", validation=[[2, 102]]),
+            QuestionConfig(
+                2,
+                "Date needed",
+                "date",
+                required,
+                entry_id="2",
+                date_include_year=year,
+                date_include_time=time,
+            ),
+        ],
+    )
 
 
 @pytest.mark.parametrize("year,time", [(True, True), (True, False), (False, True), (False, False)])
@@ -37,7 +47,9 @@ def test_inspection_date_settings_and_email(year, time, tmp_path):
 
 
 def test_unknown_validation_and_date_settings_remain_explicitly_unsupported():
-    schema = inspector.parse_form_html(document([item(1, "Pattern", 0, rules=[[2, 100, ["text"]]]), item(2, "Date", 9)]), URL)
+    schema = inspector.parse_form_html(
+        document([item(1, "Pattern", 0, rules=[[2, 100, ["text"]]]), item(2, "Date", 9)]), URL
+    )
     assert any("custom validation" in problem for problem in schema.unsupported)
     assert any("date settings" in problem for problem in schema.unsupported)
 
@@ -47,20 +59,39 @@ def test_email_syntax(email):
     assert validate_answer(config(), {1: email, 2: "2028-02-29 00:05"})[1] == email
 
 
-@pytest.mark.parametrize("email", ["not-email", "x@", "x y@example.com", "x@-example.com", "x@example..com", "x@example.com\n"])
+@pytest.mark.parametrize(
+    "email", ["not-email", "x@", "x y@example.com", "x@-example.com", "x@example..com", "x@example.com\n"]
+)
 def test_invalid_email_rejected_before_execution(email):
     with pytest.raises(ValueError, match="email address"):
         validate_answer(config(), {1: email, 2: "2026-10-12 14:30"})
 
 
-@pytest.mark.parametrize("date", ["2026-02-29 14:30", "2026-13-01 00:00", "2026-10-12 24:30", "2026-10-12 14:60", "12/10/2026 14:30", "2026-10-12"])
+@pytest.mark.parametrize(
+    "date",
+    [
+        "2026-02-29 14:30",
+        "2026-13-01 00:00",
+        "2026-10-12 24:30",
+        "2026-10-12 14:60",
+        "12/10/2026 14:30",
+        "2026-10-12",
+    ],
+)
 def test_invalid_calendar_or_format_rejected_before_execution(date):
     with pytest.raises(ValueError):
         validate_answer(config(), {1: "profile@example.com", 2: date})
 
 
-@pytest.mark.parametrize("year,time,date", [(True, True, "2026-10-12T14:30"), (True, False, "2026-10-12"),
-                                         (False, True, "02-29 00:05"), (False, False, "02-29")])
+@pytest.mark.parametrize(
+    "year,time,date",
+    [
+        (True, True, "2026-10-12T14:30"),
+        (True, False, "2026-10-12"),
+        (False, True, "02-29 00:05"),
+        (False, False, "02-29"),
+    ],
+)
 def test_supported_date_csv_roundtrip(year, time, date, tmp_path):
     c = config(year, time)
     expected = {1: "profile@example.com", 2: date.replace("T", " ")}
@@ -77,8 +108,12 @@ def test_optional_blanks_preserved_and_required_blanks_rejected():
 
 
 def test_ai_date_and_email_constraints_correct_invalid_answers(monkeypatch):
-    contents = iter([json.dumps({"responses": [{"1": "bad", "2": "2026-02-30 14:30"}]}),
-                     json.dumps({"responses": [{"1": "profile@example.com", "2": "2026-10-12 14:30"}]})])
+    contents = iter(
+        [
+            json.dumps({"responses": [{"1": "bad", "2": "2026-02-30 14:30"}]}),
+            json.dumps({"responses": [{"1": "profile@example.com", "2": "2026-10-12 14:30"}]}),
+        ]
+    )
     calls = []
 
     def chat(driver, messages, schema, timeout, **kwargs):
@@ -100,15 +135,20 @@ def test_short_url_resolves_before_parsing(monkeypatch):
     class Response:
         url = URL + "?usp=send_form"
         from email.message import Message
+
         headers = Message()
+
         def __enter__(self):
             return self
+
         def __exit__(self, *args):
             pass
+
         def read(self, size):
             return document([item(1, "Name", 0)]).encode()
 
     requested = []
+
     def open_url(request, timeout):
         requested.append(request.full_url)
         return Response()
@@ -121,15 +161,21 @@ def test_short_url_resolves_before_parsing(monkeypatch):
 
 
 @pytest.mark.browser
-@pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Set GFORMBOT_BROWSER_TESTS=1 for Chrome integration.")
+@pytest.mark.skipif(
+    os.environ.get("GFORMBOT_BROWSER_TESTS") != "1",
+    reason="Set GFORMBOT_BROWSER_TESTS=1 for Chrome integration.",
+)
 def test_browser_email_all_date_modes_blanks_and_range():
     from gformbot.browser import get_driver
+
     c = config(required=False)
     c.sections = ["One"]
     c.questions += [
         QuestionConfig(3, "Date only", "date", entry_id="3"),
         QuestionConfig(4, "Annual date", "date", entry_id="4", date_include_year=False),
-        QuestionConfig(5, "Annual date and time", "date", entry_id="5", date_include_year=False, date_include_time=True),
+        QuestionConfig(
+            5, "Annual date and time", "date", entry_id="5", date_include_year=False, date_include_time=True
+        ),
     ]
     markup = """<!doctype html><html><body><form>
         <div role="listitem"><h2 role="heading">Email</h2><input type="email" name="entry.1"></div>
@@ -143,12 +189,14 @@ def test_browser_email_all_date_modes_blanks_and_range():
         window.dateEvents = [];
         document.addEventListener('change', e => { if(e.target.type === 'date') window.dateEvents.push(e.target.value); });
         </script></body></html>"""
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write(markup.encode())
+
         def log_message(self, *args):
             pass
 
@@ -159,17 +207,29 @@ def test_browser_email_all_date_modes_blanks_and_range():
     try:
         c.url = f"http://127.0.0.1:{server.server_port}/viewform"
         driver = get_driver(browser="chrome", headless=True)
-        answers = {1: "profile@example.com", 2: "2026-10-12 00:05", 3: "2028-02-29", 4: "02-29", 5: "12-31 23:59"}
+        answers = {
+            1: "profile@example.com",
+            2: "2026-10-12 00:05",
+            3: "2028-02-29",
+            4: "02-29",
+            5: "12-31 23:59",
+        }
         result = filler.execute_response(driver, c, validate_answer(c, answers), submit=False)
         assert result["status"] == "filled"
-        assert driver.execute_script("return Array.from(document.querySelectorAll('input')).map(e => e.value)") == [
-            "profile@example.com", "2026-10-12", "0", "5", "2028-02-29", "2", "29", "12", "31", "23", "59"]
+        assert driver.execute_script(
+            "return Array.from(document.querySelectorAll('input')).map(e => e.value)"
+        ) == ["profile@example.com", "2026-10-12", "0", "5", "2028-02-29", "2", "29", "12", "31", "23", "59"]
         assert driver.execute_script("return window.dateEvents") == ["2026-10-12", "2028-02-29"]
         assert not driver.execute_script("return window.submitted")
         assert not driver._gformbot_submission_clicked
         result = filler.execute_response(driver, c, {q.index: "" for q in c.questions}, submit=False)
         assert result["status"] == "filled"
-        assert all(value == "" for value in driver.execute_script("return Array.from(document.querySelectorAll('input')).map(e => e.value)"))
+        assert all(
+            value == ""
+            for value in driver.execute_script(
+                "return Array.from(document.querySelectorAll('input')).map(e => e.value)"
+            )
+        )
         with pytest.raises(RuntimeError, match="allowed range"):
             filler.execute_response(driver, c, {**answers, 2: "2077-01-01 12:00"}, submit=False)
         assert not driver.execute_script("return window.submitted")

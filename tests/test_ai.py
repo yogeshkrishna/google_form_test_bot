@@ -13,13 +13,21 @@ def config(monkeypatch):
     class Driver:
         def quit(self):
             pass
+
     monkeypatch.setattr(ai, "_open_chat", lambda browser: Driver())
     return RunConfig(
         url="https://docs.google.com/forms/d/e/test/viewform",
         form_title="Example survey",
         questions=[
             QuestionConfig(index=1, text="Choice", qtype="radio", required=True, options=["A", "B"]),
-            QuestionConfig(index=2, text="Activities", qtype="checkbox", required=True, options=["Read, write", "Run"], max_select=2),
+            QuestionConfig(
+                index=2,
+                text="Activities",
+                qtype="checkbox",
+                required=True,
+                options=["Read, write", "Run"],
+                max_select=2,
+            ),
             QuestionConfig(index=3, text="Reason", qtype="text", required=True),
             QuestionConfig(index=4, text="Comments", qtype="textarea"),
         ],
@@ -49,7 +57,9 @@ def mock_chat(monkeypatch, contents):
 def test_batches_complete_profiles_and_progress(config, monkeypatch):
     calls = mock_chat(monkeypatch, [reply(profile(), profile("B")), reply(profile())])
     progress = []
-    rows = ai.generate_responses(config, 3, batch_size=2, progress=lambda done, total: progress.append((done, total)))
+    rows = ai.generate_responses(
+        config, 3, batch_size=2, progress=lambda done, total: progress.append((done, total))
+    )
     assert len(rows) == 3
     assert all(set(row) == {1, 2, 3, 4} for row in rows)
     assert rows[0][2] == ["Read, write"]
@@ -67,14 +77,17 @@ def test_retains_valid_profiles_when_correcting_bad_ones(config, monkeypatch):
     assert "corrections" in calls[1]["task"]
 
 
-@pytest.mark.parametrize("bad", [
-    "not JSON",
-    '{"responses": []}',
-    '{"responses": [{"1": "A"}]}',
-    reply({**profile(), "unexpected": "value"}),
-    reply({**profile(), "2": ["Run", "Run"]}),
-    reply({**profile(), "3": ""}),
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "not JSON",
+        '{"responses": []}',
+        '{"responses": [{"1": "A"}]}',
+        reply({**profile(), "unexpected": "value"}),
+        reply({**profile(), "2": ["Run", "Run"]}),
+        reply({**profile(), "3": ""}),
+    ],
+)
 def test_bounded_corrections_and_no_random_fallback(config, monkeypatch, bad):
     calls = mock_chat(monkeypatch, [bad, bad, bad])
     with pytest.raises(ai.GenerationError, match="after 3 attempts"):
@@ -96,11 +109,18 @@ def test_reference_contains_joint_rows_frequencies_and_user_instructions(config,
     assert task["reference"]["example_profiles"][1]["1"] == 2
 
 
-@pytest.mark.parametrize("arguments", [
-    {"count": 0}, {"count": True}, {"count": 1, "batch_size": 0},
-    {"count": 1, "max_retries": 4}, {"count": 1, "timeout": float("nan")},
-    {"count": 1, "timeout": float("inf")}, {"count": 1, "timeout": True},
-])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"count": 0},
+        {"count": True},
+        {"count": 1, "batch_size": 0},
+        {"count": 1, "max_retries": 4},
+        {"count": 1, "timeout": float("nan")},
+        {"count": 1, "timeout": float("inf")},
+        {"count": 1, "timeout": True},
+    ],
+)
 def test_invalid_parameters_make_no_request(config, monkeypatch, arguments):
     def unexpected(*args, **kwargs):
         pytest.fail("Invalid input must be rejected before opening ChatGPT")
@@ -125,19 +145,24 @@ def test_unsupported_form_makes_no_request(config, monkeypatch):
 
 def test_batches_and_corrections_reuse_one_private_browser(monkeypatch, config):
     opened, closed = [], []
+
     class Driver:
         def quit(self):
             closed.append(True)
+
     def open_chat(browser):
         opened.append(browser)
         return Driver()
+
     monkeypatch.setattr(ai, "_open_chat", open_chat)
     calls = mock_chat(monkeypatch, [reply(profile(), profile("bad")), reply(profile("B")), reply(profile())])
     assert len(ai.generate_responses(config, 3, batch_size=2)) == 3
     assert len(calls) == 3 and opened == ["chrome"] and closed == [True]
 
 
-@pytest.mark.parametrize("message", ["ChatGPT usage limit reached", "ChatGPT requires sign-in", "ChatGPT timed out"])
+@pytest.mark.parametrize(
+    "message", ["ChatGPT usage limit reached", "ChatGPT requires sign-in", "ChatGPT timed out"]
+)
 def test_actionable_transport_errors_stop_immediately(config, monkeypatch, message):
     calls = []
 
@@ -210,7 +235,7 @@ def test_model_cannot_change_fixed_config_answers(config, monkeypatch):
 
 
 def test_plain_json_code_fence_is_accepted(config, monkeypatch):
-    mock_chat(monkeypatch, ['```json\n' + reply(profile()) + '\n```'])
+    mock_chat(monkeypatch, ["```json\n" + reply(profile()) + "\n```"])
     assert ai.generate_responses(config, 1)[0][1] == "A"
 
 
@@ -218,3 +243,171 @@ def test_unsupported_browser_stops_before_launch(config, monkeypatch):
     monkeypatch.setattr(ai, "_open_chat", lambda *args: pytest.fail("No browser should open"))
     with pytest.raises(ai.GenerationError, match="visible"):
         ai.generate_responses(config, 1, browser="headless")
+
+
+def test_late_failure_checkpoints_valid_rows_and_resumes_only_pending(config, monkeypatch, tmp_path):
+    path = tmp_path / "generation.json"
+    calls = []
+
+    def first_attempt(driver, messages, schema, timeout, **kwargs):
+        calls.append(json.loads(messages[-1]["content"]))
+        if len(calls) == 1:
+            return reply(profile("A", "Already generated"))
+        raise ai.ChatGPTError("Usage limit reached")
+
+    monkeypatch.setattr(ai, "_chat", first_attempt)
+    with pytest.raises(ai.GenerationError, match="1/2 responses saved") as failure:
+        ai.generate_responses(config, 2, batch_size=1, checkpoint=path)
+    assert failure.value.completed == 1 and failure.value.requested == 2
+    assert failure.value.checkpoint == path
+    assert failure.value.partial_responses[0][3] == "Already generated"
+    saved = json.loads(path.read_text())
+    assert saved["responses"][0]["3"] == "Already generated" and saved["responses"][1] is None
+    progress = []
+    calls = mock_chat(monkeypatch, [reply(profile("B", "Newly generated"))])
+    rows = ai.generate_responses(
+        config, 2, checkpoint=path, progress=lambda done, total: progress.append((done, total))
+    )
+    assert [row[3] for row in rows] == ["Already generated", "Newly generated"]
+    assert calls[0]["task"]["response_count"] == 1
+    assert calls[0]["task"]["profile_numbers"] == [2]
+    assert progress == [(1, 2), (2, 2)]
+
+
+def test_complete_checkpoint_returns_without_opening_browser(config, monkeypatch, tmp_path):
+    path = tmp_path / "generation.json"
+    mock_chat(monkeypatch, [reply(profile())])
+    expected = ai.generate_responses(config, 1, checkpoint=path)
+    monkeypatch.setattr(
+        ai, "_open_chat", lambda *a: pytest.fail("Completed checkpoint must not open a browser")
+    )
+    assert ai.generate_responses(config, 1, checkpoint=path) == expected
+
+
+@pytest.mark.parametrize("change", ["instructions", "reference", "fixed", "notes", "count"])
+def test_changed_job_never_reuses_an_existing_checkpoint(config, monkeypatch, tmp_path, change):
+    path = tmp_path / "generation.json"
+    mock_chat(monkeypatch, [reply(profile())])
+    ai.generate_responses(config, 1, checkpoint=path)
+    options = {"count": 1}
+    if change == "instructions":
+        options["instructions"] = "Different population"
+    elif change == "reference":
+        options["reference"] = [{int(k): v for k, v in profile("B").items()}]
+    elif change == "fixed":
+        config.questions[0].fixed_value = "B"
+    elif change == "notes":
+        config.instructions = [
+            {"page": 1, "before_question": 1, "title": "Adults only", "description": "Age 18 and over"}
+        ]
+    else:
+        options["count"] = 2
+    before = path.read_bytes()
+    monkeypatch.setattr(
+        ai, "_open_chat", lambda *a: pytest.fail("Mismatched checkpoint must not open a browser")
+    )
+    with pytest.raises(ai.GenerationError, match="different form, request, or reference"):
+        ai.generate_responses(config, checkpoint=path, **options)
+    assert path.read_bytes() == before
+
+
+def test_cancelled_generation_retains_checkpoint_and_releases_lock(config, monkeypatch, tmp_path):
+    path = tmp_path / "generation.json"
+    calls = []
+
+    def cancel_after_first(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return reply(profile())
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(ai, "_chat", cancel_after_first)
+    with pytest.raises(KeyboardInterrupt):
+        ai.generate_responses(config, 2, batch_size=1, checkpoint=path)
+    assert json.loads(path.read_text())["responses"][1] is None
+    mock_chat(monkeypatch, [reply(profile("B"))])
+    assert len(ai.generate_responses(config, 2, checkpoint=path)) == 2
+
+
+def test_partial_checkpoint_preserves_holes_and_preselected_profiles(config, monkeypatch, tmp_path):
+    path = tmp_path / "generation.json"
+    partials = [{1: "A"}, {1: "B"}]
+    mock_chat(monkeypatch, [reply(profile("wrong"), profile("B"))])
+    with pytest.raises(ai.GenerationError):
+        ai.complete_responses(config, partials, max_retries=0, checkpoint=path)
+    calls = mock_chat(monkeypatch, [reply(profile("A"))])
+    result = ai.complete_responses(config, partials, checkpoint=path)
+    assert [row[1] for row in result] == ["A", "B"]
+    assert calls[0]["task"]["profile_numbers"] == [1]
+    assert calls[0]["task"]["partial_profiles"] == [{"1": 1}]
+
+
+def test_checkpoint_saved_before_progress_callback_can_cancel(config, monkeypatch, tmp_path):
+    path = tmp_path / "generation.json"
+    mock_chat(monkeypatch, [reply(profile())])
+
+    def interrupt(done, total):
+        assert json.loads(path.read_text())["responses"][0] is not None
+        raise KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt):
+        ai.generate_responses(config, 1, checkpoint=path, progress=interrupt)
+    monkeypatch.setattr(ai, "_open_chat", lambda *a: pytest.fail("All data was checkpointed"))
+    assert len(ai.generate_responses(config, 1, checkpoint=path)) == 1
+
+
+def test_generation_checkpoint_contains_request_and_form_context(config, monkeypatch, tmp_path):
+    config.sections = ["Eligibility"]
+    config.instructions = [{"page": 1, "before_question": 1, "title": "Adults", "description": "18+ only"}]
+    calls = mock_chat(monkeypatch, [reply(profile())])
+    path = tmp_path / "generation.json"
+    ai.generate_responses(config, 1, instructions="Commuters", checkpoint=path)
+    task = calls[0]["task"]
+    assert task["sections"] == ["Eligibility"]
+    assert task["form_instructions"] == config.instructions
+    assert task["questions"][0]["page"] == 1
+    request = json.loads(path.read_text())["request"]
+    assert request["instructions"] == "Commuters" and request["count"] == 1
+    assert request["config"]["form_title"] == config.form_title
+
+
+@pytest.mark.parametrize("corrupt", ["bad JSON", {"kind": "other"}])
+def test_unrelated_checkpoint_file_is_not_overwritten(config, monkeypatch, tmp_path, corrupt):
+    path = tmp_path / "generation.json"
+    path.write_text(corrupt if isinstance(corrupt, str) else json.dumps(corrupt))
+    before = path.read_bytes()
+    monkeypatch.setattr(ai, "_open_chat", lambda *a: pytest.fail("Invalid checkpoint must not launch"))
+    with pytest.raises(ai.GenerationError, match="Cannot resume"):
+        ai.generate_responses(config, 1, checkpoint=path)
+    assert path.read_bytes() == before
+
+
+def test_checkpoint_lock_rejects_simultaneous_writer(config, monkeypatch, tmp_path):
+    path = tmp_path / "generation.json"
+    monkeypatch.setattr(ai, "_open_chat", lambda *a: pytest.fail("Locked checkpoint must not launch"))
+    with ai._checkpoint_lock(path):
+        with pytest.raises(ai.GenerationError, match="Cannot lock"):
+            ai.generate_responses(config, 1, checkpoint=path)
+
+
+def test_browser_cleanup_failure_does_not_discard_generation(config, monkeypatch, tmp_path):
+    class Driver:
+        def quit(self):
+            raise ai.WebDriverException("Browser already closed")
+
+    monkeypatch.setattr(ai, "_open_chat", lambda *a: Driver())
+    mock_chat(monkeypatch, [reply(profile())])
+    path = tmp_path / "generation.json"
+    assert len(ai.generate_responses(config, 1, checkpoint=path)) == 1
+    assert json.loads(path.read_text())["responses"][0] is not None
+
+
+def test_conflicting_fixed_and_preselected_answer_fails_before_browser(config, monkeypatch, tmp_path):
+    config.questions[0].fixed_value = "B"
+    monkeypatch.setattr(
+        ai, "_open_chat", lambda *a: pytest.fail("Conflicting presets must fail before opening")
+    )
+    path = tmp_path / "job.json"
+    with pytest.raises(ai.GenerationError, match="conflict"):
+        ai.complete_responses(config, [{1: "A"}], checkpoint=path)
+    assert not path.exists()

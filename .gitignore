@@ -28,6 +28,10 @@ gformbot-runs.csv
 gformbot-responses*.json
 gformbot-generated*.csv
 gformbot-additional*.csv
+gformbot-export*.csv
+gformbot-partial*.csv
+gformbot-generation*.json
+gformbot-generation*.json.lock
 .work/
 response_pool.csv
 

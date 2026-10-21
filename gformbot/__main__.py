@@ -1,3 +1,6 @@
 """Allow `python -m gformbot` invocation."""
-from gformbot.cli import main
-main()
+
+from gformbot import main
+
+if __name__ == "__main__":
+    main()

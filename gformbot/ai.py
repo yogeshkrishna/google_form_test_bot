@@ -2,23 +2,148 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import os
 import re
-from datetime import datetime
+import tempfile
 from collections import Counter
+from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import replace
-from typing import Any, Callable, Optional
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 
-from gformbot.config import RunConfig, validate_config
+from selenium.common.exceptions import WebDriverException
+
+from gformbot.config import RunConfig, clean_path, config_to_dict, validate_config
 from gformbot.generator import validate_answer
-from gformbot.validation import EMAIL_PATTERN, needs_email, date_format, date_pattern
+from gformbot.inspector import schema_fingerprint
+from gformbot.validation import EMAIL_PATTERN, date_format, date_pattern, needs_email
 
-from .chatgpt import open_chat as _open_chat, ask as _chat, ChatGPTError
+from .chatgpt import ChatGPTError
+from .chatgpt import ask as _chat
+from .chatgpt import open_chat as _open_chat
 
 
 class GenerationError(ValueError):
     """ChatGPT generation could not produce a complete, valid response batch."""
+
+    def __init__(self, message, *, completed=0, requested=None, checkpoint=None, partial_responses=None):
+        super().__init__(message)
+        self.completed = completed
+        self.requested = requested
+        self.checkpoint = checkpoint
+        self.partial_responses = partial_responses or []
+
+
+@contextmanager
+def _checkpoint_lock(path):
+    """Hold an OS lock for the job; process exit releases abandoned locks."""
+    if path is None:
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_name(path.name + ".lock").open("a+b") as handle:
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise GenerationError(
+                f"Cannot lock generation checkpoint {path}; another process may be using it."
+            ) from exc
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _save_checkpoint(path, payload):
+    if path is None:
+        return
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+        if os.name != "nt":
+            descriptor = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+def _restore_checkpoint(path, key, count, config, partials):
+    if path is None or not path.exists():
+        return [None] * count, None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != 1
+            or payload.get("kind") != "gformbot-generation"
+        ):
+            raise ValueError("Unknown generation checkpoint format.")
+        if payload.get("job_key") != key:
+            raise ValueError(
+                "This checkpoint belongs to a different form, request, or reference dataset. Choose a new checkpoint."
+            )
+        rows = payload.get("responses")
+        if not isinstance(rows, list) or len(rows) != count:
+            raise ValueError("The checkpoint response count is inconsistent.")
+        answers = []
+        expected = {str(q.index) for q in config.questions}
+        fixed = {q.index: q.fixed_value for q in config.questions if q.fixed_value is not None}
+        for index, row in enumerate(rows):
+            if row is None:
+                answers.append(None)
+                continue
+            if not isinstance(row, dict) or set(row) != expected:
+                raise ValueError(f"Checkpoint response {index + 1} has inconsistent question keys.")
+            answer = validate_answer(config, row)
+            _preserve_presets(answer, fixed, partials[index] if partials is not None else None)
+            answers.append(answer)
+        date = payload.get("context_date")
+        if not isinstance(date, str):
+            raise ValueError("The checkpoint has no generation date.")
+        datetime.strptime(date, "%Y-%m-%d")
+        return answers, date
+    except (OSError, ValueError, TypeError) as exc:
+        raise GenerationError(f"Cannot resume generation checkpoint {path}: {exc}") from exc
+
+
+def _preserve_presets(answer, fixed, partial=None):
+    presets = {**partial, **fixed} if partial else fixed
+    for key, preset in presets.items():
+        matches = set(answer[key]) == set(preset) if isinstance(preset, list) else answer[key] == preset
+        if not matches:
+            raise ValueError(
+                f"Q{key}: preserve the preselected answer {preset!r}; generate only missing answers."
+            )
+        answer[key] = list(preset) if isinstance(preset, list) else preset
 
 
 def _encode_profile(config: RunConfig, row: dict) -> dict:
@@ -82,10 +207,15 @@ def _response_schema(config: RunConfig, count: int) -> dict:
         elif question.qtype in ("text", "textarea"):
             schema = {"type": "string", "minLength": int(question.required)}
             if needs_email(question):
-                schema["pattern"] = "^" + EMAIL_PATTERN + "$" if question.required else "^(?:" + EMAIL_PATTERN + ")?$"
+                schema["pattern"] = (
+                    "^" + EMAIL_PATTERN + "$" if question.required else "^(?:" + EMAIL_PATTERN + ")?$"
+                )
         elif question.qtype == "date":
             pattern = date_pattern(question)
-            schema = {"type": "string", "pattern": "^" + pattern + "$" if question.required else "^(?:" + pattern + ")?$"}
+            schema = {
+                "type": "string",
+                "pattern": "^" + pattern + "$" if question.required else "^(?:" + pattern + ")?$",
+            }
         else:
             raise GenerationError(
                 f"Question {question.index} ({question.qtype}) is not supported for generation."
@@ -123,19 +253,25 @@ def _reference_context(config: RunConfig, reference: list[dict[int, Any]]) -> di
         for row in reference:
             value = row[question.index]
             counts.update(value if isinstance(value, list) else [value])
-        frequencies[str(question.index)] = {str(index): counts[option] for index, option in enumerate(question.options, 1)}
+        frequencies[str(question.index)] = {
+            str(index): counts[option] for index, option in enumerate(question.options, 1)
+        }
     # Evenly spaced whole rows preserve relationships, unlike independently sampled columns.
     size = min(6, len(reference))
     indexes = [round(i * (len(reference) - 1) / max(size - 1, 1)) for i in range(size)]
     examples = [
-        {str(key): value[:500] if isinstance(value, str) else value for key, value in _encode_profile(config, reference[i]).items()}
+        {
+            str(key): value[:500] if isinstance(value, str) else value
+            for key, value in _encode_profile(config, reference[i]).items()
+        }
         for i in indexes
     ]
     return {"row_count": len(reference), "choice_counts": frequencies, "example_profiles": examples}
 
 
-def _validate_batch(config: RunConfig, content: str, count: int,
-                    partials: Optional[list[dict[int, Any]]] = None) -> tuple[dict[int, dict[int, Any]], list[str]]:
+def _validate_batch(
+    config: RunConfig, content: str, count: int, partials: list[dict[int, Any]] | None = None
+) -> tuple[dict[int, dict[int, Any]], list[str]]:
     if isinstance(content, str):
         fence = re.fullmatch(r"\s*```(?:json)?\s*\n(.*?)\n```\s*", content, re.S | re.I)
         if fence:
@@ -144,26 +280,29 @@ def _validate_batch(config: RunConfig, content: str, count: int,
         parsed = json.loads(content)
     except (ValueError, TypeError):
         return {}, ["Return a valid JSON object containing a responses array; no prose or code fences."]
-    if not isinstance(parsed, dict) or set(parsed) != {"responses"} or not isinstance(parsed["responses"], list):
-        return {}, ["Return exactly one JSON object with the key responses and an array of complete profiles."]
+    if (
+        not isinstance(parsed, dict)
+        or set(parsed) != {"responses"}
+        or not isinstance(parsed["responses"], list)
+    ):
+        return {}, [
+            "Return exactly one JSON object with the key responses and an array of complete profiles."
+        ]
     if len(parsed["responses"]) != count:
         return {}, [f"Return exactly {count} profiles; received {len(parsed['responses'])}."]
     expected = {str(question.index) for question in config.questions}
+    fixed = {q.index: q.fixed_value for q in config.questions if q.fixed_value is not None}
     valid, errors = {}, []
     for index, row in enumerate(parsed["responses"], 1):
         if not isinstance(row, dict) or set(row) != expected:
-            errors.append(f"Profile {index}: include exactly these question keys: {', '.join(sorted(expected))}.")
+            errors.append(
+                f"Profile {index}: include exactly these question keys: {', '.join(sorted(expected))}."
+            )
             continue
         try:
             decoded = _decode_profile(config, row)
             answer = validate_answer(config, {int(key): value for key, value in decoded.items()})
-            fixed = {q.index: q.fixed_value for q in config.questions if q.fixed_value is not None}
-            fixed.update(partials[index - 1] if partials else {})
-            for key, preset in fixed.items():
-                matches = set(answer[key]) == set(preset) if isinstance(preset, list) else answer[key] == preset
-                if not matches:
-                    raise ValueError(f"Q{key}: preserve the preselected answer {preset!r}; generate only missing answers.")
-                answer[key] = preset
+            _preserve_presets(answer, fixed, partials[index - 1] if partials else None)
             valid[index - 1] = answer
         except ValueError as error:
             errors.append(f"Profile {index}: {error}")
@@ -174,15 +313,16 @@ def _generate_responses(
     config: RunConfig,
     count: int,
     *,
-    reference: Optional[list[dict[int, Any]]] = None,
+    reference: list[dict[int, Any]] | None = None,
     instructions: str = "",
     browser: str = "chrome",
-    attention: Optional[Callable[[str], None]] = None,
+    attention: Callable[[str], None] | None = None,
     timeout: float = 180,
     batch_size: int = 10,
     max_retries: int = 2,
-    progress: Optional[Callable[[int, int], None]] = None,
-    partials: Optional[list[dict[int, Any]]] = None,
+    progress: Callable[[int, int], None] | None = None,
+    partials: list[dict[int, Any]] | None = None,
+    checkpoint: str | Path | None = None,
 ) -> list[dict[int, Any]]:
     """Generate complete profiles, retaining valid rows during bounded corrections.
 
@@ -195,7 +335,12 @@ def _generate_responses(
         raise GenerationError("Generation batch size must be an integer from 1 to 20.")
     if isinstance(max_retries, bool) or not isinstance(max_retries, int) or not 0 <= max_retries <= 3:
         raise GenerationError("Correction retries must be an integer from 0 to 3.")
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or timeout <= 0
+    ):
         raise GenerationError("ChatGPT response timeout must be a finite positive number.")
     validate_config(config)
     if config.unsupported:
@@ -216,23 +361,40 @@ def _generate_responses(
             if not isinstance(row, dict) or any(str(key) not in allowed for key in row):
                 raise GenerationError("Preselected answers must use known question indexes.")
             subset = [q for q in config.questions if q.index in row or str(q.index) in row]
-            normalized.append(validate_answer(replace(config, questions=subset), row) if subset else {})
+            profile = validate_answer(replace(config, questions=subset), row) if subset else {}
+            for question in subset:
+                fixed = question.fixed_value
+                value = profile[question.index]
+                if fixed is not None and (
+                    set(value) != set(fixed) if isinstance(fixed, list) else value != fixed
+                ):
+                    raise GenerationError(
+                        f"Q{question.index}: preselected answers conflict with the configured fixed value."
+                    )
+            normalized.append(profile)
         partials = normalized
     context = {
         "today": datetime.now().astimezone().date().isoformat(),
         "form_title": config.form_title,
         "form_description": config.form_description,
+        "sections": config.sections,
+        "form_instructions": getattr(config, "instructions", []),
         "questions": [
             {
                 "key": str(question.index),
                 "question": question.text,
                 "description": question.description,
+                "page": question.page,
                 "type": question.qtype,
                 "required": question.required,
                 "options": {str(index): option for index, option in enumerate(question.options, 1)},
                 "exclusive_options": getattr(question, "exclusive_options", []),
                 "validation": getattr(question, "validation", None),
-                "answer_format": date_format(question) if question.qtype == "date" else "valid email address" if needs_email(question) else "",
+                "answer_format": date_format(question)
+                if question.qtype == "date"
+                else "valid email address"
+                if needs_email(question)
+                else "",
             }
             for question in config.questions
         ],
@@ -253,75 +415,150 @@ def _generate_responses(
         " If partial_profiles are supplied, preserve their answers exactly and complete only missing fields, "
         "returning profiles in the same order. Generated text must be consistent with the preselected choices."
     )
-    answers = [None] * count
-    completed = 0
-    driver = None
-    try:
-        for batch_start in range(0, count, batch_size):
-            pending = list(range(batch_start, min(batch_start + batch_size, count)))
-            corrections = []
-            for attempt in range(max_retries + 1):
-                schema = _response_schema(config, len(pending))
-                task = {
-                    **context,
-                    "response_count": len(pending),
-                    "batch_start": batch_start + 1,
-                    "output_schema": schema,
-                }
-                batch_partials = [partials[index] for index in pending] if partials is not None else None
-                if batch_partials is not None:
-                    task["partial_profiles"] = [_encode_profile(config, row) for row in batch_partials]
-                if corrections:
-                    task["corrections"] = corrections
-                messages = [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": json.dumps(task, ensure_ascii=False)},
-                ]
-                if driver is None:
-                    driver = _open_chat(browser)
+    path = clean_path(checkpoint).resolve() if checkpoint is not None else None
+    job_key = ""
+    if path is not None:
+        job = {
+            "form_fingerprint": schema_fingerprint(config),
+            "context": {key: value for key, value in context.items() if key != "today"},
+            "count": count,
+            "fixed_values": {
+                str(q.index): q.fixed_value for q in config.questions if q.fixed_value is not None
+            },
+            "reference": normalized_reference,
+            "partials": partials,
+        }
+        job_key = hashlib.sha256(
+            json.dumps(
+                job, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+            ).encode()
+        ).hexdigest()
+    with _checkpoint_lock(path):
+        answers, generation_date = _restore_checkpoint(path, job_key, count, config, partials)
+        if generation_date:
+            context["today"] = generation_date
+        completed = sum(row is not None for row in answers)
+        saved = completed
+        payload = (
+            {
+                "schema_version": 1,
+                "kind": "gformbot-generation",
+                "job_key": job_key,
+                "context_date": context["today"],
+                "responses": answers,
+                "request": {
+                    "config": config_to_dict(config),
+                    "count": count,
+                    "instructions": instructions,
+                    "reference": normalized_reference,
+                    "partials": partials,
+                },
+            }
+            if path is not None
+            else None
+        )
+        driver = None
+        try:
+            if path is not None and not path.exists():
+                _save_checkpoint(path, payload)
+            if progress and completed:
+                progress(completed, count)
+            missing = [index for index, row in enumerate(answers) if row is None]
+            for batch_start in range(0, len(missing), batch_size):
+                pending = missing[batch_start : batch_start + batch_size]
+                corrections = []
+                for attempt in range(max_retries + 1):
+                    schema = _response_schema(config, len(pending))
+                    task = {
+                        **context,
+                        "response_count": len(pending),
+                        "batch_start": pending[0] + 1,
+                        "profile_numbers": [index + 1 for index in pending],
+                        "output_schema": schema,
+                    }
+                    batch_partials = [partials[index] for index in pending] if partials is not None else None
+                    if batch_partials is not None:
+                        task["partial_profiles"] = [_encode_profile(config, row) for row in batch_partials]
+                    if corrections:
+                        task["corrections"] = corrections
+                    messages = [
+                        {"role": "system", "content": system},
+                        {
+                            "role": "user",
+                            "content": json.dumps(task, ensure_ascii=False, separators=(",", ":")),
+                        },
+                    ]
+                    try:
+                        if driver is None:
+                            driver = _open_chat(browser)
+                        content = _chat(driver, messages, schema, timeout, attention=attention)
+                    except (ChatGPTError, WebDriverException, RuntimeError) as exc:
+                        raise GenerationError(str(exc)) from exc
+                    valid, errors = _validate_batch(config, content, len(pending), batch_partials)
+                    for index, answer in valid.items():
+                        answers[pending[index]] = answer
+                    completed += len(valid)
+                    if valid:
+                        _save_checkpoint(path, payload)
+                        saved = completed
+                        if progress:
+                            progress(completed, count)
+                    pending = [value for index, value in enumerate(pending) if index not in valid]
+                    if not pending:
+                        break
+                    corrections = [message[:1000] for message in errors[:10]]
+                    if attempt == max_retries:
+                        raise GenerationError(
+                            f"ChatGPT could not produce valid responses after {max_retries + 1} attempts. "
+                            + " ".join(corrections)
+                        )
+        except (GenerationError, OSError) as exc:
+            message = str(exc)
+            if path is not None:
+                message += f" {saved}/{count} responses saved in generation checkpoint: {path}. Retry the same request to resume."
+            raise GenerationError(
+                message,
+                completed=completed,
+                requested=count,
+                checkpoint=path,
+                partial_responses=[row for row in answers if row is not None],
+            ) from exc
+        finally:
+            if driver is not None:
                 try:
-                    content = _chat(driver, messages, schema, timeout, attention=attention)
-                except ChatGPTError as exc:
-                    raise GenerationError(str(exc)) from exc
-                valid, errors = _validate_batch(config, content, len(pending), batch_partials)
-                for index, answer in valid.items():
-                    answers[pending[index]] = answer
-                completed += len(valid)
-                if progress and valid:
-                    progress(completed, count)
-                pending = [value for index, value in enumerate(pending) if index not in valid]
-                if not pending:
-                    break
-                corrections = [message[:1000] for message in errors[:10]]
-                if attempt == max_retries:
-                    raise GenerationError(
-                        f"ChatGPT could not produce valid responses after {max_retries + 1} attempts. "
-                        + " ".join(corrections)
-                    )
-    finally:
-        if driver is not None:
-            driver.quit()
-    return answers
+                    driver.quit()
+                except (WebDriverException, OSError):
+                    pass  # A closed browser must not discard already validated output.
+        return answers
 
 
 def generate_responses(
     config: RunConfig,
     count: int,
     *,
-    reference: Optional[list[dict[int, Any]]] = None,
+    reference: list[dict[int, Any]] | None = None,
     instructions: str = "",
     browser: str = "chrome",
-    attention: Optional[Callable[[str], None]] = None,
+    attention: Callable[[str], None] | None = None,
     timeout: float = 180,
     batch_size: int = 10,
     max_retries: int = 2,
-    progress: Optional[Callable[[int, int], None]] = None,
+    progress: Callable[[int, int], None] | None = None,
+    checkpoint: str | Path | None = None,
 ) -> list[dict[int, Any]]:
     """Generate complete profiles as validated JSON, with optional reference data."""
     return _generate_responses(
-        config, count, reference=reference, instructions=instructions, browser=browser,
-        attention=attention, timeout=timeout, batch_size=batch_size,
-        max_retries=max_retries, progress=progress,
+        config,
+        count,
+        reference=reference,
+        instructions=instructions,
+        browser=browser,
+        attention=attention,
+        timeout=timeout,
+        batch_size=batch_size,
+        max_retries=max_retries,
+        progress=progress,
+        checkpoint=checkpoint,
     )
 
 
@@ -329,20 +566,30 @@ def complete_responses(
     config: RunConfig,
     partials: list[dict[int, Any]],
     *,
-    reference: Optional[list[dict[int, Any]]] = None,
+    reference: list[dict[int, Any]] | None = None,
     instructions: str = "",
     browser: str = "chrome",
-    attention: Optional[Callable[[str], None]] = None,
+    attention: Callable[[str], None] | None = None,
     timeout: float = 180,
     batch_size: int = 10,
     max_retries: int = 2,
-    progress: Optional[Callable[[int, int], None]] = None,
+    progress: Callable[[int, int], None] | None = None,
+    checkpoint: str | Path | None = None,
 ) -> list[dict[int, Any]]:
     """Complete missing answers while preserving each profile's preselected choices."""
     if not isinstance(partials, list):
         raise GenerationError("Preselected profiles must be a list of response objects.")
     return _generate_responses(
-        config, len(partials), reference=reference, instructions=instructions, browser=browser,
-        attention=attention, timeout=timeout, batch_size=batch_size, max_retries=max_retries,
-        progress=progress, partials=partials,
+        config,
+        len(partials),
+        reference=reference,
+        instructions=instructions,
+        browser=browser,
+        attention=attention,
+        timeout=timeout,
+        batch_size=batch_size,
+        max_retries=max_retries,
+        progress=progress,
+        partials=partials,
+        checkpoint=checkpoint,
     )
