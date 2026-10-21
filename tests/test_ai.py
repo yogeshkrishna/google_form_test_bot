@@ -400,3 +400,14 @@ def test_browser_cleanup_failure_does_not_discard_generation(config, monkeypatch
     path = tmp_path / "generation.json"
     assert len(ai.generate_responses(config, 1, checkpoint=path)) == 1
     assert json.loads(path.read_text())["responses"][0] is not None
+
+
+def test_conflicting_fixed_and_preselected_answer_fails_before_browser(config, monkeypatch, tmp_path):
+    config.questions[0].fixed_value = "B"
+    monkeypatch.setattr(
+        ai, "_open_chat", lambda *a: pytest.fail("Conflicting presets must fail before opening")
+    )
+    path = tmp_path / "job.json"
+    with pytest.raises(ai.GenerationError, match="conflict"):
+        ai.complete_responses(config, [{1: "A"}], checkpoint=path)
+    assert not path.exists()

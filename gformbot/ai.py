@@ -136,14 +136,14 @@ def _restore_checkpoint(path, key, count, config, partials):
 
 
 def _preserve_presets(answer, fixed, partial=None):
-    presets = {**fixed, **partial} if partial else fixed
+    presets = {**partial, **fixed} if partial else fixed
     for key, preset in presets.items():
         matches = set(answer[key]) == set(preset) if isinstance(preset, list) else answer[key] == preset
         if not matches:
             raise ValueError(
                 f"Q{key}: preserve the preselected answer {preset!r}; generate only missing answers."
             )
-        answer[key] = preset
+        answer[key] = list(preset) if isinstance(preset, list) else preset
 
 
 def _encode_profile(config: RunConfig, row: dict) -> dict:
@@ -361,7 +361,17 @@ def _generate_responses(
             if not isinstance(row, dict) or any(str(key) not in allowed for key in row):
                 raise GenerationError("Preselected answers must use known question indexes.")
             subset = [q for q in config.questions if q.index in row or str(q.index) in row]
-            normalized.append(validate_answer(replace(config, questions=subset), row) if subset else {})
+            profile = validate_answer(replace(config, questions=subset), row) if subset else {}
+            for question in subset:
+                fixed = question.fixed_value
+                value = profile[question.index]
+                if fixed is not None and (
+                    set(value) != set(fixed) if isinstance(fixed, list) else value != fixed
+                ):
+                    raise GenerationError(
+                        f"Q{question.index}: preselected answers conflict with the configured fixed value."
+                    )
+            normalized.append(profile)
         partials = normalized
     context = {
         "today": datetime.now().astimezone().date().isoformat(),
