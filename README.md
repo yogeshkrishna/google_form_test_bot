@@ -136,7 +136,7 @@ python -m twine check dist/*
 
 Set `GFORMBOT_BROWSER_TESTS=1` to run Chrome integration fixtures. These use a local test server, including local submission handling; they do not submit to Google or call live AI. Current browser integration coverage exercises Chrome. Firefox and Edge share the browser adapter and need their own environment checks.
 
-CI runs unit checks across Windows and Ubuntu on Python 3.10, 3.12, and 3.13, checks distributions, smoke-tests an installed wheel outside the source directory, and runs a separate Ubuntu Chrome fixture job. It uploads build artifacts without publishing packages or creating releases.
+CI runs unit checks across Windows and Ubuntu on Python 3.10, 3.12, 3.13, and 3.14, checks distributions, smoke-tests an installed wheel outside the source directory, and runs a separate Ubuntu Chrome fixture job. It uploads build artifacts without publishing packages or creating releases.
 
 ## License
 
