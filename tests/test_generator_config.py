@@ -4,10 +4,11 @@ import random
 
 import pytest
 
-from gformbot.config import QuestionConfig, RunConfig, load_config, save_config, validate_config
+from gformbot.config import (QuestionConfig, RunConfig, config_from_dict, config_to_dict,
+                            load_config, save_config, validate_config)
 from gformbot.generator import (apply_reference_weights, load_reference, make_answer,
                                map_columns, parse_checkbox, prepare_responses,
-                               read_pool, validate_answer, write_csv)
+                               read_pool, validate_answer, write_csv, mapping_diagnostics)
 
 
 def config(**kwargs):
@@ -190,3 +191,101 @@ def test_invalid_weights_fail_early(weights):
     c.questions[0].weights = weights
     with pytest.raises(ValueError, match="weights"):
         validate_config(c)
+
+
+@pytest.mark.parametrize("attribute,value", [
+    ("options", "AB"), ("options", [1, 2]), ("options", [{"A": 1}]),
+    ("required", "false"), ("page", True), ("entry_id", 123),
+    ("exclusive_options", ["Missing"]), ("weights", "11"),
+    ("text_pool", "words"), ("validation", "email"),
+])
+def test_malformed_question_shapes_are_rejected_before_execution(attribute, value):
+    c = config()
+    setattr(c.questions[0], attribute, value)
+    with pytest.raises(ValueError, match="Q1"):
+        validate_config(c)
+
+
+@pytest.mark.parametrize("attribute,value", [
+    ("questions", {}), ("sections", "A"), ("unsupported", "bad"),
+    ("pool_column_map", []), ("browser", []), ("log_file", None),
+    ("instructions", [{"title": "Missing fields"}]),
+])
+def test_malformed_root_shapes_have_actionable_errors(attribute, value):
+    c = config()
+    setattr(c, attribute, value)
+    with pytest.raises(ValueError):
+        validate_config(c)
+
+
+def test_invalid_fixed_values_and_text_pool_fail_during_config_validation():
+    c = config()
+    c.questions[0].fixed_value = "Unknown"
+    with pytest.raises(ValueError, match="exact option"):
+        validate_config(c)
+    c.questions[0].fixed_value = None
+    c.questions[2].text_pool = ["first\nsecond"]
+    with pytest.raises(ValueError, match="single-line"):
+        validate_config(c)
+
+
+@pytest.mark.parametrize("value", ["first\nsecond", "first\rsecond", "first\r\nsecond"])
+def test_single_line_text_rejects_line_breaks_before_browser(value):
+    c = config()
+    with pytest.raises(ValueError, match="single-line"):
+        validate_answer(c, {1: "Study", 2: ["Parks"], 3: value})
+    c.questions[2].qtype = "textarea"
+    assert validate_answer(c, {1: "Study", 2: ["Parks"], 3: value})[3] == value
+
+
+def test_mapping_diagnostics_exposes_dropped_optional_data(tmp_path):
+    c = RunConfig("https://docs.google.com/forms/d/e/test/viewform", questions=[
+        QuestionConfig(1, "Name", "text"), QuestionConfig(2, "Cake", "radio", options=["Chocolate"])])
+    report = mapping_diagnostics(c, ["Full name", "Flavour"])
+    assert report == {"mapping": {1: None, 2: None}, "unmatched_questions": [1, 2],
+                      "unused_columns": ["Full name", "Flavour"], "matched_count": 0}
+    path = write_pool(tmp_path / "mismatch.csv", ["Full name", "Flavour"], [["Alice", "Chocolate"]])
+    with pytest.raises(ValueError, match="No CSV columns match"):
+        load_reference(c, path)
+    assert load_reference(c, path, mapping={1: None, 2: None}) == [{1: "", 2: ""}]
+
+
+def test_shuffle_chooses_distinct_complete_source_profiles():
+    c = config(count=2)
+    rows = [{1: "Study", 2: ["Parks"], 3: "student"}, {1: "Work", 2: ["None"], 3: "worker"}]
+    for _ in range(10):
+        shuffled = prepare_responses(c, rows, sampling="shuffle")
+        assert len(shuffled) == 2 and shuffled[0] != shuffled[1]
+        assert all(row in rows for row in shuffled)
+    c.count = 3
+    with pytest.raises(ValueError, match="Shuffle"):
+        prepare_responses(c, rows, sampling="shuffle")
+    assert len(prepare_responses(c, rows, sampling="sample")) == 3
+
+
+def test_legacy_inert_page_delays_load_but_are_not_reserialized():
+    raw = config_to_dict(config())
+    raw["run_settings"].update(page_delay_min=1, page_delay_max=2)
+    restored = config_from_dict(raw)
+    assert restored.page_delay_min == 1
+    updated = config_to_dict(restored)
+    assert "page_delay_min" not in updated and "page_delay_min" not in updated["run_settings"]
+    assert "page_delay_max" not in updated["run_settings"]
+
+
+def test_unknown_configuration_keys_are_named():
+    raw = config_to_dict(config())
+    raw["typo"] = True
+    with pytest.raises(ValueError, match="typo"):
+        config_from_dict(raw)
+
+
+def test_long_checkbox_csv_cell_does_not_depend_on_recursion_depth():
+    q = QuestionConfig(1, "Choices", "checkbox", options=["A"])
+    assert parse_checkbox(q, ", ".join(["A"] * 1500)) == ["A"] * 1500
+
+
+def test_many_ambiguous_checkbox_paths_are_bounded_and_require_json():
+    q = QuestionConfig(1, "Choices", "checkbox", options=["A", "A,A"])
+    with pytest.raises(ValueError, match="ambiguous"):
+        parse_checkbox(q, ",".join(["A"] * 1000))

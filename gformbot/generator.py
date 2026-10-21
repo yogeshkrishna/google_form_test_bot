@@ -52,12 +52,19 @@ def load_pool(path: str | Path) -> list[dict[str, str]]:
 
 def map_columns(config: RunConfig, headers: list[str], mapping: dict | None = None) -> dict[int, str | None]:
     supplied = config.pool_column_map if mapping is None else mapping
+    if not isinstance(supplied, dict):
+        raise ValueError("Column mapping must be an object.")
+    if not isinstance(headers, list) or any(not isinstance(header, str) for header in headers):
+        raise ValueError("CSV column names must be text.")
     result = {}
     used = {}
-    known = {q.index for q in config.questions}
+    known = {str(q.index) for q in config.questions}
     for key in supplied:
-        if str(key) not in {str(i) for i in known}:
+        if str(key) not in known:
             raise ValueError(f"Unknown question in column mapping: {key}")
+    by_name = {}
+    for header in headers:
+        by_name.setdefault(_normal(header), []).append(header)
     for q in config.questions:
         explicit = q.index in supplied or str(q.index) in supplied or q.pool_column is not None
         if explicit:
@@ -67,8 +74,8 @@ def map_columns(config: RunConfig, headers: list[str], mapping: dict | None = No
         else:
             aliases = {_normal(q.text), f"q{q.index}"}
             if q.entry_id:
-                aliases.add(f"entry.{q.entry_id}")
-            matches = [h for h in headers if _normal(h) in aliases]
+                aliases.add(_normal(f"entry.{q.entry_id}"))
+            matches = [header for alias in aliases for header in by_name.get(alias, ())]
             if len(matches) > 1:
                 raise ValueError(f"Q{q.index}: multiple CSV columns match. Choose its source column.")
             column = matches[0] if matches else None
@@ -80,6 +87,16 @@ def map_columns(config: RunConfig, headers: list[str], mapping: dict | None = No
             used[column] = q.index
         result[q.index] = column
     return result
+
+
+def mapping_diagnostics(config: RunConfig, headers: list[str], mapping: dict | None = None) -> dict:
+    """Describe accepted mappings so callers can make blank/dropped data explicit."""
+    columns = map_columns(config, headers, mapping)
+    used = {column for column in columns.values() if column is not None}
+    return {"mapping": columns,
+            "unmatched_questions": [index for index, column in columns.items() if column is None],
+            "unused_columns": [header for header in headers if header not in used],
+            "matched_count": len(used)}
 
 
 def parse_checkbox(q: QuestionConfig, value: Any) -> list[str]:
@@ -100,18 +117,22 @@ def parse_checkbox(q: QuestionConfig, value: Any) -> list[str]:
                 raise ValueError(f"Q{q.index}: checkbox answer must be a JSON array.")
         else:
             delimiter = "|" if "|" in raw else ","
-            cache = {}
-
-            def segment(start):
-                if start in cache:
-                    return cache[start]
+            # Build reachable token boundaries once, then retain at most two
+            # interpretations per boundary. Linked tails avoid quadratic copies
+            # and an explicit stack avoids recursion limits on long CSV cells.
+            edges = {}
+            pending = [0]
+            while pending:
+                start = pending.pop()
+                if start in edges:
+                    continue
                 matches = []
                 for option in q.options:
                     if not raw.startswith(option, start):
                         continue
                     end = start + len(option)
                     if end == len(raw):
-                        matches.append([option])
+                        matches.append((option, end))
                     else:
                         while end < len(raw) and raw[end].isspace():
                             end += 1
@@ -120,18 +141,29 @@ def parse_checkbox(q: QuestionConfig, value: Any) -> list[str]:
                         end += 1
                         while end < len(raw) and raw[end].isspace():
                             end += 1
-                        for suffix in segment(end):
-                            matches.append([option] + suffix)
-                            if len(matches) >= 2:
-                                cache[start] = matches[:2]
-                                return cache[start]
-                cache[start] = matches[:2]
-                return cache[start]
-
-            interpretations = segment(0)
+                        if end < len(raw):
+                            matches.append((option, end))
+                            if end not in edges:
+                                pending.append(end)
+                edges[start] = matches
+            paths = {len(raw): [None]}
+            for start in sorted(edges, reverse=True):
+                matches = []
+                for option, end in edges[start]:
+                    for tail in paths.get(end, ()):
+                        matches.append((option, tail))
+                        if len(matches) == 2:
+                            break
+                    if len(matches) == 2:
+                        break
+                paths[start] = matches
+            interpretations = paths[0]
             if len(interpretations) != 1:
                 raise ValueError(f"Q{q.index}: unknown or ambiguous checkbox labels. Store exact selections as a JSON array.")
-            selected = interpretations[0]
+            selected, tail = [], interpretations[0]
+            while tail is not None:
+                option, tail = tail
+                selected.append(option)
     else:
         raise ValueError(f"Q{q.index}: checkbox answer must be a list or CSV string.")
     if any(not isinstance(v, str) or v not in q.options for v in selected):
@@ -181,6 +213,9 @@ def validate_answer(config: RunConfig, answer: dict, *, repair: bool = False, ch
             value = "" if value is None else value
             if not isinstance(value, str):
                 raise ValueError(f"{label}: answer must be text.")
+            if q.qtype == "text" and ("\r" in value or "\n" in value):
+                hint = " Enter a valid email address." if needs_email(q) else ""
+                raise ValueError(f"{label}: single-line answers cannot contain line breaks.{hint}")
             if not value.strip():
                 if q.required:
                     raise ValueError(f"{label}: a required answer is blank.")
@@ -198,8 +233,11 @@ def validate_answer(config: RunConfig, answer: dict, *, repair: bool = False, ch
 
 
 def load_reference(config: RunConfig, path: str | Path, mapping: dict | None = None, repair: bool = False, changes: list[str] | None = None) -> list[dict[int, Any]]:
+    validate_config(config)
     headers, rows = read_pool(path)
     columns = map_columns(config, headers, mapping)
+    if not any(column is not None for column in columns.values()) and mapping is None and not config.pool_column_map:
+        raise ValueError("No CSV columns match the form. Map columns explicitly before importing blank responses.")
     for question in config.questions:
         column = columns[question.index]
         if question.qtype == "date" and column:
@@ -239,7 +277,8 @@ def _random_from_options(q: QuestionConfig) -> Any:
     if q.qtype != "checkbox":
         return random.choices(q.options, weights=weights, k=1)[0]
     available = [o for o, w in zip(q.options, weights) if w > 0]
-    regular = [o for o in available if o not in q.exclusive_options]
+    exclusive = set(q.exclusive_options)
+    regular = [o for o in available if o not in exclusive]
     minimum = max(q.min_select, int(q.required))
     maximum = min(q.max_select if q.max_select is not None else max(3, minimum), len(available))
     feasible = [n for n in range(minimum, maximum + 1) if n < 2 or n <= len(regular)]
@@ -247,9 +286,10 @@ def _random_from_options(q: QuestionConfig) -> Any:
         raise ValueError(f"Q{q.index}: weights and checkbox bounds cannot produce valid answers.")
     count = random.choice(feasible)
     remaining = available[:] if count < 2 else regular[:]
+    weight_by_option = dict(zip(q.options, weights))
     selected = []
     for _ in range(count):
-        option = random.choices(remaining, weights=[weights[q.options.index(o)] for o in remaining], k=1)[0]
+        option = random.choices(remaining, weights=[weight_by_option[o] for o in remaining], k=1)[0]
         remaining.remove(option)
         selected.append(option)
     return selected
@@ -273,17 +313,26 @@ def make_answer(config: RunConfig, pool_row: dict | None = None) -> dict[int, An
     return validate_answer(config, answer)
 
 
-def prepare_responses(config: RunConfig, profiles: list[dict[int, Any]] | None = None, *, ordered: bool = False) -> list[dict[int, Any]]:
+def prepare_responses(config: RunConfig, profiles: list[dict[int, Any]] | None = None, *, ordered: bool = False,
+                      sampling: str | None = None) -> list[dict[int, Any]]:
     validate_config(config)
+    if sampling is None:
+        sampling = "ordered" if ordered else "sample"
+    if sampling not in {"ordered", "shuffle", "sample"}:
+        raise ValueError("Sampling must be ordered, shuffle, or sample.")
+    if ordered and sampling != "ordered":
+        raise ValueError("Choose ordered mode or another sampling mode, not both.")
     if profiles is None and config.pool_file:
         profiles = load_reference(config, config.pool_file)
     if profiles is not None:
         if not profiles:
             raise ValueError("The response pool is empty.")
         profiles = [validate_answer(config, row) for row in profiles]
-        if ordered and config.count > len(profiles):
-            raise ValueError(f"Ordered mode needs {config.count} rows; the CSV has {len(profiles)}.")
-        chosen = profiles[:config.count] if ordered else random.choices(profiles, k=config.count)
+        if sampling in {"ordered", "shuffle"} and config.count > len(profiles):
+            raise ValueError(f"{sampling.capitalize()} mode needs {config.count} rows; the CSV has {len(profiles)}.")
+        chosen = (profiles[:config.count] if sampling == "ordered" else
+                  random.sample(profiles, k=config.count) if sampling == "shuffle" else
+                  random.choices(profiles, k=config.count))
         return [dict(row) for row in chosen]
     return [make_answer(config) for _ in range(config.count)]
 

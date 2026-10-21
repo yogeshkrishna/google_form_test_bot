@@ -123,3 +123,34 @@ def test_schema_fingerprint_ignores_sampling_preferences_but_detects_form_change
     assert schema_fingerprint(config) == original
     config.questions[0].options.append("C")
     assert schema_fingerprint(config) != original
+
+
+def test_instruction_blocks_and_section_descriptions_preserve_order_and_context():
+    schema = parse_form_html(document([
+        [100, "Read first", "Only answer for your current household.", 6],
+        item(1, "Choose", 2, ["A", "B"]),
+        [101, "Employment", "Answer about your main job.", 8],
+        item(2, "Job", 0),
+        [102, "End note", "Do not include personal identifiers.", 6],
+    ]), URL)
+    assert schema.instructions == [
+        {"page": 1, "before_question": 1, "title": "Read first", "description": "Only answer for your current household."},
+        {"page": 2, "before_question": 2, "title": "Employment", "description": "Answer about your main job."},
+        {"page": 2, "before_question": 3, "title": "End note", "description": "Do not include personal identifiers."},
+    ]
+    config = config_from_schema(schema)
+    assert config.instructions == schema.instructions
+    fingerprint = schema_fingerprint(config)
+    config.instructions = []
+    assert schema_fingerprint(config) == fingerprint
+
+
+def test_sign_in_redirect_is_reported_as_access_requirement(monkeypatch):
+    from gformbot import inspector
+    class Response:
+        url = "https://accounts.google.com/ServiceLogin"
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+    monkeypatch.setattr(inspector, "urlopen", lambda *args, **kwargs: Response())
+    with pytest.raises(ValueError, match="sign-in or access permission"):
+        inspector.inspect_form(URL)

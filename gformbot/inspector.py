@@ -48,6 +48,7 @@ class FormSchema:
     sections: list[str] = field(default_factory=lambda: ["Section 1"])
     unsupported: list[str] = field(default_factory=list)
     confirmation_text: str = ""
+    instructions: list[dict] = field(default_factory=list)
 
     def get(self, index: int) -> Optional[QuestionSchema]:
         return next((q for q in self.questions if q.index == index), None)
@@ -163,10 +164,17 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         title, description = str(title or "").strip(), str(description or "").strip()
         if type_code == 8:
             form.sections.append(title or f"Section {len(form.sections) + 1}")
+            if description:
+                form.instructions.append({"page": len(form.sections), "before_question": len(form.questions) + 1,
+                                          "title": title, "description": description})
             if _get(item, 5) not in (None, -2):
                 form.unsupported.append(f"section routing at {title!r}")
             continue
-        if type_code in (6, 11, 12):  # headings, images, video: no answer field
+        if type_code == 6:
+            form.instructions.append({"page": len(form.sections), "before_question": len(form.questions) + 1,
+                                      "title": title, "description": description})
+            continue
+        if type_code in (11, 12):  # media have no answer field
             continue
         entries = _get(item, 4)
         if type_code not in KINDS or not isinstance(entries, list) or len(entries) != 1:
@@ -223,6 +231,8 @@ def inspect_form(url: str, browser: str = "auto", headless: bool = True, status_
     try:
         request = Request(requested, headers={"User-Agent": "gformbot (form inspection)"})
         with urlopen(request, timeout=timeout) as response:
+            if urlparse(response.url).hostname == "accounts.google.com":
+                raise ValueError("This form requires sign-in or access permission. Use a public test copy.")
             final_url = clean_url(response.url, allow_short=False)
             raw = response.read(10_000_001)
             if len(raw) > 10_000_000:
