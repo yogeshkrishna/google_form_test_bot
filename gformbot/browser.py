@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import plistlib
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Literal
 
 BrowserName = Literal["chrome", "firefox", "edge", "auto", "headless"]
@@ -17,7 +20,8 @@ _MACOS = sys.platform == "darwin"
 # Default-browser detection
 # ---------------------------------------------------------------------------
 
-def _default_browser_windows() -> BrowserName:
+
+def _default_browser_windows() -> BrowserName | None:
     """Read the Windows registry to figure out the default browser."""
     import winreg
 
@@ -36,59 +40,111 @@ def _default_browser_windows() -> BrowserName:
             return "chrome"
     except Exception:
         pass
-    return "chrome"  # sensible default
+    return None
 
 
-def _default_browser_macos() -> BrowserName:
+def _default_browser_macos() -> BrowserName | None:
     try:
         result = subprocess.run(
-            ["defaults", "read", "com.apple.LaunchServices/com.apple.launchservices.secure",
-             "LSHandlers"],
-            capture_output=True, text=True, timeout=5,
+            ["defaults", "export", "com.apple.LaunchServices/com.apple.launchservices.secure", "-"],
+            capture_output=True,
+            timeout=5,
         )
-        out = result.stdout.lower()
-        if "firefox" in out:
-            return "firefox"
-        if "microsoft edge" in out or "msedge" in out:
-            return "edge"
+        handlers = plistlib.loads(result.stdout).get("LSHandlers", [])
+        for scheme in ("https", "http"):
+            for handler in handlers:
+                if handler.get("LSHandlerURLScheme", "").lower() != scheme:
+                    continue
+                identifier = handler.get("LSHandlerRoleAll", "").lower()
+                if "firefox" in identifier:
+                    return "firefox"
+                if "edgemac" in identifier or "msedge" in identifier:
+                    return "edge"
+                if "chrome" in identifier or "chromium" in identifier:
+                    return "chrome"
+                return None
     except Exception:
         pass
-    return "chrome"
+    return None
 
 
-def _default_browser_linux() -> BrowserName:
+def _default_browser_linux() -> BrowserName | None:
     try:
         result = subprocess.run(
             ["xdg-settings", "get", "default-web-browser"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         val = result.stdout.lower()
         if "firefox" in val:
             return "firefox"
-        if "chromium" in val:
+        if "chrome" in val or "chromium" in val:
             return "chrome"
         if "microsoft-edge" in val or "msedge" in val:
             return "edge"
     except Exception:
         pass
-    # Try which
-    for name in ("google-chrome", "chromium-browser", "chromium", "firefox"):
-        if shutil.which(name):
-            return "chrome" if "chrome" in name or "chromium" in name else "firefox"
-    return "chrome"
+    return None
+
+
+def available_browsers() -> list[BrowserName]:
+    """Find supported local installations without launching a browser."""
+    commands = {
+        "chrome": ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"),
+        "firefox": ("firefox",),
+        "edge": ("microsoft-edge", "microsoft-edge-stable", "msedge"),
+    }
+    installed = {name for name, names in commands.items() if any(shutil.which(command) for command in names)}
+    if _WINDOWS:
+        relative_paths = {
+            "chrome": "Google/Chrome/Application/chrome.exe",
+            "firefox": "Mozilla Firefox/firefox.exe",
+            "edge": "Microsoft/Edge/Application/msedge.exe",
+        }
+        roots = [
+            Path(value)
+            for key in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")
+            if (value := os.environ.get(key))
+        ]
+        for name, relative in relative_paths.items():
+            if name not in installed and any((root / relative).is_file() for root in roots):
+                installed.add(name)
+    elif _MACOS:
+        relative_paths = {
+            "chrome": (
+                "Google Chrome.app/Contents/MacOS/Google Chrome",
+                "Chromium.app/Contents/MacOS/Chromium",
+            ),
+            "firefox": ("Firefox.app/Contents/MacOS/firefox",),
+            "edge": ("Microsoft Edge.app/Contents/MacOS/Microsoft Edge",),
+        }
+        roots = (Path("/Applications"), Path.home() / "Applications")
+        for name, relatives in relative_paths.items():
+            if name not in installed and any(
+                (root / relative).is_file() for root in roots for relative in relatives
+            ):
+                installed.add(name)
+    return [name for name in commands if name in installed]
 
 
 def detect_default_browser() -> BrowserName:
+    available = available_browsers()
+    if not available:
+        return "chrome"  # Keep get_driver's actionable installation error.
     if _WINDOWS:
-        return _default_browser_windows()
-    if _MACOS:
-        return _default_browser_macos()
-    return _default_browser_linux()
+        preferred = _default_browser_windows()
+    elif _MACOS:
+        preferred = _default_browser_macos()
+    else:
+        preferred = _default_browser_linux()
+    return preferred if preferred in available else available[0]
 
 
 # ---------------------------------------------------------------------------
 # Driver factory
 # ---------------------------------------------------------------------------
+
 
 def get_driver(browser: BrowserName = "auto", headless: bool = False):
     """
@@ -109,12 +165,18 @@ def get_driver(browser: BrowserName = "auto", headless: bool = False):
     factories = {"chrome": _chrome_driver, "firefox": _firefox_driver, "edge": _edge_driver}
     if browser not in factories:
         raise ValueError("Browser must be auto, headless, chrome, firefox, or edge.")
+    driver = None
     try:
         driver = factories[browser](headless)
         driver.set_page_load_timeout(30)
         driver.set_script_timeout(30)
         return driver
     except Exception as exc:
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass  # Preserve the original initialization error.
         raise RuntimeError(f"Could not start {browser}: {exc}. Check that the browser is installed.") from exc
 
 
