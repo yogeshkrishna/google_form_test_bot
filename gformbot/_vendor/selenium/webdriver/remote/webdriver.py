@@ -1,3 +1,4 @@
+# Modified by GFormBot for its private Windows runtime; see NOTICE and tools/vendor_selenium.py.
 # Licensed to the Software Freedom Conservancy (SFC) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -37,7 +38,10 @@ from contextlib import asynccontextmanager, contextmanager
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec, TypeVar, cast
 
-from typing_extensions import Self
+try:
+    from typing import Self
+except ImportError:  # Python 3.10
+    from typing_extensions import Self
 
 from gformbot._vendor.selenium.common.exceptions import (
     InvalidArgumentException,

@@ -1,3 +1,4 @@
+# Modified by GFormBot for its private Windows runtime; see NOTICE and tools/vendor_selenium.py.
 # Licensed to the Software Freedom Conservancy (SFC) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information

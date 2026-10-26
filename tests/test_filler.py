@@ -4,7 +4,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -407,7 +407,7 @@ def local_form():
     os.environ.get("GFORMBOT_BROWSER_TESTS") != "1",
     reason="Set GFORMBOT_BROWSER_TESTS=1 to run local Chrome integration tests.",
 )
-def test_literal_text_and_optional_blank_controls_never_submit():
+def test_literal_text_and_optional_blank_controls_never_submit(html_page):
     from gformbot.browser import get_driver
 
     markup = """<!doctype html><html><body><form onsubmit="window.submits++;return false">
@@ -422,7 +422,7 @@ def test_literal_text_and_optional_blank_controls_never_submit():
       </script></body></html>"""
     driver = get_driver("chrome", headless=True)
     try:
-        driver.get("data:text/html;charset=utf-8," + quote(markup))
+        driver.get(html_page(markup))
 
         def box(key):
             return driver.find_element("id", key)
@@ -456,12 +456,12 @@ def test_literal_text_and_optional_blank_controls_never_submit():
     os.environ.get("GFORMBOT_BROWSER_TESTS") != "1",
     reason="Set GFORMBOT_BROWSER_TESTS=1 to run local Chrome integration tests.",
 )
-def test_blank_dropdown_without_empty_option_does_not_silently_keep_value():
+def test_blank_dropdown_without_empty_option_does_not_silently_keep_value(html_page):
     from gformbot.browser import get_driver
 
     driver = get_driver("chrome", headless=True)
     try:
-        driver.get("data:text/html,<div id='q'><select><option value='B'>B</option></select></div>")
+        driver.get(html_page("<div id='q'><select><option value='B'>B</option></select></div>"))
         with pytest.raises(RuntimeError, match="Cannot clear"):
             browser._fill_question(
                 driver,

@@ -1,7 +1,6 @@
 import json
 import os
 from types import SimpleNamespace
-from urllib.parse import quote
 
 import pytest
 
@@ -262,7 +261,7 @@ def test_halt_large_count_needs_no_tab_count_confirmation(halted, monkeypatch):
     os.environ.get("GFORMBOT_BROWSER_TESTS") != "1",
     reason="Set GFORMBOT_BROWSER_TESTS=1 to run local Chrome integration tests.",
 )
-def test_halt_local_chrome_keeps_filled_tabs_open_without_submission(tmp_path, monkeypatch):
+def test_halt_local_chrome_keeps_filled_tabs_open_without_submission(tmp_path, monkeypatch, html_page):
     monkeypatch.chdir(tmp_path)
     html = """<html><body><script>window.submits=0</script>
     <form onsubmit="window.submits++;event.preventDefault()">
@@ -270,7 +269,7 @@ def test_halt_local_chrome_keeps_filled_tabs_open_without_submission(tmp_path, m
     <input type="text" name="entry.21" required></div>
     <button type="submit">Submit</button></form></body></html>"""
     config = RunConfig(
-        "data:text/html;charset=utf-8," + quote(html),
+        html_page(html),
         count=2,
         browser="auto",
         headless=False,

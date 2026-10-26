@@ -23,7 +23,11 @@ setup(
     packages=find_packages(include=["gformbot*"], exclude=[] if SUBSET else ["gformbot._vendor*"]),
     install_requires=["click>=8.1,<9", "pyyaml>=6.0,<7", "rich>=13.0,<15", "InquirerPy>=0.3.4,<0.4"]
     + (
-        ["certifi>=2026.2.25", "typing_extensions>=4.15,<5", "urllib3[socks]>=2.6.3,<3"]
+        [
+            "certifi>=2026.2.25",
+            "typing_extensions>=4.15,<5; python_version<'3.11'",
+            "urllib3[socks]>=2.6.3,<3",
+        ]
         if SUBSET
         else ["selenium>=4.25,<5"]
     ),

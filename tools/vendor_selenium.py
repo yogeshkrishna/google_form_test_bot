@@ -43,6 +43,7 @@ def remove_nodes(source, nodes):
 
 def patch(source, name):
     """Keep synchronous WebDriver intact; omit the independent unused protocol feature block."""
+    original = source
     if name == "selenium.webdriver.remote.webdriver":
         tree = ast.parse(source)
         driver = next(
@@ -79,9 +80,18 @@ def patch(source, name):
             "",
         )
         assert "SafariRemoteConnection" not in source
+        source = source.replace(
+            "from typing_extensions import Self\n",
+            "try:\n    from typing import Self\nexcept ImportError:  # Python 3.10\n    from typing_extensions import Self\n",
+        )
     # Change imports and qualified module references, including lazy-import/resource strings.
     source = re.sub(r"(?m)^(\s*(?:from|import)\s+)selenium\b", rf"\g<1>{PREFIX}", source)
     source = re.sub(r"(?P<quote>['\"])selenium(?=\.[a-z_]|['\"])", rf"\g<quote>{PREFIX}", source)
+    if source != original:
+        source = (
+            "# Modified by GFormBot for its private Windows runtime; see NOTICE and tools/vendor_selenium.py.\n"
+            + source
+        )
     return source
 
 
@@ -150,6 +160,7 @@ def generate(wheel):
         output[name] = archive.read(f"selenium-{VERSION}.dist-info/{name}")
     output["NOTICE"] += (
         b"\nGFormBot modifications: private import namespace, supported browser exports, "
+        b"standard-library Self on Python 3.11+, "
         b"and removal of unused BiDi/CDP protocol code and non-Windows assets. "
         b"Rebuild with tools/vendor_selenium.py from the SHA-256-locked upstream wheel.\n"
     )

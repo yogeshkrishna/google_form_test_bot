@@ -60,9 +60,16 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: python -m pip install build twine
+      - name: Use the commit timestamp for repeatable wheels
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
       - run: python -m build
       - run: python -m twine check dist/*
       - run: python tools/check_wheel.py dist
+      - name: Rebuild the wheel identically
+        run: |
+          python -m build --wheel --outdir reproduced
+          python -c "from pathlib import Path; wheels=list(Path('dist').glob('*.whl')); assert all(p.read_bytes() == (Path('reproduced')/p.name).read_bytes() for p in wheels); print('Wheel bytes reproduce exactly')"
       - name: Smoke-test the installed wheel outside the checkout
         shell: bash
         run: |
@@ -72,6 +79,7 @@ jobs:
           else
             WHEEL_PYTHON="$RUNNER_TEMP/gformbot-wheel/bin/python"
           fi
+          WHEEL_FILE="$(python -c "from pathlib import Path; print(next(Path('dist').glob('*.whl')).resolve())")"
           "$WHEEL_PYTHON" -m pip install dist/*.whl
           cd "$RUNNER_TEMP"
           "$WHEEL_PYTHON" -m pip check
@@ -80,6 +88,15 @@ jobs:
           for command in generate prepare preview doctor config log; do
             "$WHEEL_PYTHON" -m gformbot "$command" --help
           done
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            "$WHEEL_PYTHON" -c "import importlib.util; from gformbot.selenium_runtime import PACKAGE; assert PACKAGE == 'gformbot._vendor.selenium'; assert importlib.util.find_spec('selenium') is None; assert importlib.util.find_spec('typing_extensions') is None"
+            "$WHEEL_PYTHON" -m pip install selenium==4.51.0
+            "$WHEEL_PYTHON" -c "from selenium.common.exceptions import WebDriverException as official; from gformbot.selenium_runtime import WebDriverException as bundled; assert official is not bundled; from selenium import webdriver; assert webdriver.Chrome.__module__.startswith('selenium.')"
+            "$WHEEL_PYTHON" -m pip uninstall -y gformbot
+            "$WHEEL_PYTHON" -c "import importlib.util, selenium; assert importlib.util.find_spec('gformbot') is None; assert selenium.__version__ == '4.51.0'"
+            "$WHEEL_PYTHON" -m pip install --no-deps "$WHEEL_FILE"
+            "$WHEEL_PYTHON" -m pip check
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: distributions-${{ matrix.os }}

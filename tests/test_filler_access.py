@@ -4,7 +4,6 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
-from urllib.parse import quote
 
 import pytest
 
@@ -278,7 +277,7 @@ def test_access_changes_in_local_browser(stage):
 @pytest.mark.browser
 @pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Local Chrome tests are opt-in.")
 @pytest.mark.parametrize("policy", ["input", "verified", "verified-label", "verified-labelledby"])
-def test_collected_email_and_account_consent_in_local_browser(policy):
+def test_collected_email_and_account_consent_in_local_browser(policy, html_page):
     from gformbot.browser import get_driver
 
     email = '<input type="email" name="emailAddress">'
@@ -299,7 +298,7 @@ def test_collected_email_and_account_consent_in_local_browser(policy):
     if policy == "input":
         questions.insert(0, QuestionConfig(2, "Email", "text", entry_id="emailAddress"))
         answers[2] = "student@example.test"
-    config = RunConfig("data:text/html;charset=utf-8," + quote(document), questions=questions)
+    config = RunConfig(html_page(document), questions=questions)
     config.email_collection = "verified" if policy.startswith("verified") else policy
     driver = get_driver("chrome", headless=True)
     consent_calls = []

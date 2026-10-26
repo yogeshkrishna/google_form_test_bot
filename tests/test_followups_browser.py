@@ -4,7 +4,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from test_routing_browser import configuration, response
@@ -217,12 +217,12 @@ def test_directions_survive_every_run_mode(driver, form_server, tmp_path, monkey
         assert output.count("https://chat.whatsapp.com/PublicInvite") == 1
 
 
-def test_collector_preserves_links_but_excludes_controls_and_nested_hidden_content(driver):
+def test_collector_preserves_links_but_excludes_controls_and_nested_hidden_content(driver, html_page):
     html = """<div class="gubaDc"><p>First<br>Second <a href="/join">click here</a></p>
       <textarea>PRIVATE ANSWER</textarea><input value="PRIVATE INPUT">
       <span style="visibility:hidden">HIDDEN</span><span style="opacity:0">HIDDEN</span>
       <button>Submit</button></div>"""
-    driver.get("data:text/html;charset=utf-8," + quote(html))
+    driver.get(html_page(html))
     notes = Recorder(Journal("batch"), "runs.csv", "Form")
     notes.observe(driver, 4, 1, "section")
     saved = json.dumps(notes.journal.followups())

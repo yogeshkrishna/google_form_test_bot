@@ -61,15 +61,29 @@ print(json.dumps(result))
 
 BROWSER = r"""
 import json, time
-from urllib.parse import quote
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from gformbot.browser import get_driver
 name = __import__('sys').argv[1]
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        html = '<input id="text"><select id="choice"><option>A</option><option>B</option></select><button onclick="this.textContent=\'done\'">go</button>' if self.path == '/form' else '<title>second</title>' if self.path == '/second' else '<title>ready</title>'
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.end_headers()
+        self.wfile.write(html.encode('utf-8'))
+    def log_message(self, *args):
+        pass
+server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+base = f'http://127.0.0.1:{server.server_port}'
 start = time.perf_counter()
 driver = get_driver(name, headless=True)
+driver.get(base + '/ready')
 startup = time.perf_counter() - start
 try:
     start = time.perf_counter()
-    driver.get('data:text/html;charset=utf-8,' + quote('<input id="text"><select id="choice"><option>A</option><option>B</option></select><button onclick="this.textContent=\'done\'">go</button>'))
+    driver.get(base + '/form')
     field = driver.find_element('id', 'text')
     field.send_keys('A [literal] café')
     assert field.get_attribute('value') == 'A [literal] café'
@@ -87,7 +101,7 @@ try:
     Select(driver.find_element('id', 'choice')).select_by_visible_text('B')
     first = driver.current_window_handle
     driver.switch_to.new_window('tab')
-    driver.get('data:text/html,<title>second</title>')
+    driver.get(base + '/second')
     assert driver.title == 'second' and len(driver.window_handles) == 2
     driver.close()
     driver.switch_to.window(first)
@@ -96,7 +110,10 @@ finally:
     start = time.perf_counter()
     driver.quit()
     cleanup = time.perf_counter() - start
-print(json.dumps({'startup_seconds':startup, 'operations_seconds':operations, 'cleanup_seconds':cleanup}))
+    server.shutdown()
+    server.server_close()
+print(json.dumps({'startup_seconds':startup, 'operations_seconds':operations, 'cleanup_seconds':cleanup,
+                  'total_seconds': startup + operations + cleanup}))
 """
 
 
