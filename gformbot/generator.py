@@ -80,6 +80,8 @@ def map_columns(config: RunConfig, headers: list[str], mapping: dict | None = No
             aliases = {_normal(q.text), f"q{q.index}"}
             if q.entry_id:
                 aliases.add(_normal(f"entry.{q.entry_id}"))
+            if q.entry_id == "emailAddress":
+                aliases.update({_normal("Email Address"), "emailaddress"})
             matches = [header for alias in aliases for header in by_name.get(alias, ())]
             if len(matches) > 1:
                 raise ValueError(f"Q{q.index}: multiple CSV columns match. Choose its source column.")

@@ -224,3 +224,45 @@ def _edge_driver(headless: bool):
         opts.add_argument("--headless=new")
         opts.add_argument("--window-size=1920,1080")
     return webdriver.Edge(options=opts)
+
+
+class FormBrowser:
+    """Own one temporary visible session; never serialize its authentication."""
+
+    def __init__(self, browser, attention):
+        self.driver = get_driver("auto" if browser == "headless" else browser, headless=False)
+        self.attention = attention
+        self._sign_in_checked = False
+
+    def inspect(self, url):
+        from .access import FormAccessError
+        from .inspector import inspect_form
+
+        try:
+            schema = inspect_form(url, driver=self.driver)
+            if not schema.requires_signin or self._sign_in_checked:
+                return schema
+        except FormAccessError as exc:
+            if exc.state != "login_required":
+                raise
+        self.attention(
+            "Sign in to Google in the form browser. Do not submit yet. "
+            "Press Enter here when the form is ready; Ctrl+C cancels"
+        )
+        schema = inspect_form(url, driver=self.driver)
+        self._sign_in_checked = True
+        return schema
+
+    def confirm_email(self):
+        self.attention(
+            "This form collects your signed-in email. In the form browser, review and check "
+            "the 'Record ... as the email' box if you agree. Do not submit yet. Press Enter to continue"
+        )
+
+    def close(self):
+        driver, self.driver = self.driver, None
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass  # Cleanup must not hide the original form error.

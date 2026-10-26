@@ -178,6 +178,8 @@ def setup_execution(config, monkeypatch):
     state = SimpleNamespace(launches=0, calls=[], logs=[], quit_count=0)
 
     class Driver:
+        current_url = config.url
+
         def quit(self):
             state.quit_count += 1
 

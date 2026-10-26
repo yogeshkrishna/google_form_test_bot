@@ -222,15 +222,64 @@ def _show_form(config):
         console.print(Text(issue, style="yellow"))
 
 
-def _run_inspect(url, browser="headless", save=False, output=DEFAULT_CONFIG_NAME, *, display=True):
+def _form_browser(config=None):
+    ctx = click.get_current_context(silent=True)
+    resource = getattr(config, "_form_browser", None)
+    return resource or (ctx.meta.get("form_browser") if ctx else None)
+
+
+def _open_form_browser(browser):
+    if not sys.stdin.isatty():
+        raise ValueError("Google sign-in needs an interactive terminal. Run again with --sign-in.")
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        raise ValueError("Start sign-in through gformbot or gformbot generate/prepare --sign-in.")
+    resource = _form_browser()
+    if resource is None:
+        from .browser import FormBrowser
+
+        resource = FormBrowser(browser, _ask_text)
+        ctx.meta["form_browser"] = resource
+        ctx.call_on_close(resource.close)
+    return resource
+
+
+def _check_response_limit(config, count=None):
+    if config.one_response is True and (config.count if count is None else count) > 1:
+        raise ValueError(
+            "This form allows one response per Google account. Choose 1 response, "
+            "or ask the owner for a test copy without that limit."
+        )
+
+
+def _run_inspect(
+    url, browser="headless", save=False, output=DEFAULT_CONFIG_NAME, *, display=True, sign_in=False
+):
+    from .access import FormAccessError
     from .inspector import inspect_form
 
-    if display:
-        with console.status("Reading form..."):
-            schema = inspect_form(url, browser=browser, headless=True)
+    resource = _open_form_browser(browser) if sign_in else _form_browser()
+    if resource:
+        schema = resource.inspect(url)
     else:
-        schema = inspect_form(url, browser=browser, headless=True)
+        try:
+            if display:
+                with console.status("Reading form..."):
+                    schema = inspect_form(url, browser=browser, headless=True)
+            else:
+                schema = inspect_form(url, browser=browser, headless=True)
+            if schema.requires_signin:
+                raise FormAccessError("login_required")
+        except FormAccessError as exc:
+            if exc.state != "login_required" or not display or not sys.stdin.isatty():
+                raise
+            if not _ask_confirm("This form needs Google sign-in. Open a browser to sign in?"):
+                raise click.Abort() from None
+            resource = _open_form_browser(browser)
+            schema = resource.inspect(url)
     config = config_from_schema(schema)
+    if resource:
+        config._form_browser = resource
     if display:
         _show_form(config)
     if save:
@@ -789,6 +838,8 @@ def _manage_batch(config, answers, path, *, saved=False, keep_files=False):
         remaining = _track_plan(config, answers, path, digest(path))
         if action == "test":
             _apply_browser(config, "headless")
+        elif _form_browser(config):
+            _info("Using the browser you signed in with.")
         else:
             _apply_browser(config, _choose_browser())
         _confirm_submit(config, action == "submit")
@@ -819,6 +870,11 @@ def _wait_for_manual_submissions(driver, config, pending, answers, *, tabs=False
 
 
 def _run_fill(config, dry_run=False, *, answers=None, submit=False, halt=False, compact=False):
+    resource = _form_browser(config)
+    if not dry_run and config.requires_signin and resource is None:
+        resource = _open_form_browser(config.browser)
+    if resource:
+        config._form_browser = resource
     if answers is None:
         from .generator import prepare_responses
 
@@ -911,6 +967,8 @@ def _select_saved_preview(config=None):
 
 
 def _prepare_source(config, source):
+    if source != "own":
+        _check_response_limit(config)
     if source in {"generate", "enlarge", "fresh", "reference"}:
         reference = (
             None
@@ -967,6 +1025,8 @@ def _prepare_source(config, source):
         )
         if getattr(config, "_prompt_csv_count", False):
             limit = min(config.max_runs, len(profiles)) if mode in {"ordered", "shuffle"} else config.max_runs
+            if config.one_response:
+                limit = 1
             config.count = _ask_number("Number of responses", min(config.count, limit), max_val=limit)
         if mode in {"ordered", "shuffle"} and config.count > len(profiles):
             _info(f"The CSV has {len(profiles)} rows. Choose a count within that range.")
@@ -975,6 +1035,7 @@ def _prepare_source(config, source):
                 min(config.count, len(profiles)),
                 max_val=min(config.max_runs, len(profiles)),
             )
+        _check_response_limit(config)
         return prepare_responses(config, profiles, sampling=mode)
     from .generator import CHOICE_TYPES, _random_from_options, apply_reference_weights
 
@@ -1113,7 +1174,7 @@ def _new_batch_wizard():
         if source != "own":
             config.count = _ask_number(
                 "Number of additional responses" if source == "enlarge" else "Number of responses",
-                max_val=config.max_runs,
+                max_val=1 if config.one_response else config.max_runs,
             )
         try:
             answers = _prepare_source(config, source)
@@ -1276,6 +1337,7 @@ def _legacy_preview(url, config_path, count, pool, plan):
 def _response_options(function):
     """Keep the fast and prepare-only commands on the same input contract."""
     options = [
+        click.option("--sign-in", is_flag=True, help="Open a temporary browser for Google sign-in."),
         click.option(
             "-n",
             "--count",
@@ -1304,7 +1366,7 @@ def _response_options(function):
     return click.argument("url")(function)
 
 
-def _command_answers(url, count, message, like, data, browser):
+def _command_answers(url, count, message, like, data, browser, sign_in=False):
     """Reuse the wizard's preparation path without its tables and questions."""
     from .generator import load_reference, prepare_responses
     from .inspector import schema_fingerprint
@@ -1315,13 +1377,19 @@ def _command_answers(url, count, message, like, data, browser):
         raise ValueError("--like needs a CSV file.")
     if data and clean_path(data).suffix.lower() not in {".csv", ".json"}:
         raise ValueError("--data needs a CSV file or saved response JSON.")
-    current = _run_inspect(url, display=False)
+    inspection = {"display": False}
+    if sign_in:
+        inspection.update(sign_in=True, browser=browser or "auto")
+    current = _run_inspect(url, **inspection)
     config = current
     if Path(DEFAULT_CONFIG_NAME).is_file():
         previous = load_config(DEFAULT_CONFIG_NAME)
         if schema_fingerprint(previous) == schema_fingerprint(current):
             config = previous
             config.instructions = current.instructions
+    config.requires_signin = current.requires_signin
+    config.one_response = current.one_response
+    config.email_collection = current.email_collection
     if data and clean_path(data).suffix.lower() == ".json":
         config, answers = _load_plan(data)
         if schema_fingerprint(config) != schema_fingerprint(current):
@@ -1335,11 +1403,16 @@ def _command_answers(url, count, message, like, data, browser):
             raise ValueError(
                 f"This file has {remaining} remaining responses; -n cannot change its exact answers."
             )
+        config.requires_signin = current.requires_signin
+        config.one_response = current.one_response
+        config.email_collection = current.email_collection
+        _check_response_limit(config, remaining)
         config.browser = browser or (config.browser if config.browser != "headless" else "auto")
         save_config(config, DEFAULT_CONFIG_NAME)
         return config, answers, clean_path(data), False
     if count is not None:
         config.count = count
+    _check_response_limit(config)
     source = data or like
     if source and (
         not config.pool_file or clean_path(config.pool_file).resolve() != clean_path(source).resolve()
@@ -1363,11 +1436,11 @@ def _command_answers(url, count, message, like, data, browser):
 @cli.command()
 @_response_options
 @click.option("--halt", is_flag=True, help="Fill visible forms without submitting, and leave them open.")
-def generate(url, count, message, like, data, browser, halt):
+def generate(url, count, message, like, data, browser, halt, sign_in=False):
     """Generate answers and submit them automatically. Use --halt to review instead."""
     from .artifacts import digest
 
-    config, answers, path, owned = _command_answers(url, count, message, like, data, browser)
+    config, answers, path, owned = _command_answers(url, count, message, like, data, browser, sign_in)
     remaining = _track_plan(config, answers, path, digest(path), interactive=False)
     _apply_browser(config, config.browser, headless=not halt)
     finished = _run_fill(config, answers=remaining, submit=not halt, halt=halt, compact=True)
@@ -1376,9 +1449,9 @@ def generate(url, count, message, like, data, browser, halt):
 
 @cli.command()
 @_response_options
-def prepare(url, count, message, like, data, browser):
+def prepare(url, count, message, like, data, browser, sign_in=False):
     """Create and save response JSON without filling or submitting the form."""
-    _, _, path, _ = _command_answers(url, count, message, like, data, browser)
+    _, _, path, _ = _command_answers(url, count, message, like, data, browser, sign_in)
     _info(f'Ready. Open with: gformbot preview "{path.resolve()}"')
 
 

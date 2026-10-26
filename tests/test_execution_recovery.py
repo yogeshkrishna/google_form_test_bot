@@ -8,6 +8,7 @@ from gformbot.execution import Runner
 
 class ReviewWindows:
     def __init__(self):
+        self.current_url = "https://example.test/form"
         self.window_handles = ["first"]
         self.current_window_handle = "first"
         self.switch_to = self
@@ -53,7 +54,13 @@ def test_selecting_closed_background_response_keeps_other_review_edits(monkeypat
         ids=[7, 9], review=reviews.append, failed=lambda index, uncertain: failures.append((index, uncertain))
     )
     monkeypatch.setattr(browser, "get_driver", lambda *a, **kw: driver)
-    monkeypatch.setattr(filler, "submit_response", lambda c, row, **kw: fills.append(row) or (True, "filled"))
+
+    def fill(config, row, **options):
+        options["before_review"]()
+        fills.append(row)
+        return True, "filled"
+
+    monkeypatch.setattr(filler, "submit_response", fill)
     monkeypatch.setattr(filler, "_positive_confirmation", lambda *a: False)
     answers = [{1: "First"}, {1: "Second, edited manually in its own tab"}]
     assert Runner(config, answers, ui, session).background({1: 1, 2: 2}) is False

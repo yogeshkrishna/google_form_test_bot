@@ -16,6 +16,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from .access import FormAccessError, check_browser_access, raise_for_access
 from .validation import is_email_rule
 
 
@@ -49,6 +50,9 @@ class FormSchema:
     unsupported: list[str] = field(default_factory=list)
     confirmation_text: str = ""
     instructions: list[dict] = field(default_factory=list)
+    requires_signin: bool = False
+    one_response: bool | None = None
+    email_collection: str = "unknown"
 
     def get(self, index: int) -> QuestionSchema | None:
         return next((q for q in self.questions if q.index == index), None)
@@ -142,13 +146,10 @@ def _checkbox_rules(question: QuestionSchema) -> None:
 
 
 def parse_form_html(document: str, url: str) -> FormSchema:
+    raise_for_access(document, url)
     marker = re.search(r"\bFB_PUBLIC_LOAD_DATA_\s*=\s*", document)
     if not marker:
-        if "accounts.google.com" in document and ("Sign in" in document or "ServiceLogin" in document):
-            raise ValueError("This form requires sign-in or access permission. Use a public test copy.")
-        raise ValueError(
-            "No public form schema was found. The form may be closed, unavailable, or have changed format."
-        )
+        raise FormAccessError("unknown")
     try:
         data, _ = json.JSONDecoder().raw_decode(document[marker.end() :])
         meta = data[1]
@@ -157,6 +158,19 @@ def parse_form_html(document: str, url: str) -> FormSchema:
             raise ValueError("missing question list")
     except (IndexError, TypeError, ValueError) as exc:
         raise ValueError("Google's form metadata has an unrecognized structure; inspection stopped.") from exc
+    settings = _get(meta, 10)
+    once = _get(settings, 1)
+    one_response = (
+        bool(once)
+        if isinstance(settings, list)
+        and len(settings) > 1
+        and (once is None or type(once) in (bool, int) and once in (0, 1))
+        else None
+    )
+    email = _get(settings, 6)
+    email_collection = (
+        {1: "none", 2: "verified", 3: "input"}.get(email, "unknown") if type(email) is int else "unknown"
+    )
     form = FormSchema(
         url=url,
         title=plain_text(_get(meta, 8) or _get(data, 3) or "Google Form"),
@@ -164,7 +178,24 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         questions=[],
         sections=["Section 1"],
         confirmation_text=plain_text(_get(_get(meta, 2), 0)),
+        requires_signin=_get(data, 18) in (True, 1) or one_response is True or email_collection == "verified",
+        one_response=one_response,
+        email_collection=email_collection,
     )
+    # Google renders responder-input email outside its embedded item list.
+    # Verified collection instead belongs to the signed-in account and consent.
+    if email_collection == "input":
+        form.questions.append(
+            QuestionSchema(
+                1,
+                "Email",
+                "text",
+                required=True,
+                entry_id="emailAddress",
+                item_id="emailAddress",
+                validation=[[2, 102]],
+            )
+        )
     seen_ids = set()
     for item in items:
         if not isinstance(item, list) or len(item) < 4:
@@ -271,29 +302,40 @@ def parse_form_html(document: str, url: str) -> FormSchema:
 
 
 def inspect_form(
-    url: str, browser: str = "auto", headless: bool = True, status_cb=None, timeout: int = 30
+    url: str, browser: str = "auto", headless: bool = True, status_cb=None, timeout: int = 30, *, driver=None
 ) -> FormSchema:
     requested = clean_url(url)
     if status_cb:
         status_cb("Reading all form questions and constraints…")
     try:
-        request = Request(requested, headers={"User-Agent": "gformbot (form inspection)"})
-        with urlopen(request, timeout=timeout) as response:
-            if urlparse(response.url).hostname == "accounts.google.com":
-                raise ValueError("This form requires sign-in or access permission. Use a public test copy.")
-            final_url = clean_url(response.url, allow_short=False)
-            raw = response.read(10_000_001)
-            if len(raw) > 10_000_000:
+        if driver is not None:
+            driver.get(requested)
+            check_browser_access(driver)
+            final_url = clean_url(driver.current_url, allow_short=False)
+            document = driver.page_source
+            if len(document) > 10_000_000:
                 raise ValueError("The responder page is too large to inspect safely.")
-            encoding = response.headers.get_content_charset() or "utf-8"
-        schema = parse_form_html(raw.decode(encoding), final_url)
+        else:
+            request = Request(requested, headers={"User-Agent": "gformbot (form inspection)"})
+            with urlopen(request, timeout=timeout) as response:
+                raise_for_access(url=response.url, status=getattr(response, "status", None))
+                raw = response.read(10_000_001)
+                if len(raw) > 10_000_000:
+                    raise ValueError("The responder page is too large to inspect safely.")
+                encoding = response.headers.get_content_charset() or "utf-8"
+                document = raw.decode(encoding)
+                final_url = clean_url(response.url, allow_short=False)
+        schema = parse_form_html(document, final_url)
         if status_cb:
             status_cb(f"Read {len(schema.questions)} questions across {schema.pages} section(s).")
         return schema
+    except HTTPError as exc:
+        raise_for_access(url=exc.url, status=exc.code)
+        raise FormAccessError("unknown") from exc
     except ValueError:
         raise
-    except (HTTPError, URLError, TimeoutError, OSError, UnicodeError) as exc:
-        raise ValueError(f"Could not open the form: {exc}. Check the responder URL and connection.") from exc
+    except (URLError, TimeoutError, OSError, UnicodeError) as exc:
+        raise FormAccessError("temporary_failure") from exc
 
 
 def schema_fingerprint(schema_or_config) -> str:

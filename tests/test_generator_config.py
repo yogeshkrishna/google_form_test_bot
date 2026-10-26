@@ -66,6 +66,14 @@ def test_required_blank_never_becomes_random():
         validate_answer(config(), {1: "", 2: ["Parks"]})
 
 
+@pytest.mark.parametrize("header", ["Email Address", "emailAddress", "Email", "Q1"])
+def test_google_collected_email_csv_header_is_mapped_without_guessing(header):
+    c = RunConfig("url", questions=[QuestionConfig(1, "Email", "text", True, entry_id="emailAddress")])
+    assert map_columns(c, [header]) == {1: header}
+    with pytest.raises(ValueError, match="multiple CSV columns"):
+        map_columns(c, ["Email Address", "Email"])
+
+
 def test_optional_blanks_remain_blank():
     c = config()
     c.questions[1].required = False

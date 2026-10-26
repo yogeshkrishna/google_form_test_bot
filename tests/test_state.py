@@ -90,7 +90,7 @@ def test_journal_failure_prevents_submit(saved, monkeypatch):
     c, answers, path = setup_runner(saved, monkeypatch)
     clicked = []
 
-    def failing_write(*args):
+    def failing_write(*args, **kwargs):
         raise ValueError("journal unavailable")
 
     monkeypatch.setattr(Journal, "set", failing_write)
@@ -220,4 +220,64 @@ def test_simultaneous_sessions_allow_only_one_submit_intent(saved):
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(attempt, range(4)))
     assert sorted(results) == ["accepted", "blocked", "blocked", "blocked"]
+    assert current.journal.states() == {1: "attempted"}
+
+
+def test_only_session_that_opened_review_can_continue_to_submit(saved):
+    first, other = session(saved), session(saved)
+    first.review(1)
+    with pytest.raises(UncertainSubmission, match="reviewing"):
+        other.before_submit(1)
+    first.before_submit(1)
+    assert first.journal.states() == {1: "attempted"}
+    with pytest.raises(UncertainSubmission, match="attempted"):
+        first.before_submit(1)
+
+
+def test_interrupted_email_consent_remains_uncertain_on_reopen(saved):
+    current = session(saved)
+    current.review(1)
+    reopened = session(saved)
+    assert reopened.uncertain() == [1]
+    with pytest.raises(UncertainSubmission, match="reviewing"):
+        reopened.before_submit(1)
+
+
+@pytest.mark.parametrize("review_again", [False, True])
+def test_reconciliation_revokes_stale_review_ownership(saved, review_again):
+    first = session(saved)
+    first.review(1)
+    second = session(saved)
+    second.reconcile(1, False)
+    if review_again:
+        second.review(1)
+    with pytest.raises(UncertainSubmission):
+        first.before_submit(1)
+    assert second.journal.states() == {1: "reviewing" if review_again else "prepared"}
+    second.before_submit(1)
+    assert second.journal.states() == {1: "attempted"}
+
+
+def test_legacy_journal_reviews_still_require_reconciliation(saved):
+    import sqlite3
+
+    from gformbot.state import batch_id
+
+    path = saved[2]
+    payload = json.loads(path.read_text())
+    journal = Journal(batch_id(payload))
+    journal.path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(journal.path) as connection:
+        connection.execute(
+            "CREATE TABLE responses (batch TEXT NOT NULL, response INTEGER NOT NULL, state TEXT NOT NULL, PRIMARY KEY(batch,response))"
+        )
+        connection.execute("CREATE TABLE batches (batch TEXT PRIMARY KEY, content TEXT NOT NULL)")
+        connection.execute("INSERT INTO responses VALUES(?,?,?)", (journal.identity, 1, "reviewing"))
+    current = session(saved)
+    assert current.uncertain() == [1]
+    with pytest.raises(UncertainSubmission):
+        current.before_submit(1)
+    current.reconcile(1, False)
+    current.review(1)
+    current.before_submit(1)
     assert current.journal.states() == {1: "attempted"}

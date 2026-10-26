@@ -85,14 +85,22 @@ def _page_questions(driver, form: RunConfig):
     by_entry, by_item, by_title = {}, {}, {}
     for question in form.questions:
         if question.entry_id:
-            by_entry.setdefault("entry." + question.entry_id, []).append(question)
+            name = "emailAddress" if question.entry_id == "emailAddress" else "entry." + question.entry_id
+            by_entry.setdefault(name, []).append(question)
         if question.item_id:
             by_item.setdefault(question.item_id, []).append(question)
         by_title.setdefault(_normalized(question.text), []).append(question)
     matches, matched_indices = [], set()
     for box in _question_boxes(driver):
+        if getattr(form, "email_collection", "unknown") == "verified":
+            consent = _verified_email_control(box)
+            if consent is not None:
+                if not _checked(consent):
+                    raise ValueError("In the browser, check the email consent box before continuing.")
+                continue
         names = [
-            el.get_attribute("name") or "" for el in box.find_elements(By.CSS_SELECTOR, '[name^="entry."]')
+            el.get_attribute("name") or ""
+            for el in box.find_elements(By.CSS_SELECTOR, '[name^="entry."], [name="emailAddress"]')
         ]
         names = {re.sub(r"_(sentinel|year|month|day|hour|minute|second)$", "", name) for name in names}
         candidates = []
@@ -138,6 +146,62 @@ def _checked(element) -> bool:
     return element.get_attribute("aria-checked") == "true" or bool(element.is_selected())
 
 
+def _verified_email_control(box):
+    """Recognize account consent without confusing a normal checkbox question."""
+    if box.find_elements(By.CSS_SELECTOR, '[name^="entry."]'):
+        return None
+    controls = _visible(box.find_elements(By.CSS_SELECTOR, "[role='checkbox'], input[type='checkbox']"))
+    if len(controls) != 1:
+        return None
+    control = controls[0]
+
+    def matches(labels):
+        return any(
+            re.fullmatch(
+                r"Record\s+\S+@\S+\s+as the email to be included with my response\.?", _normalized(label)
+            )
+            for label in labels
+        )
+
+    if matches((control.get_attribute("aria-label") or "", control.text)):
+        return control
+    labels = []
+    references = (control.get_attribute("aria-labelledby") or "").split()
+    if references:
+        targets = [box.find_elements(By.ID, identity) for identity in references]
+        if all(len(elements) == 1 for elements in targets):
+            labels.append(" ".join(elements[0].text for elements in targets))
+    identity = control.get_attribute("id")
+    for label in box.find_elements(By.TAG_NAME, "label"):
+        if (identity and label.get_attribute("for") == identity) or control in label.find_elements(
+            By.CSS_SELECTOR, "input[type='checkbox']"
+        ):
+            labels.append(label.text)
+    if matches(labels):
+        return control
+    return None
+
+
+def _verify_email_consent(driver, form, confirm_email=None, before_review=None):
+    if getattr(form, "email_collection", "unknown") != "verified":
+        return False
+    controls = [
+        control for box in _question_boxes(driver) if (control := _verified_email_control(box)) is not None
+    ]
+    if len(controls) != 1:
+        raise ValueError(
+            "The verified email consent control was not recognized. Check the form in the browser."
+        )
+    if before_review is not None:
+        before_review()
+    if not _checked(controls[0]) and confirm_email is not None:
+        confirm_email()
+        _check_interstitial(driver)
+    if not _checked(controls[0]):
+        raise ValueError("In the browser, check the email consent box before continuing.")
+    return True
+
+
 def _click(driver, element):
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
     element.click()
@@ -178,9 +242,12 @@ def _rebind_box(driver, question, current):
     for candidate in _question_boxes(driver):
         names = {
             re.sub(r"_(sentinel|year|month|day|hour|minute|second)$", "", e.get_attribute("name") or "")
-            for e in candidate.find_elements(By.CSS_SELECTOR, '[name^="entry."]')
+            for e in candidate.find_elements(By.CSS_SELECTOR, '[name^="entry."], [name="emailAddress"]')
         }
-        if question.entry_id and "entry." + question.entry_id in names:
+        expected_name = (
+            "emailAddress" if question.entry_id == "emailAddress" else "entry." + question.entry_id
+        )
+        if question.entry_id and expected_name in names:
             candidates.append(candidate)
         elif question.item_id and candidate.get_attribute("data-item-id") == question.item_id:
             candidates.append(candidate)
@@ -493,22 +560,9 @@ def _validation_errors(driver):
 
 
 def _check_interstitial(driver):
-    url = urlparse(driver.current_url)
-    if url.hostname == "accounts.google.com":
-        raise RuntimeError(
-            "The form redirected to Google sign-in. Public forms without sign-in are supported."
-        )
-    body = driver.find_elements(By.TAG_NAME, "body")
-    text = _normalized(body[0].text).lower() if body else ""
-    for phrase in (
-        "you need permission",
-        "no longer accepting responses",
-        "sign in to continue",
-        "something went wrong",
-        "try again later",
-    ):
-        if phrase in text and not _question_boxes(driver):
-            raise RuntimeError(f"Google Forms cannot be filled: {phrase}.")
+    from .access import check_browser_access
+
+    check_browser_access(driver)
 
 
 def _positive_confirmation(driver, confirmation_text: str = "", expected_url: str = "") -> bool:
@@ -563,6 +617,8 @@ def execute_response(
     timeout: float = 15,
     *,
     before_submit: Callable[[], None] | None = None,
+    before_review: Callable[[], None] | None = None,
+    confirm_email: Callable[[], None] | None = None,
 ) -> dict:
     """Fill every known page; return before Submit unless submit=True."""
     _require_supported(form)
@@ -575,6 +631,9 @@ def execute_response(
     page_cap = max(2, len(form.sections) + 2)
     for page_index in range(page_cap):
         _check_interstitial(driver)
+        if page_index == 0:
+            if _verify_email_consent(driver, form, confirm_email, before_review):
+                before_review = None
         page = _page_questions(driver, form)
         signature = tuple(question.index for question, _box in page)
         if page and {(q.page - 1) for q, _box in page} != {page_index}:
@@ -593,6 +652,9 @@ def execute_response(
             raise RuntimeError(
                 "Next returned to an already filled page. Check the form's validation or branching settings."
             )
+        if before_review is not None:
+            before_review()
+            before_review = None
         signatures.add(signature)
         for question, box in page:
             if question.index not in answers:
@@ -618,12 +680,17 @@ def execute_response(
             driver._gformbot_submission_clicked = True
             try:
                 _click(driver, submit_button)
+
+                def submitted(d):
+                    _check_interstitial(d)
+                    return _positive_confirmation(d, form.confirmation_text, form.url) or _validation_errors(
+                        d
+                    )
+
                 _wait(
                     driver,
                     timeout,
-                    lambda d: (
-                        _positive_confirmation(d, form.confirmation_text, form.url) or _validation_errors(d)
-                    ),
+                    submitted,
                     "Submit was attempted but acceptance was not confirmed. Check the form's Responses tab before retrying.",
                 )
                 errors = _validation_errors(driver)
@@ -637,7 +704,7 @@ def execute_response(
                 raise
             except SubmissionRejectedError:
                 raise
-            except RuntimeError as exc:
+            except (RuntimeError, ValueError) as exc:
                 raise SubmissionUncertainError(str(exc)) from exc
             except Exception as exc:
                 raise SubmissionUncertainError(
@@ -652,6 +719,7 @@ def execute_response(
         _click(driver, next_button)
 
         def advanced(d, signature=signature, page_index=page_index):
+            _check_interstitial(d)
             if _validation_errors(d):
                 return True
             try:
@@ -682,6 +750,8 @@ def submit_response(
     driver=None,
     *,
     before_submit: Callable[[], None] | None = None,
+    before_review: Callable[[], None] | None = None,
+    confirm_email: Callable[[], None] | None = None,
 ) -> tuple[bool, str]:
     """Run one response; a supplied private driver can be reused for a batch."""
     from .browser import get_driver
@@ -690,7 +760,15 @@ def submit_response(
     if owns_driver:
         driver = get_driver(browser=config.browser, headless=config.headless)
     try:
-        result = execute_response(driver, config, answer, submit=submit, before_submit=before_submit)
+        result = execute_response(
+            driver,
+            config,
+            answer,
+            submit=submit,
+            before_submit=before_submit,
+            before_review=before_review,
+            confirm_email=confirm_email,
+        )
         return True, "submitted" if result["status"] == "confirmed" else "filled"
     finally:
         if owns_driver:
