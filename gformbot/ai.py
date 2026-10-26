@@ -15,8 +15,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from selenium.common.exceptions import WebDriverException
-
 from gformbot.config import RunConfig, clean_path, config_to_dict, validate_config
 from gformbot.generator import validate_answer
 from gformbot.inspector import schema_fingerprint
@@ -26,6 +24,7 @@ from gformbot.validation import EMAIL_PATTERN, date_format, date_pattern, needs_
 from .chatgpt import ChatGPTError
 from .chatgpt import ask as _chat
 from .chatgpt import open_chat as _open_chat
+from .selenium_runtime import WebDriverException
 
 
 class GenerationError(ValueError):

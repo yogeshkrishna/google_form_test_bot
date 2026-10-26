@@ -7,10 +7,10 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, urlparse
 
 import pytest
-from selenium.common.exceptions import StaleElementReferenceException
 
 from gformbot import filler as browser
 from gformbot.config import QuestionConfig, RunConfig
+from gformbot.selenium_runtime import StaleElementReferenceException
 
 GFormBotError = RuntimeError
 

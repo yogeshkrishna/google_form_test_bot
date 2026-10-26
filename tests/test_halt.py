@@ -4,12 +4,12 @@ from types import SimpleNamespace
 from urllib.parse import quote
 
 import pytest
-from selenium.common.exceptions import NoSuchWindowException, StaleElementReferenceException
 
 from gformbot import browser, cli, filler, inspector, logger
 from gformbot.artifacts import digest
 from gformbot.config import QuestionConfig, RunConfig
 from gformbot.execution import Runner
+from gformbot.selenium_runtime import NoSuchWindowException, StaleElementReferenceException
 from gformbot.state import Session
 
 

@@ -7,18 +7,17 @@ import time
 from collections.abc import Callable
 from urllib.parse import urlparse
 
-from selenium.common.exceptions import (
+from .config import QuestionConfig, RunConfig
+from .followups import observe_page
+from .routing import Routing
+from .selenium_runtime import (
+    By,
     ElementClickInterceptedException,
     ElementNotInteractableException,
     StaleElementReferenceException,
     TimeoutException,
+    WebDriverWait,
 )
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-
-from .config import QuestionConfig, RunConfig
-from .followups import observe_page
-from .routing import Routing
 from .validation import parse_date
 
 _SUPPORTED = {"radio", "checkbox", "dropdown", "scale", "text", "textarea", "date"}
@@ -385,7 +384,7 @@ def _fill_question_once(driver, question: QuestionConfig, box, value, timeout):
         )
         native = [element for element in dropdowns if element.tag_name.lower() == "select"]
         if native:
-            from selenium.webdriver.support.ui import Select
+            from .selenium_runtime import Select
 
             if value in (None, ""):
                 blank = [

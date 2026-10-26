@@ -78,7 +78,7 @@ class Runner:
         )
 
     def wait_manual(self, driver, pending, *, tabs=False):
-        from selenium.common.exceptions import WebDriverException
+        from .selenium_runtime import WebDriverException
 
         ui = self.ui
         ui._info(
@@ -137,10 +137,9 @@ class Runner:
         return all_confirmed
 
     def background(self, pending):
-        from selenium.common.exceptions import WebDriverException
-
         from .browser import get_driver
         from .filler import submit_response
+        from .selenium_runtime import WebDriverException
 
         ui, c = self.ui, self.config
         resource = getattr(c, "_form_browser", None)
@@ -252,7 +251,7 @@ class Runner:
 
     def wait_halt(self, driver, pending):
         """Keep every review window alive until it is closed or the user stops."""
-        from selenium.common.exceptions import (
+        from .selenium_runtime import (
             NoSuchWindowException,
             StaleElementReferenceException,
             WebDriverException,
