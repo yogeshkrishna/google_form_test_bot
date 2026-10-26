@@ -11,6 +11,8 @@ gformbot
 
 Requires Python 3.10 or newer and an installed Chrome, Firefox, or Edge browser for generation and filling. Selenium manages the driver. Use `python -m gformbot` if the command is not on your PATH.
 
+Windows x64 wheels include a private Selenium subset with the original Windows driver manager. Other platforms use official Selenium. Existing Selenium installations can coexist; pip does not remove old shared dependencies during an upgrade. [Build details and measurements](docs/windows-selenium.md).
+
 The wizard's file picker opens after you press Enter. It needs a graphical desktop and Python's Tk support (`python3-tk` on Linux). Commands accept paths directly.
 
 ## Choose a workflow
@@ -118,8 +120,9 @@ python -m twine check dist/*
 ```
 
 Set `GFORMBOT_BROWSER_TESTS=1` for local Chrome fixtures. These exercise a local test server without Google submissions or live AI. Firefox and Edge need their own environment checks.
+Set `GFORMBOT_TEST_BROWSER=edge` or `firefox` to run the same fixtures against that installed browser.
 
-CI checks Windows/Ubuntu on Python 3.10, 3.12, 3.13, and 3.14, builds distributions, smoke-tests the installed wheel outside the checkout, and runs local Chrome fixtures. It uploads build artifacts without publishing packages or creating releases.
+CI checks Windows/Ubuntu on Python 3.10, 3.12, 3.13, and 3.14, builds both wheel variants, smoke-tests them outside the checkout, and runs Chrome fixtures on Ubuntu plus Chrome/Edge/Firefox fixtures on Windows. It uploads build artifacts without publishing packages or creating releases.
 
 ## License
 

@@ -1,6 +1,5 @@
 import os
 from types import SimpleNamespace
-from urllib.parse import quote
 
 import pytest
 
@@ -129,7 +128,7 @@ def test_browser_fast_snapshot_never_transfers_embedded_metadata(text, state):
 
 @pytest.mark.browser
 @pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Opt-in local Chrome check")
-def test_browser_access_snapshot_handles_visibility_questions_and_confirmations():
+def test_browser_access_snapshot_handles_visibility_questions_and_confirmations(html_page):
     from gformbot.browser import get_driver
 
     driver = get_driver("chrome", headless=True)
@@ -148,7 +147,7 @@ def test_browser_access_snapshot_handles_visibility_questions_and_confirmations(
             ("<input hidden><h1>Something went wrong</h1>", "temporary_failure"),
         ]
         for document, state in cases:
-            driver.get("data:text/html;charset=utf-8," + quote(document))
+            driver.get(html_page(document))
             if state:
                 with pytest.raises(FormAccessError) as failure:
                     check_browser_access(driver)

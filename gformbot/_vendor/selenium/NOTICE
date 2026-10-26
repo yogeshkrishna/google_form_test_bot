@@ -1,0 +1,4 @@
+Copyright 2011-2026 Software Freedom Conservancy
+Copyright 2004-2011 Selenium committers
+
+GFormBot modifications: private import namespace, supported browser exports, standard-library Self on Python 3.11+, and removal of unused BiDi/CDP protocol code and non-Windows assets. Rebuild with tools/vendor_selenium.py from the SHA-256-locked upstream wheel.

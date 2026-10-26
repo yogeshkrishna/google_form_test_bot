@@ -181,10 +181,9 @@ def get_driver(browser: BrowserName = "auto", headless: bool = False):
 
 
 def _chrome_driver(headless: bool):
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
+    from .selenium_runtime import options, webdriver
 
-    opts = Options()
+    opts = options("chrome")
     opts.add_argument("--incognito")
     opts.add_argument("--start-maximized")
     opts.add_argument("--disable-notifications")
@@ -199,10 +198,9 @@ def _chrome_driver(headless: bool):
 
 
 def _firefox_driver(headless: bool):
-    from selenium import webdriver
-    from selenium.webdriver.firefox.options import Options
+    from .selenium_runtime import options, webdriver
 
-    opts = Options()
+    opts = options("firefox")
     opts.add_argument("-private")
     opts.set_preference("intl.accept_languages", "en-US,en")
     if headless:
@@ -211,10 +209,9 @@ def _firefox_driver(headless: bool):
 
 
 def _edge_driver(headless: bool):
-    from selenium import webdriver
-    from selenium.webdriver.edge.options import Options
+    from .selenium_runtime import options, webdriver
 
-    opts = Options()
+    opts = options("edge")
     opts.add_argument("--inprivate")
     opts.add_argument("--start-maximized")
     opts.add_argument("--disable-notifications")

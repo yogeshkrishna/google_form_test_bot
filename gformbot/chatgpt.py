@@ -2,11 +2,14 @@
 
 import math
 
-from selenium.common.exceptions import StaleElementReferenceException, TimeoutException, WebDriverException
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-
 from .browser import get_driver
+from .selenium_runtime import (
+    By,
+    StaleElementReferenceException,
+    TimeoutException,
+    WebDriverException,
+    WebDriverWait,
+)
 
 
 class ChatGPTError(ValueError):

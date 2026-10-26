@@ -1701,11 +1701,13 @@ def doctor():
     installed = available_browsers()
     table.add_row("Browsers found", ", ".join(installed) or "None detected; install Chrome, Firefox or Edge")
     table.add_row("Default browser", detect_default_browser() if installed else "Unavailable")
+    from .selenium_runtime import PACKAGE
+
     for module in ("selenium", "tkinter", "pyperclip"):
-        present = importlib.util.find_spec(module) is not None
+        present = importlib.util.find_spec(PACKAGE if module == "selenium" else module) is not None
         table.add_row(
             module,
-            "Available"
+            ("Available (included)" if module == "selenium" and PACKAGE != "selenium" else "Available")
             if present
             else "Missing" + (" (optional clipboard support)" if module == "pyperclip" else ""),
         )
