@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import QuestionConfig, RunConfig, clean_path, validate_config
+from .routing import Routing
 from .validation import EMAIL_PATTERN, needs_email, normalize_csv_dates, parse_date
 
 CHOICE_TYPES = {"radio", "checkbox", "dropdown", "scale"}
@@ -70,6 +71,7 @@ def map_columns(config: RunConfig, headers: list[str], mapping: dict | None = No
     by_name = {}
     for header in headers:
         by_name.setdefault(_normal(header), []).append(header)
+    conditional = Routing(config).enabled
     for q in config.questions:
         explicit = q.index in supplied or str(q.index) in supplied or q.pool_column is not None
         if explicit:
@@ -86,7 +88,7 @@ def map_columns(config: RunConfig, headers: list[str], mapping: dict | None = No
             if len(matches) > 1:
                 raise ValueError(f"Q{q.index}: multiple CSV columns match. Choose its source column.")
             column = matches[0] if matches else None
-        if column is None and q.required:
+        if column is None and q.required and not conditional:
             raise ValueError(f"Q{q.index}: missing required CSV column for {q.text!r}.")
         if column is not None:
             if column in used:
@@ -185,7 +187,13 @@ def parse_checkbox(q: QuestionConfig, value: Any) -> list[str]:
 
 
 def validate_answer(
-    config: RunConfig, answer: dict, *, repair: bool = False, changes: list[str] | None = None
+    config: RunConfig,
+    answer: dict,
+    *,
+    repair: bool = False,
+    changes: list[str] | None = None,
+    routing: Routing | None = None,
+    partial: bool = False,
 ) -> dict[int, Any]:
     if config.unsupported:
         raise ValueError("Unsupported form: " + "; ".join(config.unsupported))
@@ -201,7 +209,23 @@ def validate_answer(
     for q in config.questions:
         if q.index in answer and str(q.index) in answer:
             raise ValueError(f"Q{q.index}: duplicate response keys.")
-        value = answer.get(q.index, answer.get(str(q.index), ""))
+        if partial and q.index not in answer and str(q.index) not in answer:
+            continue
+        value = answer.get(q.index, answer.get(str(q.index)))
+        value = ([] if q.qtype == "checkbox" else "") if value is None else value
+        if not isinstance(value, str) and not (
+            q.qtype == "checkbox" and isinstance(value, list) and all(isinstance(v, str) for v in value)
+        ):
+            raise ValueError(f"Q{q.index}: answer must be text or a checkbox list.")
+        result[q.index] = value.copy() if isinstance(value, list) else value
+    routes = routing or Routing(config)
+    questions = (
+        (q for q in config.questions if q.index in result)
+        if partial
+        else (q for page in routes.walk(result) for q in routes.questions[page])
+    )
+    for q in questions:
+        value = result[q.index]
         label = f"Q{q.index} ({q.text})"
         if q.qtype == "checkbox":
             value = parse_checkbox(q, value)
@@ -265,22 +289,37 @@ def load_reference(
         raise ValueError(
             "No CSV columns match the form. Map columns explicitly before importing blank responses."
         )
+    routes = Routing(config)
+    profiles = [
+        {q.index: row[columns[q.index]] if columns[q.index] else "" for q in config.questions} for row in rows
+    ]
+    active = []
+    for line, row in enumerate(profiles, 2):
+        try:
+            active.append(routes.active(row))
+        except ValueError as exc:
+            raise ValueError(f"CSV row {line}: {exc}") from exc
     for question in config.questions:
         column = columns[question.index]
         if question.qtype == "date" and column:
-            normalized = normalize_csv_dates(question, [row[column] for row in rows], config.csv_date_order)
-            for row, value in zip(rows, normalized, strict=True):
-                row[column] = value
+            indexes = [i for i, reached in enumerate(active) if question.index in reached]
+            if indexes:
+                normalized = normalize_csv_dates(
+                    question, [profiles[i][question.index] for i in indexes], config.csv_date_order
+                )
+                for i, value in zip(indexes, normalized, strict=True):
+                    profiles[i][question.index] = value
     result = []
-    for line, row in enumerate(rows, 2):
+    for line, row in enumerate(profiles, 2):
         local_changes = []
         try:
             result.append(
                 validate_answer(
                     config,
-                    {q.index: row[columns[q.index]] if columns[q.index] else "" for q in config.questions},
+                    row,
                     repair=repair,
                     changes=local_changes,
+                    routing=routes,
                 )
             )
         except ValueError as exc:
@@ -291,11 +330,15 @@ def load_reference(
 
 
 def apply_reference_weights(config: RunConfig, profiles: list[dict[int, Any]]) -> None:
+    routes = Routing(config)
+    active = [routes.active(row) for row in profiles]
     for q in config.questions:
         if q.qtype not in CHOICE_TYPES:
             continue
         counts = {o: 0 for o in q.options}
-        for profile in profiles:
+        for profile, reached in zip(profiles, active, strict=True):
+            if q.index not in reached:
+                continue
             value = profile[q.index]
             for option in value if isinstance(value, list) else [value]:
                 if option in counts:
@@ -329,15 +372,19 @@ def _random_from_options(q: QuestionConfig) -> Any:
     return selected
 
 
-def make_answer(config: RunConfig, pool_row: dict | None = None) -> dict[int, Any]:
+def make_answer(
+    config: RunConfig, pool_row: dict | None = None, *, routing: Routing | None = None
+) -> dict[int, Any]:
+    routes = routing or Routing(config)
     if pool_row is not None:
         mapping = map_columns(config, list(pool_row))
         return validate_answer(
             config,
             {q.index: pool_row[mapping[q.index]] if mapping[q.index] else "" for q in config.questions},
+            routing=routes,
         )
-    answer = {}
-    for q in config.questions:
+    answer = {q.index: q.fixed_value for q in config.questions if q.fixed_value is not None}
+    for q in (q for page in routes.walk(answer) for q in routes.questions[page]):
         if q.fixed_value is not None:
             value = q.fixed_value
         elif q.qtype in CHOICE_TYPES:
@@ -347,7 +394,7 @@ def make_answer(config: RunConfig, pool_row: dict | None = None) -> dict[int, An
         else:
             value = ""
         answer[q.index] = value
-    return validate_answer(config, answer)
+    return validate_answer(config, answer, routing=routes)
 
 
 def prepare_responses(
@@ -358,6 +405,7 @@ def prepare_responses(
     sampling: str | None = None,
 ) -> list[dict[int, Any]]:
     validate_config(config)
+    routes = Routing(config)
     if sampling is None:
         sampling = "ordered" if ordered else "sample"
     if sampling not in {"ordered", "shuffle", "sample"}:
@@ -369,7 +417,7 @@ def prepare_responses(
     if profiles is not None:
         if not profiles:
             raise ValueError("The response pool is empty.")
-        profiles = [validate_answer(config, row) for row in profiles]
+        profiles = [validate_answer(config, row, routing=routes) for row in profiles]
         if sampling in {"ordered", "shuffle"} and config.count > len(profiles):
             raise ValueError(
                 f"{sampling.capitalize()} mode needs {config.count} rows; the CSV has {len(profiles)}."
@@ -385,7 +433,7 @@ def prepare_responses(
             {key: value.copy() if isinstance(value, list) else value for key, value in row.items()}
             for row in chosen
         ]
-    return [make_answer(config) for _ in range(config.count)]
+    return [make_answer(config, routing=routes) for _ in range(config.count)]
 
 
 def write_csv(config: RunConfig, answers: list[dict], path: str | Path) -> Path:

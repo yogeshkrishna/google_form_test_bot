@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Follow answer-based section routes across CSV import, generation, previews, and filling, including skipped required questions and early Submit. Stop before submission if the browser deviates from the planned route.
 - Add explicit Google sign-in with a shared temporary browser session, email collection support, and checks for known response limits.
 - Report blocked forms clearly and keep manual or automatic submission outcomes conservative when access changes.
 

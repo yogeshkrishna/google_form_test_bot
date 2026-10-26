@@ -37,7 +37,7 @@ Package changes also need a wheel/sdist build, metadata checks, and an installed
 
 When the user authorizes Git actions, make meaningful commits and open a focused PR linked to the issue. Explain what failed, what now happens, how it was checked, and any remaining limitation. Keep titles and descriptions short. Do not include credentials, real response data, local logs, browser profiles, or generated runtime files.
 
-Let CI run and address the review. Merge only when authorized. Delete the finished feature branch when appropriate; do not rewrite or manufacture history to fill a contribution graph.
+Let CI run and address the review. The user authorizes Git actions for agreed project work; package publication remains a separate decision. Delete the finished feature branch when appropriate; do not rewrite or manufacture history to fill a contribution graph.
 
 Use repository metadata that accurately describes the tool. Add automation because it catches a real failure or saves maintenance, not because it looks advanced. Keep publication out of ordinary push, PR, merge, and tag workflows.
 

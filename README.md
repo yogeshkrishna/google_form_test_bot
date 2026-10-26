@@ -89,7 +89,7 @@ Short text occupies one line; paragraphs may contain newlines. Supported email a
 
 Dates use `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`; yearless questions use `MM-DD` with optional time. Google Forms CSV dates are normalized without changing the source. Ambiguous month/day ordering needs a choice; impossible dates and nonzero seconds are rejected.
 
-Supported questions include short text, paragraphs, multiple choice, checkboxes, dropdowns, numeric scales, and dates with optional year/time. Instruction blocks and section descriptions are retained as text. Uploads, grids, standalone time/duration, unsupported rating types, branching, free-text “Other,” and unsupported custom validation stop execution. Browser navigation and verified-email consent expect English labels. Known one-response limits stop incompatible batches; closed, restricted, or already-answered forms retain unfinished work.
+Supported questions include short text, paragraphs, multiple choice, checkboxes, dropdowns, numeric scales, and dates with optional year/time. Section routing follows each response's choices, including skipped sections and early Submit. Only reached questions require answers; repeated sections stop with an error. Instruction blocks and section descriptions are retained as text. Uploads, grids, standalone time/duration, unsupported rating types, free-text “Other,” and unsupported custom validation stop execution. Browser navigation and verified-email consent expect English labels. Known one-response limits stop incompatible batches; closed, restricted, or already-answered forms retain unfinished work.
 
 ## Other commands
 

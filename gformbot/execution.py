@@ -312,12 +312,14 @@ class Runner:
         from .generator import validate_answer
         from .inspector import inspect_form, schema_fingerprint
         from .logger import validate_log_path
+        from .routing import Routing
 
         c, ui = self.config, self.ui
         if halt:
             submit = False
         validate_config(c)
-        self.answers = [validate_answer(c, a) for a in self.answers]
+        c._routing = Routing(c)
+        self.answers = [validate_answer(c, a, routing=c._routing) for a in self.answers]
         if len(self.answers) != c.count:
             raise ValueError("Response count does not match prepared answers.")
         if dry_run:

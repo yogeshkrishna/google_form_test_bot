@@ -37,6 +37,7 @@ class QuestionSchema:
     validation: list = field(default_factory=list)
     date_include_year: bool = True
     date_include_time: bool = False
+    branches: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -53,6 +54,8 @@ class FormSchema:
     requires_signin: bool = False
     one_response: bool | None = None
     email_collection: str = "unknown"
+    section_ids: list[str] = field(default_factory=list)
+    section_next: list[int] = field(default_factory=list)
 
     def get(self, index: int) -> QuestionSchema | None:
         return next((q for q in self.questions if q.index == index), None)
@@ -197,6 +200,7 @@ def parse_form_html(document: str, url: str) -> FormSchema:
             )
         )
     seen_ids = set()
+    section_ids, endings = [-1], []
     for item in items:
         if not isinstance(item, list) or len(item) < 4:
             raise ValueError("Unrecognized question metadata; inspection stopped instead of guessing.")
@@ -205,6 +209,10 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         # literal code/entity examples as HTML would change CSV headers.
         title, description = str(title or "").strip(), str(description or "").strip()
         if type_code == 8:
+            if type(item_id) is not int or item_id < 0 or item_id in section_ids:
+                raise ValueError("Unrecognized or duplicate section identity; inspection stopped.")
+            section_ids.append(item_id)
+            endings.append(_get(item, 5))
             form.sections.append(title or f"Section {len(form.sections) + 1}")
             if description:
                 form.instructions.append(
@@ -215,8 +223,6 @@ def parse_form_html(document: str, url: str) -> FormSchema:
                         "description": description,
                     }
                 )
-            if _get(item, 5) not in (None, -2):
-                form.unsupported.append(f"section routing at {title!r}")
             continue
         if type_code == 6:
             form.instructions.append(
@@ -257,8 +263,6 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         other = any(_get(opt, 4) == 1 for opt in option_data)
         if other:
             form.unsupported.append(f"free-text Other option: {title}")
-        if any(_get(opt, 2) is not None for opt in option_data):
-            form.unsupported.append(f"answer-based section branching: {title}")
         if len(options) != len(set(options)):
             form.unsupported.append(f"duplicate option labels: {title}")
         validation = _get(entry, 4) or []
@@ -274,6 +278,7 @@ def parse_form_html(document: str, url: str) -> FormSchema:
             description=description,
             min_select=1 if entry[2] and type_code == 4 else 0,
             validation=validation,
+            branches={str(opt[0]): opt[2] for opt in option_data if _get(opt, 2) is not None},
         )
         if q.qtype == "date":
             flags = _get(entry, 7)
@@ -298,6 +303,28 @@ def parse_form_html(document: str, url: str) -> FormSchema:
             form.unsupported.append(f"missing option labels: {title}")
         form.questions.append(q)
     form.pages = len(form.sections)
+    form.section_ids = [str(value) for value in section_ids]
+    destinations = {value: page for page, value in enumerate(section_ids, 1)}
+
+    def destination(value, page):
+        if value is None or type(value) is int and value == -2:
+            return page + 1 if page < form.pages else 0
+        if type(value) is int and value == -3:
+            return 0
+        if type(value) is int and value in destinations:
+            return destinations[value]
+        raise ValueError(f"Unrecognized section destination {value!r}; inspect the form again.")
+
+    next_pages = [destination(value, page) for page, value in enumerate(endings, 1)] + [0]
+    if next_pages != list(range(2, form.pages + 1)) + [0]:
+        form.section_next = next_pages
+    for question in form.questions:
+        question.branches = {
+            option: destination(value, question.page) for option, value in question.branches.items()
+        }
+    from .routing import Routing
+
+    Routing(form)
     return form
 
 
@@ -375,4 +402,12 @@ def schema_fingerprint(schema_or_config) -> str:
             for q in source.questions
         ],
     }
+    from .routing import Routing
+
+    if Routing(source).enabled:
+        payload["routing"] = {
+            "section_ids": source.section_ids,
+            "section_next": source.section_next,
+            "choices": {str(q.index): q.branches for q in source.questions if q.branches},
+        }
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
