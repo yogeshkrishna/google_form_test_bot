@@ -66,11 +66,20 @@ class RunConfig:
     confirmation_text: str = ""
     form_description: str = ""
     instructions: list[dict] = field(default_factory=list)
+    requires_signin: bool = False
+    one_response: bool | None = None
+    email_collection: str = "unknown"
 
 
 def validate_config(config: RunConfig) -> None:
     if not isinstance(config, RunConfig):
         raise ValueError("Configuration must be a RunConfig object.")
+    if not isinstance(config.requires_signin, bool):
+        raise ValueError("requires_signin must be true or false.")
+    if config.one_response is not None and type(config.one_response) is not bool:
+        raise ValueError("one_response must be true, false, or unknown.")
+    if config.email_collection not in ("unknown", "none", "verified", "input"):
+        raise ValueError("Unrecognized email collection setting.")
     if config.csv_date_order not in (None, "mdy", "dmy"):
         raise ValueError("CSV date order must be mdy, dmy, or unspecified for automatic detection.")
     if not isinstance(config.url, str) or not config.url.strip():
@@ -256,6 +265,9 @@ def config_from_schema(schema) -> RunConfig:
         confirmation_text=schema.confirmation_text,
         form_description=schema.description,
         instructions=getattr(schema, "instructions", []),
+        requires_signin=getattr(schema, "requires_signin", False),
+        one_response=getattr(schema, "one_response", None),
+        email_collection=getattr(schema, "email_collection", "unknown"),
     )
 
 

@@ -26,6 +26,8 @@ The wizard's file picker opens after you press Enter. It needs a graphical deskt
 
 Public respondent URLs and `forms.gle` short links work. The wizard displays sections, instructions, descriptions, questions, choices, required fields, and supported constraints before preparing answers.
 
+For a form that requires Google login, use `gformbot generate "FORM_URL" --sign-in` (or `prepare --sign-in`). Sign in directly in the temporary form browser; the tool reuses that session and stores no credentials in response files. This requires an interactive terminal and a visible browser. Review and check verified-email consent yourself when prompted. Google may refuse automated-browser login; access and per-account response limits still apply.
+
 ```bash
 # Prepare answers for later.
 gformbot prepare "FORM_URL" -n 10 -m "Varied fictional student profiles"
@@ -87,7 +89,7 @@ Short text occupies one line; paragraphs may contain newlines. Supported email a
 
 Dates use `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`; yearless questions use `MM-DD` with optional time. Google Forms CSV dates are normalized without changing the source. Ambiguous month/day ordering needs a choice; impossible dates and nonzero seconds are rejected.
 
-Supported questions include short text, paragraphs, multiple choice, checkboxes, dropdowns, numeric scales, and dates with optional year/time. Instruction blocks and section descriptions are retained as text. Uploads, grids, standalone time/duration, unsupported rating types, branching, free-text “Other,” sign-in requirements, and unsupported custom validation stop execution. Browser navigation expects English Next/Submit labels.
+Supported questions include short text, paragraphs, multiple choice, checkboxes, dropdowns, numeric scales, and dates with optional year/time. Instruction blocks and section descriptions are retained as text. Uploads, grids, standalone time/duration, unsupported rating types, branching, free-text “Other,” and unsupported custom validation stop execution. Browser navigation and verified-email consent expect English labels. Known one-response limits stop incompatible batches; closed, restricted, or already-answered forms retain unfinished work.
 
 ## Other commands
 

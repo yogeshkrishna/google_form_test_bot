@@ -31,6 +31,7 @@ def batch():
 
 class ReviewDriver:
     def __init__(self):
+        self.current_url = "https://docs.google.com/forms/d/e/test/viewform"
         self.current_window_handle = "tab1"
         self.window_handles = ["tab1"]
         self.switch_to = self
@@ -50,7 +51,7 @@ class ReviewDriver:
     def quit(self):
         self.events.append(("quit",))
 
-    def execute_script(self, script, value):
+    def execute_script(self, script, value=None):
         self.events.append(("title", self.current_window_handle, value))
 
 
@@ -65,8 +66,10 @@ def execution(config, monkeypatch, mode):
     logs = []
     monkeypatch.setattr(logger, "log_result", lambda *args, **kwargs: logs.append(args))
 
-    def fill(c, answer, submit, driver):
+    def fill(c, answer, submit, driver, before_review=None):
         assert submit is False
+        if before_review:
+            before_review()
         driver.events.append(("fill", driver.current_window_handle, answer[1]))
         return True, "filled"
 

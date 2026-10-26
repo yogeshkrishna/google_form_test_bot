@@ -28,6 +28,19 @@ class Runner:
             self.config._plan_digest = self.session.digest  # Legacy private callback compatibility.
         self.log(index, True, "submitted manually")
 
+    def confirmed(self, driver, index):
+        from .access import FormAccessError, check_browser_access
+        from .filler import _positive_confirmation
+
+        try:
+            check_browser_access(driver)
+        except FormAccessError as exc:
+            if self.session:
+                self.session.failed(index, uncertain=True)
+            self.ui._info(f"Response {self.original(index)} stopped: {exc} Its answers remain saved.")
+            return None
+        return _positive_confirmation(driver, self.config.confirmation_text, self.config.url)
+
     def review_mode(self, submit):
         c, ui = self.config, self.ui
         if submit or c.headless or c.browser == "headless" or not sys.stdin.isatty():
@@ -49,9 +62,7 @@ class Runner:
     def wait_manual(self, driver, pending, *, tabs=False):
         from selenium.common.exceptions import WebDriverException
 
-        from .filler import _positive_confirmation
-
-        ui, c = self.ui, self.config
+        ui = self.ui
         ui._info(
             "Click Submit in the browser when ready. Press Ctrl+C to choose whether to wait or save and exit."
         )
@@ -75,7 +86,11 @@ class Runner:
                         continue
                     if tabs:
                         driver.switch_to.window(handle)
-                    if _positive_confirmation(driver, c.confirmation_text, c.url):
+                    status = self.confirmed(driver, index)
+                    if status is None:
+                        all_confirmed = False
+                        del pending[handle]
+                    elif status:
                         self.confirm(index)
                         del pending[handle]
                         ui._info(f"Response {self.original(index)}: manual submission confirmed.")
@@ -107,14 +122,16 @@ class Runner:
         from selenium.common.exceptions import WebDriverException
 
         from .browser import get_driver
-        from .filler import _positive_confirmation, submit_response
+        from .filler import submit_response
 
         ui, c = self.ui, self.config
-        viewer, opened = None, {}
+        resource = getattr(c, "_form_browser", None)
+        viewer, opened = resource.driver if resource else None, {}
 
         def check():
             if viewer is None:
-                return
+                return True
+            accessible = True
             for handle, index in list(opened.items()):
                 if handle not in viewer.window_handles:
                     if self.session:
@@ -125,10 +142,15 @@ class Runner:
                     )
                     continue
                 viewer.switch_to.window(handle)
-                if _positive_confirmation(viewer, c.confirmation_text, c.url):
+                status = self.confirmed(viewer, index)
+                if status is None:
+                    accessible = False
+                    del opened[handle]
+                elif status:
                     self.confirm(index)
                     pending.pop(index, None)
                     del opened[handle]
+            return accessible
 
         try:
             while pending:
@@ -142,10 +164,10 @@ class Runner:
                     default="open",
                 )
                 if choice == "stop":
-                    check()
-                    return not pending
+                    return check() and not pending
                 if choice == "check":
-                    check()
+                    if not check():
+                        return False
                     continue
                 index = (
                     next(iter(pending))
@@ -168,7 +190,8 @@ class Runner:
                 existing = next((h for h, i in opened.items() if i == index), None)
                 if existing:
                     if existing not in viewer.window_handles:
-                        check()
+                        if not check():
+                            return False
                         continue
                     viewer.switch_to.window(existing)
                 else:
@@ -176,12 +199,15 @@ class Runner:
                         viewer = get_driver(c.browser, headless=False)
                     elif opened:
                         viewer.switch_to.new_window("tab")
-                    if self.session:
-                        self.session.review(index)
                     ui._info(
                         f"Opening response {self.original(index)}. Saved answers remain unchanged unless you edit the batch."
                     )
-                    ok, message = submit_response(c, self.answers[index - 1], submit=False, driver=viewer)
+                    options = {"submit": False, "driver": viewer}
+                    if self.session:
+                        options["before_review"] = lambda i=index: self.session.review(i)
+                    if resource:
+                        options["confirm_email"] = resource.confirm_email
+                    ok, message = submit_response(c, self.answers[index - 1], **options)
                     if not ok:
                         raise ValueError(message)
                     viewer.execute_script(
@@ -200,7 +226,7 @@ class Runner:
             )
             return False
         finally:
-            if viewer is not None:
+            if viewer is not None and resource is None:
                 try:
                     viewer.quit()
                 except Exception as exc:
@@ -214,9 +240,7 @@ class Runner:
             WebDriverException,
         )
 
-        from .filler import _positive_confirmation
-
-        ui, c = self.ui, self.config
+        ui = self.ui
         unconfirmed_closed = False
         ui._info(
             "The forms are filled. Review or edit them and click Submit yourself if you choose. "
@@ -253,7 +277,11 @@ class Runner:
                         if selected != handle:
                             driver.switch_to.window(handle)
                             selected = handle
-                        if _positive_confirmation(driver, c.confirmation_text, c.url):
+                        status = self.confirmed(driver, index)
+                        if status is None:
+                            unconfirmed_closed = True
+                            del pending[handle]
+                        elif status:
                             self.confirm(index)
                             del pending[handle]
                             ui._info(f"Response {self.original(index)}: manual submission confirmed.")
@@ -277,6 +305,7 @@ class Runner:
                 return not pending and not unconfirmed_closed
 
     def run(self, *, dry_run=False, submit=False, halt=False, compact=False):
+        from .access import FormAccessError
         from .browser import get_driver
         from .config import clean_path, validate_config
         from .filler import SubmissionRejectedError, SubmissionUncertainError, submit_response
@@ -295,13 +324,25 @@ class Runner:
             ui._info("Preview only; no browser was opened.")
             return False
         validate_log_path(c.log_file)
-        current = ui.config_from_schema(inspect_form(c.url))
+        resource = getattr(c, "_form_browser", None)
+        current = ui.config_from_schema(resource.inspect(c.url) if resource else inspect_form(c.url))
+        if current.requires_signin and resource is None:
+            raise FormAccessError("login_required")
+        if current.one_response is True and len(self.answers) > 1:
+            raise ValueError("This form allows one response per Google account. Choose 1 response.")
         if schema_fingerprint(current) != schema_fingerprint(c):
             raise ValueError("The form has changed since inspection. Prepare a new response plan.")
         if getattr(c, "_instructions_known", True) and current.instructions != c.instructions:
             raise ValueError(
                 "The form instructions have changed since inspection. Prepare a new response plan."
             )
+        c.requires_signin = current.requires_signin
+        c.one_response = current.one_response
+        c.email_collection = current.email_collection
+        if resource:
+            c.headless, c.background = False, False
+            if c.browser == "headless":
+                c.browser = "auto"
         review = "halt" if halt else self.review_mode(submit)
         # Quiet review needs no hidden browser pass. Open fills each requested profile once.
         if not halt and not submit and c.background and review != "check":
@@ -322,18 +363,26 @@ class Runner:
         if not compact:
             ui._section("Submitting responses" if submit else "Testing or reviewing form filling")
         selected_browser = "auto" if halt and c.browser == "headless" else c.browser
-        driver = get_driver(selected_browser, headless=False if halt else c.headless or c.background)
+        driver = (
+            resource.driver
+            if resource
+            else get_driver(selected_browser, headless=False if halt else c.headless or c.background)
+        )
         completed, pending = 0, {}
         try:
             for index, answer in enumerate(self.answers, 1):
                 try:
                     if review in {"tabs", "halt"} and index > 1:
                         driver.switch_to.new_window("tab")
-                    if not submit and review != "check" and self.session:
-                        self.session.review(index)
                     options = {"submit": submit, "driver": driver}
+                    if self.session and (
+                        (not submit and review != "check") or (resource and c.email_collection == "verified")
+                    ):
+                        options["before_review"] = lambda i=index: self.session.review(i)
                     if submit and self.session:
                         options["before_submit"] = lambda i=index: self.session.before_submit(i)
+                    if resource:
+                        options["confirm_email"] = resource.confirm_email
                     ok, message = submit_response(c, answer, **options)
                     if not ok:
                         if self.session and submit:
@@ -375,10 +424,11 @@ class Runner:
             if halt:
                 return self.wait_halt(driver, pending)
         finally:
-            try:
-                driver.quit()
-            except Exception as exc:
-                ui._info(f"Could not close the private browser: {exc}")
+            if resource is None:
+                try:
+                    driver.quit()
+                except Exception as exc:
+                    ui._info(f"Could not close the private browser: {exc}")
         ui._info(f"Finished: {completed}/{len(self.answers)} {mode}. Log: {clean_path(c.log_file).resolve()}")
         if not submit:
             ui._info("No responses were submitted by the tool. The batch is kept for later use.")

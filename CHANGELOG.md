@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add explicit Google sign-in with a shared temporary browser session, email collection support, and checks for known response limits.
+- Report blocked forms clearly and keep manual or automatic submission outcomes conservative when access changes.
+
 ## 0.3.1
 
 - Reduce the public CLI to the guided wizard, `generate`, `prepare`, and file-based `preview`, alongside configuration, logs, diagnostics, help, and version.

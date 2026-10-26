@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from gformbot.access import FormAccessError
 from gformbot.config import config_from_schema
 from gformbot.inspector import clean_url, parse_form_html, schema_fingerprint
 
@@ -223,3 +224,108 @@ def test_sign_in_redirect_is_reported_as_access_requirement(monkeypatch):
     monkeypatch.setattr(inspector, "urlopen", lambda *args, **kwargs: Response())
     with pytest.raises(ValueError, match="sign-in or access permission"):
         inspector.inspect_form(URL)
+
+
+def policy_document(*, one_response=None, email=1, signin=False):
+    data = json.loads(document([item(1, "Name", 0)]).split(" = ", 1)[1].removesuffix(";</script>"))
+    data[1].extend([None] * (11 - len(data[1])))
+    data[1][10] = [None, one_response, None, None, None, None, email]
+    data.extend([None] * (19 - len(data)))
+    data[18] = signin
+    return "<script>FB_PUBLIC_LOAD_DATA_ = " + json.dumps(data) + ";</script>"
+
+
+@pytest.mark.parametrize(
+    ("once", "email", "signin", "expected_once", "collection", "required"),
+    [
+        (None, 1, False, False, "none", False),
+        (1, 1, False, True, "none", True),
+        (0, 2, False, False, "verified", True),
+        (0, 3, False, False, "input", False),
+        (0, 1, True, False, "none", True),
+        ("changed", 9, False, None, "unknown", False),
+    ],
+)
+def test_observed_access_policy(once, email, signin, expected_once, collection, required):
+    schema = parse_form_html(policy_document(one_response=once, email=email, signin=signin), URL)
+    assert schema.one_response is expected_once
+    assert schema.email_collection == collection
+    assert schema.requires_signin is required
+
+
+def test_missing_policy_is_unknown_without_changing_the_fingerprint():
+    schema = parse_form_html(document([item(1, "Name", 0)]), URL)
+    assert schema.one_response is None
+    assert schema.email_collection == "unknown"
+    before = schema_fingerprint(schema)
+    schema.one_response = True
+    schema.requires_signin = True
+    schema.email_collection = "verified"
+    assert schema_fingerprint(schema) == before
+
+
+def test_responder_email_is_a_required_answer_not_a_verified_identity():
+    schema = parse_form_html(policy_document(email=3), URL)
+    email, name = schema.questions
+    assert (email.index, email.entry_id, email.item_id) == (1, "emailAddress", "emailAddress")
+    assert email.text == "Email"
+    assert email.qtype == "text" and email.required
+    assert email.validation == [[2, 102]]
+    assert (name.index, name.entry_id) == (2, "1")
+    assert not schema.requires_signin
+
+
+def test_verified_email_is_not_an_answer_to_generate():
+    schema = parse_form_html(policy_document(email=2), URL)
+    assert len(schema.questions) == 1
+    assert schema.questions[0].text == "Name"
+    assert schema.requires_signin
+
+
+@pytest.mark.parametrize(
+    ("body", "state"),
+    [
+        ("<h1>You need permission</h1>", "permission_denied"),
+        ("<h1>You've already responded</h1>", "already_answered"),
+        ("<p>No longer accepting responses</p>", "closed"),
+        ("<h1>An unknown document</h1>", "unknown"),
+    ],
+)
+def test_inspection_reports_distinct_access_states(body, state):
+    with pytest.raises(FormAccessError) as failure:
+        parse_form_html(body, URL)
+    assert failure.value.state == state
+
+
+def test_borrowed_browser_is_used_and_never_closed(monkeypatch):
+    from gformbot import inspector
+
+    class Driver:
+        current_url = URL
+        page_source = policy_document(one_response=1, email=2)
+
+        def get(self, url):
+            assert url == URL
+
+        def quit(self):
+            pytest.fail("The caller owns this browser")
+
+    monkeypatch.setattr(inspector, "urlopen", lambda *a, **k: pytest.fail("Anonymous request"))
+    schema = inspector.inspect_form(URL, driver=Driver())
+    assert schema.requires_signin and schema.one_response
+
+
+def test_http_error_is_classified_without_printing_the_response(monkeypatch):
+    from io import BytesIO
+    from urllib.error import HTTPError
+
+    from gformbot import inspector
+
+    def fail(*a, **k):
+        raise HTTPError(URL, 403, "Forbidden", {}, BytesIO(b"secret@example.test"))
+
+    monkeypatch.setattr(inspector, "urlopen", fail)
+    with pytest.raises(FormAccessError) as failure:
+        inspector.inspect_form(URL)
+    assert failure.value.state == "permission_denied"
+    assert "secret" not in str(failure.value)

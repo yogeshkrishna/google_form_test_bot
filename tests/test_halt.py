@@ -15,6 +15,7 @@ from gformbot.state import Session
 
 class PrivateTabs:
     def __init__(self):
+        self.current_url = "https://docs.google.com/forms/d/e/test/viewform"
         self.window_handles = ["tab1"]
         self.current_window_handle = "tab1"
         self.switch_to = self
@@ -77,6 +78,7 @@ def halted(tmp_path, monkeypatch):
 
     def fill(config, answer, **options):
         assert options["submit"] is False and "before_submit" not in options
+        options["before_review"]()
         assert session.journal.states()[len(fills) + 1] == "reviewing"
         fills.append((driver.current_window_handle, answer, options))
         return True, "filled"

@@ -46,6 +46,9 @@ class Journal:
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS batches (batch TEXT PRIMARY KEY, content TEXT NOT NULL)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS review_claims (batch TEXT NOT NULL, response INTEGER NOT NULL, token TEXT NOT NULL, PRIMARY KEY(batch,response))"
+            )
             with connection:
                 yield connection
         finally:
@@ -64,7 +67,7 @@ class Journal:
         except (sqlite3.Error, OSError) as exc:
             raise ValueError(f"Cannot read submission journal {self.path}: {exc}") from exc
 
-    def set(self, index: int, state: str):
+    def set(self, index: int, state: str, *, from_review=None):
         if state not in {"prepared", "reviewing", "attempted", "confirmed", "uncertain"}:
             raise ValueError("Unknown execution state.")
         try:
@@ -77,9 +80,18 @@ class Journal:
                     raise UncertainSubmission(
                         f"Response {index} is confirmed and cannot be reset by a stale execution."
                     )
+                if from_review is not None:
+                    claim = connection.execute(
+                        "SELECT token FROM review_claims WHERE batch=? AND response=?", (self.identity, index)
+                    ).fetchone()
+                    if state != "attempted" or previous != ("reviewing",) or claim != (from_review,):
+                        raise UncertainSubmission(
+                            f"Response {index}'s review changed; reopen and reconcile it before submitting."
+                        )
                 if state in {"attempted", "reviewing"}:
                     current = previous
-                    if current and current[0] != "prepared":
+                    own_review = state == "attempted" and from_review is not None
+                    if current and current[0] != "prepared" and not own_review:
                         raise UncertainSubmission(
                             f"Response {index} is already {current[0]}; reconcile it before another attempt."
                         )
@@ -87,6 +99,15 @@ class Journal:
                     "INSERT INTO responses(batch,response,state) VALUES(?,?,?) ON CONFLICT(batch,response) DO UPDATE SET state=excluded.state",
                     (self.identity, index, state),
                 )
+                connection.execute(
+                    "DELETE FROM review_claims WHERE batch=? AND response=?", (self.identity, index)
+                )
+                token = uuid.uuid4().hex if state == "reviewing" else None
+                if token is not None:
+                    connection.execute(
+                        "INSERT INTO review_claims VALUES(?,?,?)", (self.identity, index, token)
+                    )
+                return token
         except (sqlite3.Error, OSError) as exc:
             raise ValueError(f"Cannot save submission state; execution stopped: {exc}") from exc
 
@@ -149,6 +170,7 @@ class Session:
         self.journal.bind(payload)
         self.confirmed = set(payload.get("submitted_indices", []))
         self.outcomes = self.journal.states()
+        self._owned_reviews = {}
         for index in self.confirmed:
             if self.outcomes.get(index) != "confirmed":
                 self.journal.set(index, "confirmed")
@@ -161,6 +183,7 @@ class Session:
 
     def reconcile(self, index: int, submitted: bool):
         self.journal.set(index, "confirmed" if submitted else "prepared")
+        self._owned_reviews.pop(index, None)
         self.outcomes[index] = "confirmed" if submitted else "prepared"
         if submitted:
             self.confirmed.add(index)
@@ -168,23 +191,30 @@ class Session:
         self._save()
 
     def before_submit(self, local_index: int):
-        self._set(local_index, "attempted")
+        original = self.ids[local_index - 1]
+        self.journal.set(original, "attempted", from_review=self._owned_reviews.get(original))
+        self._owned_reviews.pop(original, None)
+        self.outcomes[original] = "attempted"
 
     def review(self, local_index: int):
-        self._set(local_index, "reviewing")
+        self._owned_reviews[self.ids[local_index - 1]] = self._set(local_index, "reviewing")
 
     def failed(self, local_index: int, uncertain: bool):
         self._set(local_index, "uncertain" if uncertain else "prepared")
 
     def _set(self, local_index: int, state: str):
         original = self.ids[local_index - 1]
-        self.journal.set(original, state)
+        token = self.journal.set(original, state)
         self.outcomes[original] = state
+        if state != "reviewing":
+            self._owned_reviews.pop(original, None)
+        return token
 
     def confirm(self, local_index: int):
         original = self.ids[local_index - 1]
         # The journal must survive a subsequent CSV log or plan-file write failure.
         self.journal.set(original, "confirmed")
+        self._owned_reviews.pop(original, None)
         self.outcomes[original] = "confirmed"
         self.confirmed.add(original)
         self._save()
