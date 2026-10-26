@@ -17,6 +17,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
 from .config import QuestionConfig, RunConfig
+from .followups import observe_page
 from .routing import Routing
 from .validation import parse_date
 
@@ -634,6 +635,7 @@ def execute_response(
     before_submit: Callable[[], None] | None = None,
     before_review: Callable[[], None] | None = None,
     confirm_email: Callable[[], None] | None = None,
+    observe: Callable | None = None,
 ) -> dict:
     """Fill and verify the frozen response's route; submit only at its end."""
     _require_supported(form)
@@ -671,6 +673,7 @@ def execute_response(
             raise RuntimeError(
                 "Next returned to an already filled page. Check the form's validation or branching settings."
             )
+        observe_page(observe, driver, section, "section")
         if before_review is not None:
             before_review()
             before_review = None
@@ -741,7 +744,9 @@ def execute_response(
                 raise SubmissionUncertainError(
                     "Submit was attempted but the browser failed before confirmation. Check the form before retrying."
                 ) from exc
-            return {"status": "confirmed", "filled_questions": filled, "final_url": driver.current_url}
+            result = {"status": "confirmed", "filled_questions": filled, "final_url": driver.current_url}
+            observe_page(observe, driver, 0, "confirmation")
+            return result
         _click(driver, navigation)
 
         def advanced(d, signature=signature, next_section=next_section):
@@ -778,6 +783,7 @@ def submit_response(
     before_submit: Callable[[], None] | None = None,
     before_review: Callable[[], None] | None = None,
     confirm_email: Callable[[], None] | None = None,
+    observe: Callable | None = None,
 ) -> tuple[bool, str]:
     """Run one response; a supplied private driver can be reused for a batch."""
     from .browser import get_driver
@@ -794,6 +800,7 @@ def submit_response(
             before_submit=before_submit,
             before_review=before_review,
             confirm_email=confirm_email,
+            observe=observe,
         )
         return True, "submitted" if result["status"] == "confirmed" else "filled"
     finally:

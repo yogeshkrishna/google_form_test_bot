@@ -201,7 +201,7 @@ def setup_execution(config, monkeypatch):
 def test_batch_reuses_one_browser_and_exact_answers(config, monkeypatch):
     state = setup_execution(config, monkeypatch)
 
-    def execute(c, answer, submit, driver):
+    def execute(c, answer, submit, driver, observe=None):
         state.calls.append((dict(answer), submit, driver))
         return True, "filled"
 

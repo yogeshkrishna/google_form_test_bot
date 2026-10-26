@@ -1740,8 +1740,15 @@ def config_cmd(config_path, show, edit):
 @cli.command()
 @click.argument("log_path", default="gformbot-runs.csv")
 @click.option("-n", "--last", default=20, type=click.IntRange(1, 500))
-def log(log_path, last):
+@click.option("--followups", is_flag=True, help="Show saved form instructions and links.")
+def log(log_path, last, followups):
     """Show recent run results, including complete response data."""
+    if followups:
+        from .followups import display
+        from .state import Journal
+
+        display(Journal("").followups(log_path=log_path, last=last), sys.modules[__name__], full=True)
+        return
     path = clean_path(log_path)
     if not path.exists():
         _info("No run log yet.")

@@ -284,6 +284,7 @@ def test_runner_uses_borrowed_authenticated_driver_and_leaves_cleanup_to_owner(t
     ui = SimpleNamespace(config_from_schema=lambda schema: schema, _info=lambda message: None)
     assert Runner(config, [{1: "A fictional answer"}], ui).run(submit=True, compact=True)
     assert inspected == [URL]
+    assert callable(fills[0][2].pop("observe"))
     assert fills[0][2] == {"submit": True, "driver": driver, "confirm_email": confirm_email}
     assert driver.quits == 0 and not config.headless and not config.background
 

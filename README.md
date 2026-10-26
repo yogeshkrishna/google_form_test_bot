@@ -68,6 +68,10 @@ Imported CSV/JSON files are never deleted. Files saved by `prepare` remain avail
 
 Run logs record prepared answers and outcomes. Manual changes in a browser can differ from the prepared values.
 
+Form directions and link destinations are saved from the introduction, visited sections, question descriptions, and the confirmed completion screen. A short **Next steps** summary shows links and custom completion messages once. Read everything later with `gformbot log --followups`, or `gformbot log "custom-runs.csv" --followups` for a custom log. `--last` limits the number of responses shown. These notes stay in the local journal after temporary response files are cleaned up.
+
+Completion messages are captured only when the browser confirms submission, including manual review and `--halt`. Filling alone or manually reconciling an uncertain result does not create a completion observation. The tool never follows these links or performs outside actions. Public group invites are preserved; embedded URL credentials, account/edit-response links and known secret URL parameters are excluded or redacted. Redacted links may not work. Ordinary instruction text is retained without automatic secret detection.
+
 ## ChatGPT generation
 
 AI generation uses [ChatGPT](https://chatgpt.com/) in a visible private browser, with no model download, local server, or API key. Website limits apply; you may need to sign in or complete verification yourself. Browser setup is checked before generation.
@@ -97,6 +101,7 @@ Supported questions include short text, paragraphs, multiple choice, checkboxes,
 gformbot config --show
 gformbot config --edit
 gformbot log --last 20
+gformbot log --followups
 gformbot doctor
 gformbot --help
 gformbot --version

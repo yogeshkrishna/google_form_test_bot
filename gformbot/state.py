@@ -49,6 +49,12 @@ class Journal:
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS review_claims (batch TEXT NOT NULL, response INTEGER NOT NULL, token TEXT NOT NULL, PRIMARY KEY(batch,response))"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS followups (batch TEXT NOT NULL, response INTEGER NOT NULL, "
+                "section INTEGER NOT NULL, stage TEXT NOT NULL, content TEXT NOT NULL, "
+                "log_path TEXT NOT NULL, title TEXT NOT NULL, "
+                "PRIMARY KEY(batch,response,section,stage,content))"
+            )
             with connection:
                 yield connection
         finally:
@@ -66,6 +72,52 @@ class Journal:
                 )
         except (sqlite3.Error, OSError) as exc:
             raise ValueError(f"Cannot read submission journal {self.path}: {exc}") from exc
+
+    def record_followups(self, response, section, stage, blocks, log_path, title):
+        from .config import clean_path
+
+        path = str(clean_path(log_path).resolve())
+        with self._connect() as connection:
+            connection.executemany(
+                "INSERT OR IGNORE INTO followups VALUES(?,?,?,?,?,?,?)",
+                [
+                    (
+                        self.identity,
+                        response,
+                        section,
+                        stage,
+                        json.dumps(block, sort_keys=True, ensure_ascii=False),
+                        path,
+                        title,
+                    )
+                    for block in blocks
+                ],
+            )
+
+    def followups(self, *, log_path=None, last=20):
+        from .config import clean_path
+
+        if not self.path.exists():
+            return []
+        where, args = (
+            ("batch=?", [self.identity])
+            if log_path is None
+            else ("log_path=?", [str(clean_path(log_path).resolve())])
+        )
+        with self._connect() as connection:
+            rows = connection.execute(
+                "WITH scoped AS (SELECT rowid AS ordinal,* FROM followups WHERE "
+                + where
+                + "), recent AS (SELECT batch,response,MAX(ordinal) AS newest FROM scoped "
+                "GROUP BY batch,response ORDER BY newest DESC LIMIT ?) "
+                "SELECT f.batch,f.response,f.section,f.stage,f.content,f.title FROM scoped f "
+                "JOIN recent r ON f.batch=r.batch AND f.response=r.response ORDER BY f.ordinal",
+                [*args, last],
+            ).fetchall()
+        return [
+            dict(batch=b, response=r, section=s, stage=t, content=json.loads(c), title=title)
+            for b, r, s, t, c, title in rows
+        ]
 
     def set(self, index: int, state: str, *, from_review=None):
         if state not in {"prepared", "reviewing", "attempted", "confirmed", "uncertain"}:
