@@ -114,12 +114,12 @@ def test_common_field_types_roundtrip():
     assert schema_fingerprint(config_from_schema(form)) == schema_fingerprint(form)
 
 
-def test_unsupported_controls_and_branching_are_visible():
+def test_unsupported_controls_remain_visible_alongside_routing():
     branch = item(2, "Branch", 2, ["A"])
-    branch[4][0][1][0][2] = 123
+    branch[4][0][1][0][2] = -3
     form = parse_form_html(document([item(1, "Upload", 13), branch]), URL)
     assert "file upload" in form.unsupported[0]
-    assert "branching" in form.unsupported[1]
+    assert form.questions[1].branches == {"A": 0}
     with pytest.raises(GFormBotError, match="cannot be filled reliably"):
         form.require_supported()
 

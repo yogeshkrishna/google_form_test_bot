@@ -17,6 +17,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
 from .config import QuestionConfig, RunConfig
+from .routing import Routing
 from .validation import parse_date
 
 _SUPPORTED = {"radio", "checkbox", "dropdown", "scale", "text", "textarea", "date"}
@@ -600,6 +601,20 @@ def _empty_section_marker(driver, form: RunConfig, section: int):
     expected = {_normalized(form.sections[section])}
     if section == 0:
         expected.add(_normalized(form.form_title))
+    ids = getattr(form, "section_ids", [])
+    if ids and section > 0:
+        for element in _visible(driver.find_elements(By.CSS_SELECTOR, "[data-item-id], [data-params]")):
+            identity = element.get_attribute("data-item-id")
+            if not identity:
+                match = re.match(r"\s*%\.@\.\[\s*(\d+)", element.get_attribute("data-params") or "")
+                identity = match.group(1) if match else None
+            if identity == ids[section]:
+                return element
+    if section > 0 and any(
+        i != section and _normalized(title) in expected and not any(q.page == i + 1 for q in form.questions)
+        for i, title in enumerate(form.sections)
+    ):
+        return None
     headings = _visible(
         driver.find_elements(
             By.CSS_SELECTOR,
@@ -620,25 +635,29 @@ def execute_response(
     before_review: Callable[[], None] | None = None,
     confirm_email: Callable[[], None] | None = None,
 ) -> dict:
-    """Fill every known page; return before Submit unless submit=True."""
+    """Fill and verify the frozen response's route; submit only at its end."""
     _require_supported(form)
+    routes = getattr(form, "_routing", None) or Routing(form)
+    path = list(routes.walk(answers))
+    planned = {q.index for section in path for q in routes.questions[section]}
     driver._gformbot_submission_clicked = False
     driver.get(form.url)
     _wait(driver, timeout, lambda d: d.find_elements(By.TAG_NAME, "body"), "The form page did not load.")
     seen = set()
     signatures = set()
     filled = []
-    page_cap = max(2, len(form.sections) + 2)
-    for page_index in range(page_cap):
+    for step, section in enumerate(path):
+        page_index = section - 1
+        next_section = path[step + 1] if step + 1 < len(path) else None
         _check_interstitial(driver)
-        if page_index == 0:
+        if step == 0:
             if _verify_email_consent(driver, form, confirm_email, before_review):
                 before_review = None
         page = _page_questions(driver, form)
         signature = tuple(question.index for question, _box in page)
-        if page and {(q.page - 1) for q, _box in page} != {page_index}:
+        if {q.index for q, _box in page} != {q.index for q in routes.questions[section]}:
             raise RuntimeError(
-                "The live sections do not follow the inspected order. Branching or a changed form cannot be filled reliably."
+                f"The live questions do not match planned section {section}. The route or form changed; submission stopped."
             )
         empty_marker = None
         if not signature:
@@ -665,12 +684,24 @@ def execute_response(
         errors = _validation_errors(driver)
         if errors:
             raise RuntimeError("Form validation failed: " + "; ".join(errors))
-        submit_button = _button(driver, "Submit")
+        label = "Next" if next_section is not None else "Submit"
+
+        def navigation_ready(d, label=label):
+            _check_interstitial(d)
+            return _button(d, label)
+
+        navigation = _wait(
+            driver,
+            timeout,
+            navigation_ready,
+            f"The planned route needs {label} in section {section}, but it did not appear. Re-inspect the form.",
+        )
+        submit_button = navigation if label == "Submit" else _button(driver, "Submit")
         if submit_button is not None:
-            missing = {q.index for q in form.questions} - seen
-            if missing:
+            missing = planned - seen
+            if missing or next_section is not None:
                 raise RuntimeError(
-                    f"Submit appeared before all planned questions were reached: {sorted(missing)}. Re-inspect the form; branching is not supported."
+                    "Submit appeared before the planned route was complete. Re-inspect the form before submitting."
                 )
             result = {"status": "filled", "filled_questions": filled, "final_url": driver.current_url}
             if not submit:
@@ -711,14 +742,9 @@ def execute_response(
                     "Submit was attempted but the browser failed before confirmation. Check the form before retrying."
                 ) from exc
             return {"status": "confirmed", "filled_questions": filled, "final_url": driver.current_url}
-        next_button = _button(driver, "Next")
-        if next_button is None:
-            raise RuntimeError(
-                "Neither Next nor Submit is visible. Use the public form link; English navigation is currently required."
-            )
-        _click(driver, next_button)
+        _click(driver, navigation)
 
-        def advanced(d, signature=signature, page_index=page_index):
+        def advanced(d, signature=signature, next_section=next_section):
             _check_interstitial(d)
             if _validation_errors(d):
                 return True
@@ -726,8 +752,8 @@ def execute_response(
                 new_signature = tuple(q.index for q, _box in _page_questions(d, form))
                 if new_signature:
                     return new_signature != signature
-                marker = _empty_section_marker(d, form, page_index + 1)
-                return marker is not None and (f"section:{page_index + 1}",) != signature
+                marker = _empty_section_marker(d, form, next_section - 1)
+                return marker is not None and (f"section:{next_section - 1}",) != signature
             except StaleElementReferenceException:
                 return False
 
@@ -740,7 +766,7 @@ def execute_response(
         errors = _validation_errors(driver)
         if errors:
             raise RuntimeError("Next was blocked by form validation: " + "; ".join(errors))
-    raise RuntimeError("The form exceeded its inspected page count. Inspect it again before running.")
+    raise RuntimeError("The planned route did not reach Submit. Inspect the form again before running.")
 
 
 def submit_response(

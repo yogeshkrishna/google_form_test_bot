@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Routing fixture</title></head>
+<body><h1>Routes</h1><form>
+<section id="section1">
+  <div role="listitem" data-item-id="101"><h2 role="heading">Respondent</h2>
+    <select name="entry.1" onchange="buttons()"><option value="">Choose</option>
+      <option>Student</option><option>Worker</option><option>Skip</option>
+    </select></div>
+</section>
+<section id="section2" hidden><h2 class="F9yp7e">Study</h2>
+  <div role="listitem" data-item-id="102"><h2 role="heading">Course</h2><input name="entry.2"></div>
+</section>
+<section id="section3" hidden><h2 class="F9yp7e">Work</h2>
+  <div role="listitem" data-item-id="103"><h2 role="heading">Job</h2><input name="entry.3"></div>
+</section>
+<section id="section4" hidden><h2 class="F9yp7e">Common</h2>
+  <div role="listitem" data-item-id="104"><h2 role="heading">Comment</h2><input name="entry.4"></div>
+</section>
+<button type="button" id="next" onclick="advance()">Next</button>
+<button type="button" id="submit" onclick="finish()" hidden>Submit</button>
+</form><script>
+const mode = new URLSearchParams(location.search).get('mode') || '';
+let current = 1, answers = {};
+if (mode === 'empty') document.querySelector('[data-item-id="102"]').remove();
+if (mode === 'radio') {
+  document.querySelector('select').outerHTML = ['Student','Worker','Skip'].map(choice =>
+    '<label><input type="radio" name="entry.1" aria-label="' + choice + '" value="' + choice +
+    '" onchange="buttons()">' + choice + '</label>').join('');
+}
+function destination() {
+  if (current === 1) {
+    if (mode === 'early') return 0;
+    if (mode === 'missing') return 2;
+    const chosen = document.querySelector('[name="entry.1"]:checked, select[name="entry.1"]');
+    const choice = chosen ? chosen.value : '';
+    if (mode === 'wrong') return 3;
+    return {Student: 2, Worker: 3, Skip: 0}[choice] ?? 2;
+  }
+  return current === 4 ? 0 : 4;
+}
+function buttons() {
+  document.getElementById('next').hidden = destination() === 0;
+  document.getElementById('submit').hidden = destination() !== 0;
+}
+function collect() {
+  for (const field of document.querySelectorAll('#section' + current + ' [name]')) {
+    if (field.type !== 'radio' || field.checked) answers[field.name] = field.value;
+  }
+}
+function advance() {
+  collect();
+  document.getElementById('section' + current).hidden = true;
+  current = destination();
+  document.getElementById('section' + current).hidden = false;
+  buttons();
+}
+function finish() {
+  collect();
+  location.assign('/formResponse?answers=' + encodeURIComponent(JSON.stringify(answers)));
+}
+buttons();
+</script></body></html>

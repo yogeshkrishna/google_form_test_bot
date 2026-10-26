@@ -11,7 +11,6 @@ import tempfile
 from collections import Counter
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +20,7 @@ from selenium.common.exceptions import WebDriverException
 from gformbot.config import RunConfig, clean_path, config_to_dict, validate_config
 from gformbot.generator import validate_answer
 from gformbot.inspector import schema_fingerprint
+from gformbot.routing import Routing
 from gformbot.validation import EMAIL_PATTERN, date_format, date_pattern, needs_email
 
 from .chatgpt import ChatGPTError
@@ -115,6 +115,7 @@ def _restore_checkpoint(path, key, count, config, partials):
         if not isinstance(rows, list) or len(rows) != count:
             raise ValueError("The checkpoint response count is inconsistent.")
         answers = []
+        routes = Routing(config)
         expected = {str(q.index) for q in config.questions}
         fixed = {q.index: q.fixed_value for q in config.questions if q.fixed_value is not None}
         for index, row in enumerate(rows):
@@ -123,7 +124,7 @@ def _restore_checkpoint(path, key, count, config, partials):
                 continue
             if not isinstance(row, dict) or set(row) != expected:
                 raise ValueError(f"Checkpoint response {index + 1} has inconsistent question keys.")
-            answer = validate_answer(config, row)
+            answer = validate_answer(config, row, routing=routes)
             _preserve_presets(answer, fixed, partials[index] if partials is not None else None)
             answers.append(answer)
         date = payload.get("context_date")
@@ -162,8 +163,9 @@ def _encode_profile(config: RunConfig, row: dict) -> dict:
     return result
 
 
-def _decode_profile(config: RunConfig, row: dict) -> dict:
+def _decode_profile(config: RunConfig, row: dict, *, routing=None) -> dict:
     result = dict(row)
+    conditional = (routing or Routing(config)).enabled
     for question in config.questions:
         key = str(question.index)
         value = result.get(key)
@@ -173,7 +175,11 @@ def _decode_profile(config: RunConfig, row: dict) -> dict:
             if isinstance(option, bool):
                 raise ValueError(f"Q{key}: option IDs must be integers.")
             if isinstance(option, int) and question.qtype in ("radio", "checkbox", "dropdown", "scale"):
-                if option == 0 and not question.required and question.qtype != "checkbox":
+                if (
+                    option == 0
+                    and (not question.required or conditional and question.page > 1)
+                    and question.qtype != "checkbox"
+                ):
                     option = ""
                 elif 1 <= option <= len(question.options):
                     option = question.options[option - 1]
@@ -184,37 +190,37 @@ def _decode_profile(config: RunConfig, row: dict) -> dict:
     return result
 
 
-def _response_schema(config: RunConfig, count: int) -> dict:
+def _response_schema(config: RunConfig, count: int, *, routing=None) -> dict:
     properties = {}
+    conditional = (routing or Routing(config)).enabled
     for question in config.questions:
         key = str(question.index)
+        required = question.required and not (conditional and question.page > 1)
         if question.qtype == "checkbox":
             maximum = question.max_select if question.max_select is not None else len(question.options)
             schema = {
                 "type": "array",
                 "items": {"type": "integer", "enum": list(range(1, len(question.options) + 1))},
                 "uniqueItems": True,
-                "minItems": max(int(question.required), getattr(question, "min_select", 0) or 0),
+                "minItems": max(int(required), getattr(question, "min_select", 0) or 0),
                 "maxItems": min(maximum, len(question.options)),
             }
-            if not question.required and schema["minItems"]:
+            if not required and schema["minItems"]:
                 schema = {"anyOf": [{"type": "array", "maxItems": 0}, schema]}
         elif question.options and question.qtype in ("radio", "dropdown", "scale"):
             schema = {
                 "type": "integer",
-                "enum": list(range(1, len(question.options) + 1)) + ([] if question.required else [0]),
+                "enum": list(range(1, len(question.options) + 1)) + ([] if required else [0]),
             }
         elif question.qtype in ("text", "textarea"):
-            schema = {"type": "string", "minLength": int(question.required)}
+            schema = {"type": "string", "minLength": int(required)}
             if needs_email(question):
-                schema["pattern"] = (
-                    "^" + EMAIL_PATTERN + "$" if question.required else "^(?:" + EMAIL_PATTERN + ")?$"
-                )
+                schema["pattern"] = "^" + EMAIL_PATTERN + "$" if required else "^(?:" + EMAIL_PATTERN + ")?$"
         elif question.qtype == "date":
             pattern = date_pattern(question)
             schema = {
                 "type": "string",
-                "pattern": "^" + pattern + "$" if question.required else "^(?:" + pattern + ")?$",
+                "pattern": "^" + pattern + "$" if required else "^(?:" + pattern + ")?$",
             }
         else:
             raise GenerationError(
@@ -246,11 +252,15 @@ def _response_schema(config: RunConfig, count: int) -> dict:
 def _reference_context(config: RunConfig, reference: list[dict[int, Any]]) -> dict:
     """Keep joint examples and full-pool choice frequencies within a small prompt."""
     frequencies = {}
+    routes = Routing(config)
+    active = [routes.active(row) for row in reference]
     for question in config.questions:
         if not question.options:
             continue
         counts = Counter()
-        for row in reference:
+        for row, reached in zip(reference, active, strict=True):
+            if question.index not in reached:
+                continue
             value = row[question.index]
             counts.update(value if isinstance(value, list) else [value])
         frequencies[str(question.index)] = {
@@ -262,7 +272,9 @@ def _reference_context(config: RunConfig, reference: list[dict[int, Any]]) -> di
     examples = [
         {
             str(key): value[:500] if isinstance(value, str) else value
-            for key, value in _encode_profile(config, reference[i]).items()
+            for key, value in _encode_profile(
+                config, {key: value for key, value in reference[i].items() if key in active[i]}
+            ).items()
         }
         for i in indexes
     ]
@@ -270,7 +282,7 @@ def _reference_context(config: RunConfig, reference: list[dict[int, Any]]) -> di
 
 
 def _validate_batch(
-    config: RunConfig, content: str, count: int, partials: list[dict[int, Any]] | None = None
+    config: RunConfig, content: str, count: int, partials: list[dict[int, Any]] | None = None, *, routing=None
 ) -> tuple[dict[int, dict[int, Any]], list[str]]:
     if isinstance(content, str):
         fence = re.fullmatch(r"\s*```(?:json)?\s*\n(.*?)\n```\s*", content, re.S | re.I)
@@ -291,6 +303,7 @@ def _validate_batch(
     if len(parsed["responses"]) != count:
         return {}, [f"Return exactly {count} profiles; received {len(parsed['responses'])}."]
     expected = {str(question.index) for question in config.questions}
+    routes = routing or Routing(config)
     fixed = {q.index: q.fixed_value for q in config.questions if q.fixed_value is not None}
     valid, errors = {}, []
     for index, row in enumerate(parsed["responses"], 1):
@@ -300,8 +313,10 @@ def _validate_batch(
             )
             continue
         try:
-            decoded = _decode_profile(config, row)
-            answer = validate_answer(config, {int(key): value for key, value in decoded.items()})
+            decoded = _decode_profile(config, row, routing=routes)
+            answer = validate_answer(
+                config, {int(key): value for key, value in decoded.items()}, routing=routes
+            )
             _preserve_presets(answer, fixed, partials[index - 1] if partials else None)
             valid[index - 1] = answer
         except ValueError as error:
@@ -343,6 +358,7 @@ def _generate_responses(
     ):
         raise GenerationError("ChatGPT response timeout must be a finite positive number.")
     validate_config(config)
+    routes = Routing(config)
     if config.unsupported:
         raise GenerationError("This form cannot be generated reliably: " + "; ".join(config.unsupported))
     if browser not in ("chrome", "firefox", "edge", "auto"):
@@ -352,8 +368,8 @@ def _generate_responses(
     if not isinstance(instructions, str) or len(instructions) > 10_000:
         raise GenerationError("Additional instructions must be text no longer than 10,000 characters.")
     # Validate support before inspecting any reference or invoking the model.
-    _response_schema(config, 1)
-    normalized_reference = [validate_answer(config, row) for row in (reference or [])]
+    _response_schema(config, 1, routing=routes)
+    normalized_reference = [validate_answer(config, row, routing=routes) for row in (reference or [])]
     if partials is not None:
         normalized = []
         allowed = {str(q.index) for q in config.questions}
@@ -361,7 +377,7 @@ def _generate_responses(
             if not isinstance(row, dict) or any(str(key) not in allowed for key in row):
                 raise GenerationError("Preselected answers must use known question indexes.")
             subset = [q for q in config.questions if q.index in row or str(q.index) in row]
-            profile = validate_answer(replace(config, questions=subset), row) if subset else {}
+            profile = validate_answer(config, row, routing=routes, partial=True) if subset else {}
             for question in subset:
                 fixed = question.fixed_value
                 value = profile[question.index]
@@ -402,6 +418,19 @@ def _generate_responses(
     }
     if normalized_reference:
         context["reference"] = _reference_context(config, normalized_reference)
+    if routes.enabled:
+        context["routing"] = {
+            "section_next": routes.destinations,
+            "choices": {
+                str(q.index): {
+                    str(i): q.branches[option]
+                    for i, option in enumerate(q.options, 1)
+                    if option in q.branches
+                }
+                for q in config.questions
+                if q.branches
+            },
+        }
     system = (
         "Create synthetic test response profiles for a form. Return only JSON matching the supplied schema. "
         "Each profile represents one internally consistent person. Use the numeric option IDs in each "
@@ -415,6 +444,14 @@ def _generate_responses(
         " If partial_profiles are supplied, preserve their answers exactly and complete only missing fields, "
         "returning profiles in the same order. Generated text must be consistent with the preselected choices."
     )
+    if routes.enabled:
+        system += (
+            " Routing starts at section 1. Section destinations are 1-based; 0 means Submit. "
+            "After answering a section, its last selected routing choice overrides section_next; "
+            "unanswered routing questions leave the default unchanged. The last physical section always ends. "
+            "Answer required questions only on the selected route. For skipped questions use 0 for a "
+            "single choice, an empty string for text/date, or an empty array for checkboxes, unless preset."
+        )
     path = clean_path(checkpoint).resolve() if checkpoint is not None else None
     job_key = ""
     if path is not None:
@@ -468,7 +505,7 @@ def _generate_responses(
                 pending = missing[batch_start : batch_start + batch_size]
                 corrections = []
                 for attempt in range(max_retries + 1):
-                    schema = _response_schema(config, len(pending))
+                    schema = _response_schema(config, len(pending), routing=routes)
                     task = {
                         **context,
                         "response_count": len(pending),
@@ -494,7 +531,9 @@ def _generate_responses(
                         content = _chat(driver, messages, schema, timeout, attention=attention)
                     except (ChatGPTError, WebDriverException, RuntimeError) as exc:
                         raise GenerationError(str(exc)) from exc
-                    valid, errors = _validate_batch(config, content, len(pending), batch_partials)
+                    valid, errors = _validate_batch(
+                        config, content, len(pending), batch_partials, routing=routes
+                    )
                     for index, answer in valid.items():
                         answers[pending[index]] = answer
                     completed += len(valid)

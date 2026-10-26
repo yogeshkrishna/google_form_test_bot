@@ -211,7 +211,7 @@ def test_access_changes_in_local_browser(stage):
         config = RunConfig(
             f"http://127.0.0.1:{server.server_port}/viewform",
             questions=[QuestionConfig(1, "Answer", "text", entry_id="42")],
-            sections=["One"],
+            sections=["One", "Two"] if stage == "next" else ["One"],
         )
         error_type = filler.SubmissionUncertainError if stage == "submit" else FormAccessError
         with pytest.raises(error_type, match="already answered"):

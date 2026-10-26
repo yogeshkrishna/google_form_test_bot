@@ -161,6 +161,9 @@ def _url_prompt():
 def _show_form(config):
     from .validation import date_format, needs_email
 
+    def destination(page):
+        return "Submit" if page == 0 else f"Section {page}: {config.sections[page - 1]}"
+
     _section(config.form_title)
     if config.form_description:
         console.print(Text(config.form_description))
@@ -186,12 +189,17 @@ def _show_form(config):
                 show_note(note)
         if q.page != previous_page:
             section = config.sections[q.page - 1] if q.page <= len(config.sections) else f"Section {q.page}"
+            if config.section_next:
+                section += " → " + destination(config.section_next[q.page - 1])
             table.add_row("", Text(section, style="bold cyan"), "", "")
             previous_page = q.page
         for note in notes:
             if note["page"] == q.page:
                 show_note(note)
-        details = "\n".join(q.options)
+        details = "\n".join(
+            option + (" → " + destination(q.branches[option]) if option in q.branches else "")
+            for option in q.options
+        )
         rules = []
         if q.min_select:
             rules.append(f"At least {q.min_select} selections")
@@ -733,6 +741,9 @@ def _track_plan(config, answers, path, expected_digest, *, interactive=None):
 
 
 def _show_answer(answer, config, index=1):
+    from .routing import Routing
+
+    active = Routing(config).active(answer)
     table = Table(title=f"Prepared response {index}", header_style="bold cyan", show_lines=True)
     table.add_column("Q", style="dim")
     table.add_column("Question", ratio=2)
@@ -740,18 +751,25 @@ def _show_answer(answer, config, index=1):
     for q in config.questions:
         value = answer[q.index]
         text = "\n".join(value) if isinstance(value, list) else value
-        table.add_row(str(q.index), Text(q.text), Text(text or "(blank)"))
+        display = (
+            (text or "(blank)") if q.index in active else ((text + " (not used)") if text else "(skipped)")
+        )
+        table.add_row(str(q.index), Text(q.text), Text(display))
     console.print(table)
 
 
 def _show_preview(config, answers):
+    from .routing import Routing
+
     _section("Preview")
     for index, answer in enumerate(answers[:3], 1):
         _show_answer(answer, config, index)
     if len(answers) > 3:
         _info(f"Showing 3 of {len(answers)} responses; all answers are in your saved file.")
-    fingerprints = [json.dumps(row, sort_keys=True, ensure_ascii=False) for row in answers]
-    blanks = sum(not value for row in answers for value in row.values())
+    routes = Routing(config)
+    used = [{index: row[index] for index in routes.active(row)} for row in answers]
+    fingerprints = [json.dumps(row, sort_keys=True, ensure_ascii=False) for row in used]
+    blanks = sum(not value for row in used for value in row.values())
     _info(
         f"Quick check: {len(fingerprints) - len(set(fingerprints))} repeated response(s); {blanks} blank answer(s). Please also check that the answers make sense."
     )
@@ -770,6 +788,7 @@ def _pending_preview(config, answers):
 
 def _edit_batch(config, answers, path):
     from .generator import validate_answer
+    from .routing import Routing
 
     done = set(getattr(config, "_submitted_indices", []))
     indexes = [i for i in range(1, len(answers) + 1) if i not in done]
@@ -781,12 +800,29 @@ def _edit_batch(config, answers, path):
         return config, answers, path
     question = _ask_select("Question", [_choice(q.index, q.text) for q in config.questions])
     current = answers[index - 1][question]
+    routes = Routing(config)
+    previously_used = routes.active(answers[index - 1])
     default = json.dumps(current, ensure_ascii=False) if isinstance(current, list) else current
     while True:
         value = _ask_text("New answer (checkboxes: JSON array; type /blank for empty)", default)
         value = "" if value == "/blank" else value
         candidate = {**answers[index - 1], question: value}
         try:
+            if routes.enabled:
+                for page in routes.walk(candidate):
+                    for q in routes.questions[page]:
+                        if q.index in previously_used or q.index == question:
+                            continue
+                        while True:
+                            try:
+                                validate_answer(
+                                    config, {q.index: candidate[q.index]}, partial=True, routing=routes
+                                )
+                                break
+                            except ValueError as exc:
+                                _info(str(exc))
+                                entry = _ask_text(f"Answer needed for this route: {q.text}")
+                                candidate[q.index] = "" if entry == "/blank" else entry
             candidate = validate_answer(config, candidate)
             break
         except ValueError as exc:
@@ -1038,6 +1074,9 @@ def _prepare_source(config, source):
         _check_response_limit(config)
         return prepare_responses(config, profiles, sampling=mode)
     from .generator import CHOICE_TYPES, _random_from_options, apply_reference_weights
+    from .routing import Routing
+
+    routes = Routing(config)
 
     other = [q for q in config.questions if q.qtype not in CHOICE_TYPES and q.fixed_value is None]
     use_ai = False
@@ -1046,7 +1085,7 @@ def _prepare_source(config, source):
             "Random selection supports multiple choice, checkboxes, dropdowns and numeric scales. This form also has text or date questions."
         )
         use_ai = _ask_confirm("Auto-generate answers for the other questions?")
-        if not use_ai and any(q.required for q in other):
+        if not use_ai and not routes.enabled and any(q.required for q in other):
             _info(
                 "Required written/date answers need AI or supplied fixed values. Optional answers may stay blank."
             )
@@ -1071,17 +1110,14 @@ def _prepare_source(config, source):
     partials = []
     for _ in range(config.count):
         reference_row = random.choice(reference) if reference and distribution == "auto" else None
-        partials.append(
-            {
-                q.index: q.fixed_value
-                if q.fixed_value is not None
-                else reference_row[q.index]
-                if reference_row is not None
-                else _random_from_options(q)
-                for q in config.questions
-                if q.fixed_value is not None or q.qtype in CHOICE_TYPES
-            }
-        )
+        row = {q.index: q.fixed_value for q in config.questions if q.fixed_value is not None}
+        for page in routes.walk(row):
+            for q in routes.questions[page]:
+                if q.fixed_value is None and q.qtype in CHOICE_TYPES:
+                    row[q.index] = (
+                        reference_row[q.index] if reference_row is not None else _random_from_options(q)
+                    )
+        partials.append(row)
     if use_ai:
         return _generate(config, reference, instructions, partials=partials)
     from .generator import validate_answer

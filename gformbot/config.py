@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,7 @@ class QuestionConfig:
     validation: list = field(default_factory=list)
     date_include_year: bool = True
     date_include_time: bool = False
+    branches: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -69,6 +70,8 @@ class RunConfig:
     requires_signin: bool = False
     one_response: bool | None = None
     email_collection: str = "unknown"
+    section_ids: list[str] = field(default_factory=list)
+    section_next: list[int] = field(default_factory=list)
 
 
 def validate_config(config: RunConfig) -> None:
@@ -226,10 +229,13 @@ def validate_config(config: RunConfig) -> None:
             # need the answer validator, which deliberately does not recurse.
             from .generator import validate_answer
 
-            single = RunConfig(config.url, questions=[q])
+            single = RunConfig(config.url, questions=[replace(q, page=1, branches={})])
             values = [q.fixed_value] if q.fixed_value is not None else q.text_pool
             for value in values:
                 validate_answer(single, {q.index: value})
+    from .routing import Routing
+
+    Routing(config)
 
 
 def config_from_schema(schema) -> RunConfig:
@@ -253,6 +259,7 @@ def config_from_schema(schema) -> RunConfig:
                 "validation",
                 "date_include_year",
                 "date_include_time",
+                "branches",
             )
         }
         questions.append(QuestionConfig(**values))
@@ -268,6 +275,8 @@ def config_from_schema(schema) -> RunConfig:
         requires_signin=getattr(schema, "requires_signin", False),
         one_response=getattr(schema, "one_response", None),
         email_collection=getattr(schema, "email_collection", "unknown"),
+        section_ids=getattr(schema, "section_ids", []),
+        section_next=getattr(schema, "section_next", []),
     )
 
 
