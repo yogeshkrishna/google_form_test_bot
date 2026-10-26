@@ -1,25 +1,19 @@
 # Changelog
 
+## 0.3.1
+
+- Reduce the public CLI to the guided wizard, `generate`, `prepare`, and file-based `preview`, alongside configuration, logs, diagnostics, help, and version.
+- Make explicit `generate` execution fill and submit by default. Add `--halt` for filled tabs that stay open for manual submission. The wizard continues to ask which action to take.
+- Add shared count, instruction, reference-data, input-data, and browser options. Accept CSV and saved response JSON through `--data`.
+- Save persistent response JSON with `prepare`. Make `preview` open JSON in the default app, with a newest-first chooser for unfinished responses and AI progress.
+- Keep generation recovery in the guided menu. Preserve imported CSV/JSON and prepared files; clean up tool-owned temporary response JSON only after confirmed completion.
+- Retire the separate inspection, filling, replay, batch-listing, and generation-recovery command routes in favor of these workflows.
+
 ## 0.3.0
 
-### Workflow and recovery
+- Add offline saved-work recovery, generation checkpoints, quiet review, headless fill checks, and a durable submission journal with original response IDs and uncertain-outcome reconciliation.
+- Preserve whole CSV profiles with explicit sampling modes, review column mappings, validate configuration values, and retain form instructions and section descriptions.
+- Improve long checkbox parsing, header lookup, serialization, literal text filling, date handling, choice verification, and browser cleanup.
+- Add distribution checks, wheel-install smoke tests, a Python/OS test matrix, and local Chrome fixtures. Preserve version-1 saved plans and legacy configuration migration.
 
-- Resume saved batches and generation checkpoints from startup without rereading the form. Browse batch states with `batches` and check setup with `doctor`.
-- Quiet review opens and fills only the response selected by the user. A separate headless fill test checks browser behavior while retaining the batch.
-- Record execution intent and confirmation in a durable local journal before updating logs. Preserve original response numbers, skip confirmed rows, and require a human decision for uncertain outcomes.
-- Checkpoint validated generation results and support resuming or exporting the accepted subset after interruption.
-
-### Data and form handling
-
-- Preserve whole imported profiles with explicit ordered, shuffled, and sampling-with-repetition choices. Keep `--ordered` compatibility.
-- Show CSV mappings and require acknowledgment for unmatched optional questions. Reject malformed configurations, invalid fixed values, and multiline short-text answers before browser execution.
-- Preserve instruction blocks and section descriptions in inspection and AI context without changing version-1 execution fingerprints.
-- Parse long checkbox responses without recursion and index header mappings and option weights to avoid repeated scans. Make all legal random checkbox selection counts reachable.
-- Improve date normalization, literal text entry, optional empty controls, choice-state verification, and browser cleanup.
-
-### Packaging and compatibility
-
-- Keep existing CLI commands and version-1 saved plans. Accept legacy page-delay settings without emitting inactive configuration knobs.
-- Add distribution checks, installed-wheel smoke tests, a Python/OS test matrix, and local Chrome fixture CI. No package publishing or release creation is automated.
-
-Supported form types and remaining browser/validation limits are documented in the README. Generated output still requires user review for meaning and statistical suitability.
+Generated output requires review for meaning and statistical suitability. Package publishing and release creation are not automated.

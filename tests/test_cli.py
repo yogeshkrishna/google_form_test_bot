@@ -294,7 +294,9 @@ def test_explicit_new_url_does_not_reuse_default_config(config, monkeypatch, tmp
 
 @pytest.mark.parametrize("count", ["0", "501", "-1"])
 def test_cli_rejects_invalid_count_before_work(count):
-    result = CliRunner().invoke(cli.cli, ["fill", "--count", count])
+    result = CliRunner().invoke(
+        cli.cli, ["generate", "https://docs.google.com/forms/d/e/test/viewform", "--count", count]
+    )
     assert result.exit_code == 2
 
 
@@ -370,8 +372,8 @@ def test_run_success_cleanup_and_keep_files(config, monkeypatch, tmp_path, keep)
     monkeypatch.setattr(
         cli, "_run_fill", lambda c, **kwargs: calls.append((c.browser, c.headless, kwargs["submit"]))
     )
-    args = ["run", str(target), "--browser", "chrome"] + (["--keep-files"] if keep else [])
-    result = CliRunner().invoke(cli.cli, args)
+    args = [str(target), "--browser", "chrome"] + (["--keep-files"] if keep else [])
+    result = CliRunner().invoke(cli.run, args)
     assert result.exit_code == 0, result.exception
     assert calls == [("chrome", False, False)]
     assert target.exists() == generated.exists() == keep
@@ -387,7 +389,7 @@ def test_run_failures_preserve_batch(config, monkeypatch, tmp_path, abort):
         raise abort
 
     monkeypatch.setattr(cli, "_run_fill", fail)
-    result = CliRunner().invoke(cli.cli, ["run", str(target), "--headless"])
+    result = CliRunner().invoke(cli.run, [str(target), "--headless"])
     assert result.exit_code != 0
     assert target.exists() and generated.exists()
 
