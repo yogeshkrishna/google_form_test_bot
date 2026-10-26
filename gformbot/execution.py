@@ -10,6 +10,21 @@ import time
 class Runner:
     def __init__(self, config, answers, ui, session=None):
         self.config, self.answers, self.ui, self.session = config, answers, ui, session
+        import uuid
+
+        from .followups import Recorder
+        from .state import Journal
+
+        self.followups = Recorder(
+            Journal(getattr(session, "identity", None) or str(uuid.uuid4())),
+            getattr(config, "log_file", "gformbot-runs.csv"),
+            getattr(config, "form_title", "Google Form"),
+        )
+
+    def observer(self, index):
+        return lambda driver, section, stage: self.followups.observe(
+            driver, self.original(index), section, stage
+        )
 
     def original(self, index):
         return self.session.ids[index - 1] if self.session else index
@@ -39,7 +54,10 @@ class Runner:
                 self.session.failed(index, uncertain=True)
             self.ui._info(f"Response {self.original(index)} stopped: {exc} Its answers remain saved.")
             return None
-        return _positive_confirmation(driver, self.config.confirmation_text, self.config.url)
+        confirmed = _positive_confirmation(driver, self.config.confirmation_text, self.config.url)
+        if confirmed:
+            self.followups.observe(driver, self.original(index), 0, "confirmation")
+        return confirmed
 
     def review_mode(self, submit):
         c, ui = self.config, self.ui
@@ -202,7 +220,7 @@ class Runner:
                     ui._info(
                         f"Opening response {self.original(index)}. Saved answers remain unchanged unless you edit the batch."
                     )
-                    options = {"submit": False, "driver": viewer}
+                    options = {"submit": False, "driver": viewer, "observe": self.observer(index)}
                     if self.session:
                         options["before_review"] = lambda i=index: self.session.review(i)
                     if resource:
@@ -305,6 +323,12 @@ class Runner:
                 return not pending and not unconfirmed_closed
 
     def run(self, *, dry_run=False, submit=False, halt=False, compact=False):
+        try:
+            return self._run(dry_run=dry_run, submit=submit, halt=halt, compact=compact)
+        finally:
+            self.followups.show(self.ui)
+
+    def _run(self, *, dry_run=False, submit=False, halt=False, compact=False):
         from .access import FormAccessError
         from .browser import get_driver
         from .config import clean_path, validate_config
@@ -376,7 +400,7 @@ class Runner:
                 try:
                     if review in {"tabs", "halt"} and index > 1:
                         driver.switch_to.new_window("tab")
-                    options = {"submit": submit, "driver": driver}
+                    options = {"submit": submit, "driver": driver, "observe": self.observer(index)}
                     if self.session and (
                         (not submit and review != "check") or (resource and c.email_collection == "verified")
                     ):

@@ -64,6 +64,56 @@ def test_review_is_marked_after_navigation_and_before_answer_interaction(respons
     assert events == ["get", "review", "fill"]
 
 
+@pytest.mark.parametrize("outcome", ["filled", "confirmed", "rejected", "uncertain"])
+def test_observation_never_invents_success(response, monkeypatch, outcome):
+    driver, config, events = response
+    observed = []
+    monkeypatch.setattr(filler, "_positive_confirmation", lambda *args: outcome == "confirmed")
+    monkeypatch.setattr(
+        filler,
+        "_validation_errors",
+        lambda d: ["Rejected"] if outcome == "rejected" and "click" in events else [],
+    )
+    options = dict(submit=outcome != "filled", observe=lambda d, section, stage: observed.append(stage))
+    if outcome in {"rejected", "uncertain"}:
+        expected = (
+            filler.SubmissionRejectedError if outcome == "rejected" else filler.SubmissionUncertainError
+        )
+        with pytest.raises(expected):
+            filler.execute_response(driver, config, {1: "A"}, **options)
+    else:
+        assert filler.execute_response(driver, config, {1: "A"}, **options)["status"] == outcome
+    assert observed == (["section", "confirmation"] if outcome == "confirmed" else ["section"])
+
+
+def test_broken_observer_cannot_fail_a_confirmed_submission(response, monkeypatch, caplog):
+    driver, config, events = response
+    monkeypatch.setattr(filler, "_positive_confirmation", lambda *args: True)
+
+    def broken(*args):
+        raise OSError("PRIVATE URL")
+
+    assert (
+        filler.execute_response(driver, config, {1: "A"}, submit=True, observe=broken)["status"]
+        == "confirmed"
+    )
+    assert events.count("click") == 1
+    assert "PRIVATE" not in caplog.text
+
+
+def test_closure_during_capture_cannot_undo_the_confirmation(response, monkeypatch):
+    driver, config, events = response
+    monkeypatch.setattr(filler, "_positive_confirmation", lambda *args: True)
+
+    def closed(d, section, stage):
+        if stage == "confirmation":
+            del d.current_url
+            raise OSError("Browser closed during observation")
+
+    result = filler.execute_response(driver, config, {1: "A"}, submit=True, observe=closed)
+    assert result["status"] == "confirmed" and events.count("click") == 1
+
+
 def test_blocked_initial_page_never_enters_review(response, monkeypatch):
     driver, config, events = response
 

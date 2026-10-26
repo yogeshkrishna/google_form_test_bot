@@ -66,7 +66,7 @@ def execution(config, monkeypatch, mode):
     logs = []
     monkeypatch.setattr(logger, "log_result", lambda *args, **kwargs: logs.append(args))
 
-    def fill(c, answer, submit, driver, before_review=None):
+    def fill(c, answer, submit, driver, before_review=None, observe=None):
         assert submit is False
         if before_review:
             before_review()
