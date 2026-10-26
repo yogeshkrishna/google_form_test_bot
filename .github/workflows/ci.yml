@@ -64,7 +64,7 @@ jobs:
           "$RUNNER_TEMP/gformbot-wheel/bin/python" -m pip check
           "$RUNNER_TEMP/gformbot-wheel/bin/python" -m gformbot --version
           "$RUNNER_TEMP/gformbot-wheel/bin/gformbot" --help
-          for command in inspect fill preview generate generation run batches doctor config log; do
+          for command in generate prepare preview doctor config log; do
             "$RUNNER_TEMP/gformbot-wheel/bin/gformbot" "$command" --help
           done
       - uses: actions/upload-artifact@v7

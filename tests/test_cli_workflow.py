@@ -45,7 +45,7 @@ def test_saved_batches_can_list_without_inspecting_form(batch, monkeypatch):
     _, _, path = batch
     monkeypatch.setattr(cli, "_run_inspect", lambda *a, **k: pytest.fail("offline listing inspected form"))
     monkeypatch.setattr(cli, "console", Console(width=400))
-    result = CliRunner().invoke(cli.cli, ["batches"])
+    result = CliRunner().invoke(cli.batches, [])
     assert result.exit_code == 0, result.exception
     assert "Offline form" in result.output and path.name in result.output
 
@@ -109,14 +109,14 @@ def test_no_headless_overrides_saved_background_setting(batch):
 
 def test_conflicting_sampling_fails_before_inspection(monkeypatch):
     monkeypatch.setattr(cli, "_resolve_config", lambda *a, **k: pytest.fail("invalid flags inspected form"))
-    result = CliRunner().invoke(cli.cli, ["fill", "--ordered", "--sampling", "shuffle"])
+    result = CliRunner().invoke(cli.fill, ["--ordered", "--sampling", "shuffle"])
     assert isinstance(result.exception, ValueError)
     assert "cannot be combined" in str(result.exception)
 
 
 def test_preview_plan_rejects_silently_ignored_overrides(batch):
     _, _, path = batch
-    result = CliRunner().invoke(cli.cli, ["preview", "--plan", str(path), "--count", "1"])
+    result = CliRunner().invoke(cli._legacy_preview, ["--plan", str(path), "--count", "1"])
     assert isinstance(result.exception, ValueError)
 
 

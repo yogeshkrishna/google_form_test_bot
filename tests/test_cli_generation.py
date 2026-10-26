@@ -3,7 +3,6 @@
 import json
 
 import pytest
-from click.testing import CliRunner
 
 from gformbot import ai, cli, generator
 from gformbot.config import QuestionConfig, RunConfig
@@ -69,23 +68,6 @@ def test_random_completion_uses_selected_browser_and_durable_checkpoint(
     assert saved["request"]["partials"] and all(saved["responses"])
 
 
-@pytest.mark.parametrize("checkpoint", ["generated.csv", "generated.json"])
-def test_generate_rejects_checkpoint_output_collision_before_generation(
-    generation_config, monkeypatch, tmp_path, checkpoint
-):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "_run_inspect", lambda *a: generation_config)
-    monkeypatch.setattr(
-        cli, "_generate", lambda *a, **kw: pytest.fail("Collision must fail before generation")
-    )
-    result = CliRunner().invoke(
-        cli.cli, ["generate", generation_config.url, "--output", "generated.csv", "--checkpoint", checkpoint]
-    )
-    assert result.exit_code != 0
-    assert isinstance(result.exception, ValueError) and "checkpoint" in str(result.exception).lower()
-    assert not list(tmp_path.glob("generated.*"))
-
-
 def test_generation_resume_command_keeps_saved_rows_and_generates_only_missing(
     generation_config, monkeypatch, tmp_path
 ):
@@ -100,8 +82,7 @@ def test_generation_resume_command_keeps_saved_rows_and_generates_only_missing(
         return json.dumps({"responses": [{"1": 2, "2": "New second profile"}]})
 
     monkeypatch.setattr(ai, "_chat", generate)
-    result = CliRunner().invoke(cli.cli, ["generation", str(path), "--resume"])
-    assert result.exit_code == 0, result.exception
+    cli.generation.callback(str(path), resume=True, export=None)
     assert len(calls) == 1 and calls[0]["profile_numbers"] == [2]
     plans = list(tmp_path.glob("gformbot-responses*.json"))
     assert len(plans) == 1
@@ -117,8 +98,7 @@ def test_generation_export_valid_subset_never_opens_browser(generation_config, m
     before = path.read_bytes()
     monkeypatch.setattr(ai, "_open_chat", lambda *a: pytest.fail("Export must stay offline"))
     output = tmp_path / "partial.csv"
-    result = CliRunner().invoke(cli.cli, ["generation", str(path), "--export", str(output)])
-    assert result.exit_code == 0, result.exception
+    cli.generation.callback(str(path), resume=False, export=str(output))
     assert generator.load_reference(generation_config, output) == [{1: "A", 2: "Saved first profile"}]
     assert path.read_bytes() == before
 
@@ -127,10 +107,8 @@ def test_generation_resume_and_export_are_mutually_exclusive(generation_config, 
     path = tmp_path / "job.json"
     incomplete_job(generation_config, path, monkeypatch)
     monkeypatch.setattr(ai, "_open_chat", lambda *a: pytest.fail("Invalid options must not launch"))
-    result = CliRunner().invoke(
-        cli.cli, ["generation", str(path), "--resume", "--export", str(tmp_path / "partial.csv")]
-    )
-    assert result.exit_code != 0 and "not both" in str(result.exception)
+    with pytest.raises(ValueError, match="not both"):
+        cli.generation.callback(str(path), resume=True, export=str(tmp_path / "partial.csv"))
 
 
 def test_completed_generation_resume_does_not_require_browser_selection(
@@ -145,8 +123,7 @@ def test_completed_generation_resume_does_not_require_browser_selection(
     monkeypatch.setattr(
         cli, "_generation_browser", lambda: pytest.fail("Completed job needs no browser choice")
     )
-    result = CliRunner().invoke(cli.cli, ["generation", str(path), "--resume"])
-    assert result.exit_code == 0, result.exception
+    cli.generation.callback(str(path), resume=True, export=None)
     assert len(list(tmp_path.glob("gformbot-responses*.json"))) == 1
 
 
@@ -154,8 +131,8 @@ def test_generation_export_requires_importable_csv_suffix(generation_config, mon
     path = tmp_path / "job.json"
     incomplete_job(generation_config, path, monkeypatch)
     output = tmp_path / "partial.txt"
-    result = CliRunner().invoke(cli.cli, ["generation", str(path), "--export", str(output)])
-    assert result.exit_code != 0 and ".csv" in str(result.exception)
+    with pytest.raises(ValueError, match=".csv"):
+        cli.generation.callback(str(path), resume=False, export=str(output))
     assert not output.exists()
 
 

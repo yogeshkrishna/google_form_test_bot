@@ -151,7 +151,7 @@ def _url_prompt():
     if url and _ask_confirm(f"Use the form URL in your clipboard? {url}", default=True):
         return url
     while True:
-        url = _ask_text("Paste public Google Form URL")
+        url = _ask_text("Paste your public Google Form link")
         valid, message = _validate_form_url(url)
         if valid:
             return url
@@ -168,7 +168,7 @@ def _show_form(config):
     table.add_column("Q", style="dim", no_wrap=True)
     table.add_column("Question / description", ratio=3)
     table.add_column("Type / required", ratio=1)
-    table.add_column("Options / constraints", ratio=3)
+    table.add_column("Choices / rules", ratio=3)
     previous_page = None
     for q in config.questions:
         notes = [note for note in getattr(config, "instructions", []) if note["before_question"] == q.index]
@@ -222,13 +222,17 @@ def _show_form(config):
         console.print(Text(issue, style="yellow"))
 
 
-def _run_inspect(url, browser="headless", save=False, output=DEFAULT_CONFIG_NAME):
+def _run_inspect(url, browser="headless", save=False, output=DEFAULT_CONFIG_NAME, *, display=True):
     from .inspector import inspect_form
 
-    with console.status("Reading form..."):
+    if display:
+        with console.status("Reading form..."):
+            schema = inspect_form(url, browser=browser, headless=True)
+    else:
         schema = inspect_form(url, browser=browser, headless=True)
     config = config_from_schema(schema)
-    _show_form(config)
+    if display:
+        _show_form(config)
     if save:
         save_config(config, output)
         _info(f"Config saved: {clean_path(output).resolve()}")
@@ -280,11 +284,13 @@ def _mapping(config, headers):
     except ValueError as exc:
         console.print(Text(str(exc), style="yellow"))
     if proposed is not None:
-        table = Table(title="CSV column mapping", header_style="bold cyan")
+        table = Table(title="Match CSV columns to questions", header_style="bold cyan")
         table.add_column("Question")
         table.add_column("CSV column")
         for q in config.questions:
-            table.add_row(Text(q.text), Text(proposed[q.index] or "(unmatched: will be blank)"))
+            table.add_row(
+                Text(q.text), Text(proposed[q.index] or "(no matching column; answer will be blank)")
+            )
         console.print(table)
         unused = [header for header in headers if header not in proposed.values()]
         if unused:
@@ -292,11 +298,11 @@ def _mapping(config, headers):
         if all(value is not None for value in proposed.values()):
             return proposed
         choice = _ask_select(
-            "Some optional questions have no matched CSV column",
+            "Some optional questions have no matching CSV column",
             [
-                _choice("map", "Choose their source columns"),
-                _choice("blank", "Intentionally leave unmatched optional questions blank"),
-                _choice("back", "Choose another response source"),
+                _choice("map", "Choose which CSV column answers each question"),
+                _choice("blank", "Leave these optional answers blank"),
+                _choice("back", "Choose another way to get answers"),
             ],
             default="map",
         )
@@ -320,7 +326,7 @@ def _mapping(config, headers):
                 choices.insert(0, _choice("__blank__", "Leave blank"))
             if not choices:
                 raise ValueError(f"Q{q.index}: no source column is available.")
-            column = _ask_select(f"Source column for Q{q.index}: {q.text}", choices)
+            column = _ask_select(f"Which CSV column answers Q{q.index}: {q.text}?", choices)
             if column == "__blank__":
                 column = None
         mapping[q.index] = column
@@ -356,7 +362,7 @@ def _import_profiles(config, path):
                 raise
             console.print(Text(str(exc), style="yellow"))
             if not _ask_confirm(
-                "Explicitly repair checkbox duplicates, exclusive choices and excess selections? Changes will be recorded."
+                "Fix repeated checkbox choices, choices that must be picked alone, and too many selections? Each change will be listed."
             ):
                 raise click.Abort() from None
             repair = True
@@ -368,7 +374,7 @@ def _import_profiles(config, path):
 
 
 def _reference_prompt(config, required=False):
-    if required or _ask_confirm("Use an existing CSV as a reference?"):
+    if required or _ask_confirm("Use an existing CSV as a guide?"):
         path = _select_csv("Choose reference CSV")
         return _import_profiles(config, path)
     return None
@@ -379,6 +385,9 @@ def _generate(config, reference=None, instructions="", **options):
     from .previews import remember
 
     partials = options.pop("partials", None)
+    compact = options.pop("compact", False)
+    completed = False
+    progress = options.pop("progress", lambda done, total: _info(f"Generating responses: {done}/{total}"))
     if "browser" not in options:
         options["browser"] = _generation_browser()
     if "checkpoint" not in options:
@@ -390,32 +399,35 @@ def _generate(config, reference=None, instructions="", **options):
     try:
         generate = generate_responses if partials is None else complete_responses
         request = config.count if partials is None else partials
-        return generate(
+        answers = generate(
             config,
             request,
             reference=reference,
             instructions=instructions,
-            progress=lambda done, total: _info(f"Generating responses: {done}/{total}"),
+            progress=progress,
             attention=_chatgpt_attention if sys.stdin.isatty() else None,
             **options,
         )
+        completed = True
+        return answers
     finally:
         checkpoint = Path(options["checkpoint"])
         if checkpoint.is_file():
             try:
                 remember(checkpoint)
             except OSError as exc:
-                _info(f"Could not remember checkpoint location: {exc}")
-            _info(
-                f'Generation checkpoint: {checkpoint.resolve()}. Resume with gformbot generation "{checkpoint.resolve()}" --resume'
-            )
+                _info(f"Could not remember where AI progress was saved: {exc}")
+            if not compact or not completed:
+                _info(
+                    f"AI progress saved: {checkpoint.resolve()}. Open gformbot > Open saved AI work to continue."
+                )
 
 
 def _generation_browser():
     if not sys.stdin.isatty():
         return "auto"
     return _ask_select(
-        "Browser for generation",
+        "Which browser should open ChatGPT?",
         [
             _choice("auto", "Use the default installed browser"),
             _choice("chrome", "Chrome"),
@@ -440,7 +452,9 @@ def _configure_weights(config):
             default = q.weights[index] if q.weights else 1
             while True:
                 try:
-                    value = float(_ask_text(f"Weight for {option}", str(default)))
+                    value = float(
+                        _ask_text(f"Chance for {option} (higher = picked more often)", str(default))
+                    )
                     import math
 
                     if math.isfinite(value) and value >= 0:
@@ -503,7 +517,7 @@ def _save_plan(config, answers, path=None, source="prepared", *, cleanup_on_succ
         remember(target)
     except OSError as exc:
         _info(f"Preview saved, but could not remember its location: {exc}. Use the run command below.")
-    _info(f"Exact response plan: {target.resolve()}")
+    _info(f"Answers saved: {target.resolve()}")
     checkpoint = getattr(config, "_temporary_checkpoint", None)
     if checkpoint and checkpoint.is_file() and not checkpoint.is_symlink():
         try:
@@ -515,7 +529,7 @@ def _save_plan(config, answers, path=None, source="prepared", *, cleanup_on_succ
             ):
                 checkpoint.unlink()
         except (OSError, ValueError) as exc:
-            _info(f"Saved batch is ready; checkpoint kept: {exc}")
+            _info(f"Answers are saved; the AI progress file was also kept: {exc}")
     return target
 
 
@@ -534,27 +548,26 @@ def _finish_plan(path, expected_digest, keep_files=False):
 
 def _preview_instructions(path):
     path = clean_path(path).resolve()
-    _info("Preview saved. This preview step did not fill or submit the form.")
-    _info(f'Inspect the filled form later: gformbot run "{path}" --browser chrome')
-    _info(f'Submit later: gformbot run "{path}" --submit')
-    _info(
-        "Or start gformbot and choose Saved batches to open this batch directly, without reading the form again."
-    )
+    _info("Answers saved. Nothing has been filled or submitted.")
+    config, _ = _load_plan(path)
+    _info(f'Review later: gformbot generate "{config.url}" --data "{path}" --halt')
+    _info(f'Submit later: gformbot generate "{config.url}" --data "{path}"')
+    _info("Or start gformbot and choose Open saved responses to use these answers again.")
 
 
 def _next_action(saved=False):
-    choices = [] if saved else [_choice("preview", "Save preview and exit")]
+    choices = [] if saved else [_choice("preview", "Save answers and exit")]
     return _ask_select(
         "What next?",
         choices
         + [
-            _choice("fill", "Fill for review (you decide when to submit)"),
-            _choice("submit", "Fill and submit"),
-            _choice("test", "Test filling invisibly (keep the batch; no submission)"),
-            _choice("inspect", "Inspect a specific response"),
-            _choice("edit", "Edit a response and save a new batch"),
-            _choice("export", "Export the remaining responses as CSV"),
-            _choice("back", "Back; keep this batch saved"),
+            _choice("fill", "Fill for review (I click Submit myself)"),
+            _choice("submit", "Fill and submit automatically"),
+            _choice("test", "Test without a window (no submission; answers stay saved)"),
+            _choice("inspect", "View one response"),
+            _choice("edit", "Edit a response and save a copy"),
+            _choice("export", "Save remaining responses as a CSV"),
+            _choice("back", "Go back (keep my answers saved)"),
         ],
         default="fill",
     )
@@ -564,13 +577,13 @@ def _choose_browser():
     return _ask_select(
         "Browser",
         [
-            _choice("auto-background", "Background (default installed browser; opens only when chosen)"),
-            _choice("chrome-background", "Chrome (background; opens only when you choose, recommended)"),
+            _choice("auto-background", "Open only when I choose (default browser, recommended)"),
+            _choice("chrome-background", "Open only when I choose (Chrome)"),
             _choice("chrome", "Chrome (always visible)"),
-            _choice("headless", "Headless Chrome (invisible)"),
+            _choice("headless", "Chrome (no visible window)"),
             _choice("firefox", "Firefox (visible)"),
             _choice("edge", "Edge (visible)"),
-            _choice("auto", "Auto-detect default browser"),
+            _choice("auto", "Use my default browser (visible)"),
         ],
         default="auto-background",
     )
@@ -627,24 +640,24 @@ def _load_plan(path):
     return config, answers
 
 
-def _track_plan(config, answers, path, expected_digest):
+def _track_plan(config, answers, path, expected_digest, *, interactive=None):
     from .state import Session, UncertainSubmission
 
     path = clean_path(path)
     payload = json.loads(path.read_text(encoding="utf-8-sig"))
     session = Session(path, payload, expected_digest)
     for index in session.uncertain():
-        if not sys.stdin.isatty():
+        if interactive is False or not sys.stdin.isatty():
             raise UncertainSubmission(
                 f"Response {index} has an uncertain previous outcome. Reopen this batch interactively to resolve it before retrying."
             )
         _info(f"Response {index} may already have been submitted. Check Google Forms before choosing.")
         choice = _ask_select(
-            "Previous submission outcome",
+            "Was this response already submitted?",
             [
-                _choice("cancel", "Cancel; keep it unresolved"),
-                _choice("yes", "I verified it was submitted; skip it"),
-                _choice("no", "I verified it was not submitted; allow retry"),
+                _choice("cancel", "Go back without retrying"),
+                _choice("yes", "I checked: it was submitted (skip it)"),
+                _choice("no", "I checked: it was not submitted (try again)"),
             ],
             default="cancel",
         )
@@ -687,11 +700,11 @@ def _show_preview(config, answers):
     for index, answer in enumerate(answers[:3], 1):
         _show_answer(answer, config, index)
     if len(answers) > 3:
-        _info(f"Showing 3 of {len(answers)} exact responses; all are in the saved plan.")
+        _info(f"Showing 3 of {len(answers)} responses; all answers are in your saved file.")
     fingerprints = [json.dumps(row, sort_keys=True, ensure_ascii=False) for row in answers]
     blanks = sum(not value for row in answers for value in row.values())
     _info(
-        f"Quality summary: {len(fingerprints) - len(set(fingerprints))} duplicate profile(s); {blanks} blank answer(s). Format validation does not prove realism."
+        f"Quick check: {len(fingerprints) - len(set(fingerprints))} repeated response(s); {blanks} blank answer(s). Please also check that the answers make sense."
     )
 
 
@@ -699,11 +712,11 @@ def _pending_preview(config, answers):
     done = set(getattr(config, "_submitted_indices", []))
     remaining = [(i, row) for i, row in enumerate(answers, 1) if i not in done]
     if done:
-        _info(f"{len(done)} already confirmed; showing remaining original response IDs.")
+        _info(f"{len(done)} already submitted; showing the rest with their original response numbers.")
     for index, row in remaining[:3]:
         _show_answer(row, config, index)
     if len(remaining) > 3:
-        _info(f"Showing 3 of {len(remaining)} remaining responses. Choose Inspect to view any response.")
+        _info(f"Showing 3 of {len(remaining)} remaining responses. Choose View one response to see another.")
 
 
 def _edit_batch(config, answers, path):
@@ -712,7 +725,7 @@ def _edit_batch(config, answers, path):
     done = set(getattr(config, "_submitted_indices", []))
     indexes = [i for i in range(1, len(answers) + 1) if i not in done]
     index = _ask_select(
-        "Edit which original response?",
+        "Which response would you like to edit?",
         [_choice(i, f"Response {i}") for i in indexes] + [_choice("back", "Back")],
     )
     if index == "back":
@@ -745,13 +758,13 @@ def _manage_batch(config, answers, path, *, saved=False, keep_files=False):
     while True:
         action = _next_action(saved=saved) if saved else _next_action()
         if action == "back":
-            _info(f"Batch kept: {clean_path(path).resolve()}")
+            _info(f"Answers kept: {clean_path(path).resolve()}")
             return
         if action == "preview":
             _preview_instructions(path)
             return
         if action == "inspect":
-            index = _ask_number("Original response number", max_val=len(answers))
+            index = _ask_number("Response number", max_val=len(answers))
             _show_answer(answers[index - 1], config, index)
             continue
         if action == "export":
@@ -805,12 +818,17 @@ def _wait_for_manual_submissions(driver, config, pending, answers, *, tabs=False
     return _runner(config, answers).wait_manual(driver, pending, tabs=tabs)
 
 
-def _run_fill(config, dry_run=False, *, answers=None, submit=False):
+def _run_fill(config, dry_run=False, *, answers=None, submit=False, halt=False, compact=False):
     if answers is None:
         from .generator import prepare_responses
 
         answers = prepare_responses(config)
-    return _runner(config, answers).run(dry_run=dry_run, submit=submit)
+    options = {"dry_run": dry_run, "submit": submit}
+    if halt:
+        options["halt"] = True
+    if compact:
+        options["compact"] = True
+    return _runner(config, answers).run(**options)
 
 
 def _confirm_submit(config, submit, yes=False):
@@ -863,7 +881,7 @@ def _select_saved_preview(config=None):
                 unreadable += 1
         matches.sort(key=lambda item: (item[0], str(item[1].path)), reverse=True)
         _info(
-            "Saved batches, newest first. Confirmed responses are skipped; answers keep their original IDs."
+            "Saved responses, newest first. Already submitted responses are skipped; response numbers stay the same."
         )
         if unreadable:
             _info(f"Skipped {unreadable} unreadable or unrelated JSON file(s).")
@@ -875,9 +893,9 @@ def _select_saved_preview(config=None):
             for created, batch in matches
         ]
         if not choices:
-            _info("No compatible saved previews found. Save a preview for this form first, or import a CSV.")
-        choices += [_choice("refresh", "Refresh saved previews"), _choice("back", "Back to Use own data")]
-        selected = _ask_select("Saved preview", choices)
+            _info("No matching saved responses found. Save some responses first, or open a CSV.")
+        choices += [_choice("refresh", "Refresh saved responses"), _choice("back", "Back")]
+        selected = _ask_select("Saved responses", choices)
         if selected == "refresh":
             continue
         if selected == "back":
@@ -899,7 +917,7 @@ def _prepare_source(config, source):
             if source == "fresh"
             else _reference_prompt(config, required=source in {"enlarge", "reference"})
         )
-        instructions = _ask_text("Additional instructions (optional; say what to match in reference data)")
+        instructions = _ask_text("Extra instructions (optional, e.g. what to match in your CSV)")
         if source == "enlarge":
             instructions = (
                 "Generate additional fictional profiles; avoid merely copying entire reference rows. "
@@ -920,11 +938,11 @@ def _prepare_source(config, source):
 
         while True:
             kind = _ask_select(
-                "Use own data",
+                "Use my own answers",
                 [
-                    _choice("csv", "Import a CSV (opens file picker after Enter)"),
-                    _choice("saved", "Saved preview (newest first; no file picker)"),
-                    _choice("back", "Back to response sources"),
+                    _choice("csv", "Open a CSV file (press Enter to choose)"),
+                    _choice("saved", "Open saved responses (newest first; no file picker)"),
+                    _choice("back", "Back to answer choices"),
                 ],
                 default="csv",
             )
@@ -939,11 +957,11 @@ def _prepare_source(config, source):
         profiles = _import_profiles(config, path)
         config.pool_file = str(path)
         mode = _ask_select(
-            "Use complete CSV rows",
+            "How should rows be chosen from your CSV?",
             [
-                _choice("ordered", "Original order"),
-                _choice("shuffle", "Shuffle without repetition"),
-                _choice("sample", "Sample whole rows with repetition"),
+                _choice("ordered", "Use rows in order"),
+                _choice("shuffle", "Shuffle rows (use each row once)"),
+                _choice("sample", "Pick rows randomly (rows can repeat)"),
             ],
             default="ordered",
         )
@@ -977,10 +995,10 @@ def _prepare_source(config, source):
     if reference:
         apply_reference_weights(config, reference)
     distribution = _ask_select(
-        "Choice-answer distribution",
+        "How often should each choice be picked?",
         [
-            _choice("auto", "Automatic (reference frequencies if supplied; otherwise uniform)"),
-            _choice("manual", "Set frequencies manually"),
+            _choice("auto", "Automatic (follow your CSV, or use equal chances)"),
+            _choice("manual", "Set the chances myself"),
         ],
         default="auto",
     )
@@ -1016,10 +1034,10 @@ def _wizard():
         task = _ask_select(
             "Start",
             [
-                _choice("new", "Create a new response batch"),
-                _choice("saved", "Resume a saved batch"),
-                _choice("generation", "Resume or export generation"),
-                _choice("inspect", "Inspect a form"),
+                _choice("new", "Create new responses"),
+                _choice("saved", "Open saved responses"),
+                _choice("generation", "Open saved AI work"),
+                _choice("inspect", "View a form's questions"),
                 _choice("doctor", "Check setup"),
                 _choice("exit", "Exit"),
             ],
@@ -1043,17 +1061,17 @@ def _wizard():
                     if payload.get("kind") == "gformbot-generation":
                         done = sum(row is not None for row in payload["responses"])
                         count = payload["request"]["count"]
-                        status = "ready to save/export" if done == count else "prepared"
+                        status = "ready to save" if done == count else "responses ready"
                         jobs.append(
                             (path.stat().st_mtime, _choice(path, f"{path.name}: {done}/{count} {status}"))
                         )
                 except (OSError, ValueError, KeyError, TypeError, AttributeError):
                     continue
             if not jobs:
-                _info("No saved generation checkpoints found.")
+                _info("No saved AI work found.")
                 continue
             selected = _ask_select(
-                "Generation checkpoint (newest first)",
+                "Saved AI work (newest first)",
                 [item for _, item in sorted(jobs, key=lambda item: item[0], reverse=True)]
                 + [_choice("back", "Back")],
             )
@@ -1074,21 +1092,21 @@ def _new_batch_wizard():
     config._prompt_csv_count = True
     while True:
         source = _ask_select(
-            "Response source",
+            "Where should the answers come from?",
             [
-                _choice("generate", "Generate responses"),
-                _choice("own", "Use own data"),
-                _choice("random", "Random (recommended for choice questions)"),
+                _choice("generate", "Generate answers with AI"),
+                _choice("own", "Use my own answers"),
+                _choice("random", "Pick answers randomly (best for choice questions)"),
             ],
             default="generate",
         )
         if source == "generate":
             source = _ask_select(
-                "Generate",
+                "How should AI create the answers?",
                 [
-                    _choice("fresh", "Create fresh synthetic profiles"),
-                    _choice("reference", "Match the style and distribution of a reference CSV"),
-                    _choice("enlarge", "Generate additional profiles from an existing CSV"),
+                    _choice("fresh", "Create new fictional responses"),
+                    _choice("reference", "Follow an existing CSV's style and answer patterns"),
+                    _choice("enlarge", "Create extra responses based on an existing CSV"),
                 ],
                 default="fresh",
             )
@@ -1100,11 +1118,11 @@ def _new_batch_wizard():
         try:
             answers = _prepare_source(config, source)
         except FileSelectionCancelled:
-            _info("File selection cancelled. Choose a response source.")
+            _info("No file chosen. Choose another way to get answers.")
             continue
         except ValueError as exc:
             _info(f"Could not prepare responses: {exc}")
-            _info("Choose a response source to try again.")
+            _info("Choose another way to get answers and try again.")
             continue
         if answers is not None:
             break
@@ -1154,7 +1172,7 @@ def cli(ctx):
         _wizard()
 
 
-@cli.command()
+@click.command()
 @click.argument("url")
 @click.option("--save/--no-save", default=True)
 @click.option("-o", "--output", default=DEFAULT_CONFIG_NAME)
@@ -1164,7 +1182,7 @@ def inspect(url, save, output, browser):
     _run_inspect(url, browser=browser, save=save, output=output)
 
 
-@cli.command()
+@click.command()
 @click.argument("url", required=False)
 @click.option("-c", "--config", "config_path")
 @click.option("-n", "--count", type=click.IntRange(1, 500))
@@ -1233,13 +1251,13 @@ def fill(
         _preview_instructions(target)
 
 
-@cli.command()
+@click.command("preview")
 @click.argument("url", required=False)
 @click.option("-c", "--config", "config_path")
 @click.option("-n", "--count", default=None, type=click.IntRange(1, 500))
 @click.option("--pool", type=click.Path(exists=True, dir_okay=False))
 @click.option("--plan", type=click.Path(exists=True, dir_okay=False))
-def preview(url, config_path, count, pool, plan):
+def _legacy_preview(url, config_path, count, pool, plan):
     """Preview a saved plan, or prepare and save a fresh batch."""
     from .generator import prepare_responses
 
@@ -1255,72 +1273,161 @@ def preview(url, config_path, count, pool, plan):
     _preview_instructions(plan or target)
 
 
+def _response_options(function):
+    """Keep the fast and prepare-only commands on the same input contract."""
+    options = [
+        click.option(
+            "-n",
+            "--count",
+            type=click.IntRange(1, 500),
+            help="Number of responses; uses saved settings or 1.",
+        ),
+        click.option("-m", "--message", default="", help="Extra instructions for ChatGPT."),
+        click.option(
+            "--like",
+            type=click.Path(exists=True, dir_okay=False),
+            help="Use a CSV as a guide for AI answers.",
+        ),
+        click.option(
+            "--data",
+            type=click.Path(exists=True, dir_okay=False),
+            help="Use complete CSV rows or saved response JSON instead of AI.",
+        ),
+        click.option(
+            "--browser",
+            type=click.Choice(["auto", "chrome", "firefox", "edge"]),
+            help="Browser to use; defaults to saved settings or auto.",
+        ),
+    ]
+    for option in reversed(options):
+        function = option(function)
+    return click.argument("url")(function)
+
+
+def _command_answers(url, count, message, like, data, browser):
+    """Reuse the wizard's preparation path without its tables and questions."""
+    from .generator import load_reference, prepare_responses
+    from .inspector import schema_fingerprint
+
+    if data and (like or message.strip()):
+        raise ValueError("--data uses your exact answers; choose it without --like or -m.")
+    if like and clean_path(like).suffix.lower() != ".csv":
+        raise ValueError("--like needs a CSV file.")
+    if data and clean_path(data).suffix.lower() not in {".csv", ".json"}:
+        raise ValueError("--data needs a CSV file or saved response JSON.")
+    current = _run_inspect(url, display=False)
+    config = current
+    if Path(DEFAULT_CONFIG_NAME).is_file():
+        previous = load_config(DEFAULT_CONFIG_NAME)
+        if schema_fingerprint(previous) == schema_fingerprint(current):
+            config = previous
+            config.instructions = current.instructions
+    if data and clean_path(data).suffix.lower() == ".json":
+        config, answers = _load_plan(data)
+        if schema_fingerprint(config) != schema_fingerprint(current):
+            raise ValueError("The saved responses belong to a different or changed form.")
+        if config._instructions_known and config.instructions != current.instructions:
+            raise ValueError("The form instructions have changed. Prepare new responses for this form.")
+        remaining = len(answers) - len(config._submitted_indices)
+        if not remaining:
+            raise ValueError("All responses in this file were already submitted.")
+        if count is not None and count != remaining:
+            raise ValueError(
+                f"This file has {remaining} remaining responses; -n cannot change its exact answers."
+            )
+        config.browser = browser or (config.browser if config.browser != "headless" else "auto")
+        save_config(config, DEFAULT_CONFIG_NAME)
+        return config, answers, clean_path(data), False
+    if count is not None:
+        config.count = count
+    source = data or like
+    if source and (
+        not config.pool_file or clean_path(config.pool_file).resolve() != clean_path(source).resolve()
+    ):
+        config.pool_column_map = {}
+        for question in config.questions:
+            question.pool_column = None
+    config.browser = browser or (config.browser if config.browser != "headless" else "auto")
+    config.pool_file = str(clean_path(data).resolve()) if data else None
+    validate_config(config)
+    if data:
+        answers = prepare_responses(config, load_reference(config, data), ordered=True)
+    else:
+        reference = load_reference(config, like) if like else None
+        answers = _generate(config, reference, message, browser=config.browser, progress=None, compact=True)
+    path = _save_plan(config, answers, source="command")
+    save_config(config, DEFAULT_CONFIG_NAME)
+    return config, answers, path, True
+
+
 @cli.command()
-@click.argument("url")
-@click.option("-n", "--count", default=10, type=click.IntRange(1, 500))
-@click.option("--reference", type=click.Path(exists=True, dir_okay=False))
-@click.option("--instructions", default="")
-@click.option(
-    "--browser", type=click.Choice(["chrome", "firefox", "edge", "auto"]), default="auto", show_default=True
-)
-@click.option(
-    "--date-order",
-    type=click.Choice(["mdy", "dmy"]),
-    help="Resolve ambiguous numeric dates in the reference CSV.",
-)
-@click.option("-o", "--output", default="gformbot-generated.csv")
-@click.option(
-    "--checkpoint",
-    type=click.Path(dir_okay=False),
-    help="Durable generation job; reusing it resumes matching unfinished work.",
-)
-def generate(url, count, reference, instructions, browser, date_order, output, checkpoint=None):
-    """Ask ChatGPT in a private browser and save validated CSV plus JSON."""
-    from .generator import load_reference, write_csv
+@_response_options
+@click.option("--halt", is_flag=True, help="Fill visible forms without submitting, and leave them open.")
+def generate(url, count, message, like, data, browser, halt):
+    """Generate answers and submit them automatically. Use --halt to review instead."""
+    from .artifacts import digest
 
-    config = _run_inspect(url)
-    config.count = count
-    config.csv_date_order = date_order
-    target = clean_path(output)
-    if target.suffix.lower() != ".csv":
-        raise ValueError("The output filename must end in .csv.")
-    if target.exists() or target.with_suffix(".json").exists():
-        raise ValueError("Output already exists. Choose a different --output filename.")
-    if checkpoint and clean_path(checkpoint).resolve() in {
-        target.resolve(),
-        target.with_suffix(".json").resolve(),
-    }:
-        raise ValueError("The generation checkpoint must differ from the output CSV and response plan.")
-    if reference and clean_path(reference).resolve() in {
-        target.resolve(),
-        target.with_suffix(".json").resolve(),
-    }:
-        raise ValueError("Output cannot overwrite the reference CSV.")
-    profiles = load_reference(config, reference) if reference else None
-    options = {"browser": browser}
-    if checkpoint:
-        options["checkpoint"] = checkpoint
-    elif _available_path("gformbot-generation.json").resolve() in {
-        target.resolve(),
-        target.with_suffix(".json").resolve(),
-    }:
-        options["checkpoint"] = _available_path("gformbot-generation-job.json")
-    answers = _generate(config, profiles, instructions, **options)
-    write_csv(config, answers, target)
-    plan = _save_plan(
-        config,
-        answers,
-        target.with_suffix(".json"),
-        source="generate",
-        cleanup_on_success=False,
-        artifacts=[target],
-    )
-    _show_preview(config, answers)
-    _info(f"CSV saved: {target.resolve()}")
-    _preview_instructions(plan)
+    config, answers, path, owned = _command_answers(url, count, message, like, data, browser)
+    remaining = _track_plan(config, answers, path, digest(path), interactive=False)
+    _apply_browser(config, config.browser, headless=not halt)
+    finished = _run_fill(config, answers=remaining, submit=not halt, halt=halt, compact=True)
+    _finish_plan(path, config._plan_digest, keep_files=not owned or finished is False)
 
 
 @cli.command()
+@_response_options
+def prepare(url, count, message, like, data, browser):
+    """Create and save response JSON without filling or submitting the form."""
+    _, _, path, _ = _command_answers(url, count, message, like, data, browser)
+    _info(f'Ready. Open with: gformbot preview "{path.resolve()}"')
+
+
+@cli.command()
+@click.argument("file", required=False, type=click.Path(exists=True, dir_okay=False))
+def preview(file):
+    """List unfinished saved responses and open a file in its default application."""
+    from .previews import available
+
+    if file:
+        path = clean_path(file).resolve()
+        if path.suffix.lower() != ".json":
+            raise ValueError("Choose a saved JSON file.")
+    else:
+        records = []
+        for candidate in available():
+            try:
+                payload = json.loads(candidate.read_text(encoding="utf-8-sig"))
+                if payload.get("kind") == "gformbot-run":
+                    config, answers = _load_plan(candidate)
+                    count = len(answers) - len(config._submitted_indices)
+                    label = f"{config.form_title} | {count} not submitted"
+                elif payload.get("kind") == "gformbot-generation":
+                    count = payload["request"]["count"]
+                    done = sum(row is not None for row in payload["responses"])
+                    label = f"AI work | {done}/{count} responses ready"
+                else:
+                    continue
+                if count:
+                    records.append(
+                        (candidate.stat().st_mtime, _choice(candidate, f"{label} | {candidate.name}"))
+                    )
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                continue
+        if not records:
+            _info("No unfinished saved responses found.")
+            return
+        path = _ask_select(
+            "Open saved responses (newest first)",
+            [choice for _, choice in sorted(records, key=lambda item: item[0], reverse=True)]
+            + [_choice("back", "Back")],
+        )
+        if path == "back":
+            return
+    if click.launch(str(path)) != 0:
+        raise ValueError(f"Could not open {path}. Set a default application for JSON files.")
+
+
+@click.command()
 @click.argument("plan", type=click.Path(exists=True, dir_okay=False))
 @click.option("--browser", type=click.Choice(BROWSERS))
 @click.option("--headless/--no-headless", default=None)
@@ -1357,7 +1464,7 @@ def run(plan, browser, headless, dry_run, submit, yes, keep_files):
         _preview_instructions(plan)
 
 
-@cli.command()
+@click.command()
 def batches():
     """List saved response batches offline, newest first."""
     from .previews import available
@@ -1370,7 +1477,7 @@ def batches():
             records.append((payload.get("created_at", ""), path, config, len(answers)))
         except (OSError, ValueError):
             continue
-    table = Table(title="Saved batches", header_style="bold cyan")
+    table = Table(title="Saved responses", header_style="bold cyan")
     for label in ("Created", "Form", "Remaining / total", "File"):
         table.add_column(label, overflow="fold")
     for created, path, config, total in sorted(records, key=lambda item: item[0], reverse=True):
@@ -1383,7 +1490,7 @@ def batches():
     console.print(table)
 
 
-@cli.command()
+@click.command()
 @click.argument("checkpoint", type=click.Path(exists=True, dir_okay=False))
 @click.option("--resume", is_flag=True, help="Generate only the unfinished profiles.")
 @click.option(
@@ -1413,18 +1520,18 @@ def generation(checkpoint, resume, export):
         raise ValueError(f"Cannot open generation checkpoint: {exc}") from exc
     if resume and export:
         raise ValueError("Choose --resume or --export, not both.")
-    _info(f"Generation has {len(valid)}/{len(rows)} valid profiles saved.")
+    _info(f"AI responses saved: {len(valid)}/{len(rows)}.")
     if not resume and not export:
         choice = _ask_select(
-            "Generation checkpoint",
+            "Saved AI work",
             [
                 _choice(
                     "resume",
-                    "Resume missing profiles"
+                    "Continue creating the remaining responses"
                     if len(valid) < len(rows)
-                    else "Save completed profiles as a batch",
+                    else "Save the completed responses for later",
                 ),
-                _choice("export", "Export valid profiles only"),
+                _choice("export", "Save completed responses as a CSV"),
                 _choice("back", "Back"),
             ],
             default="resume",
@@ -1454,7 +1561,7 @@ def generation(checkpoint, resume, export):
     if len(valid) < len(rows):
         _info("Resuming through ChatGPT; the saved form, instructions and reference context will be sent.")
     else:
-        _info("All profiles are ready. Saving the completed batch without opening a browser.")
+        _info("All responses are ready. Saving your answers without opening a browser.")
     partials = request.get("partials")
     answers = (
         complete_responses(config, partials, **options)

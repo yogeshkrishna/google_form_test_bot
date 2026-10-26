@@ -33,14 +33,14 @@ class Runner:
         if submit or c.headless or c.browser == "headless" or not sys.stdin.isatty():
             return "check"
         return ui._ask_select(
-            "Review responses",
+            "How would you like to review the responses?",
             [
                 ui._choice("wait", "One at a time: review and submit before the next"),
                 ui._choice(
                     "tabs",
-                    "Prepare all; open chosen responses when ready"
+                    "Choose which responses to open, whenever I'm ready"
                     if c.background
-                    else "Separate private tabs",
+                    else "Open each response in a separate private tab",
                 ),
             ],
             default="wait",
@@ -52,7 +52,9 @@ class Runner:
         from .filler import _positive_confirmation
 
         ui, c = self.ui, self.config
-        ui._info("Submit when ready. Ctrl+C offers continue or close-and-keep options.")
+        ui._info(
+            "Click Submit in the browser when ready. Press Ctrl+C to choose whether to wait or save and exit."
+        )
         all_confirmed = True
         while pending:
             try:
@@ -68,7 +70,7 @@ class Runner:
                             self.session.failed(index, uncertain=True)
                         del pending[handle]
                         ui._info(
-                            f"Response {self.original(index)} closed before confirmation. Reconcile it before retrying."
+                            f"Response {self.original(index)} closed before confirmation. Check whether it was submitted before retrying."
                         )
                         continue
                     if tabs:
@@ -96,7 +98,7 @@ class Runner:
                     return False
             except WebDriverException:
                 ui._info(
-                    "Review browser closed. Unconfirmed responses require reconciliation before retrying."
+                    "The browser closed. Your answers are saved. Check whether they were submitted before retrying."
                 )
                 return False
         return all_confirmed
@@ -119,7 +121,7 @@ class Runner:
                         self.session.failed(index, uncertain=True)
                     del opened[handle]
                     ui._info(
-                        f"Response {self.original(index)} closed without confirmation; it must be reconciled before retry."
+                        f"Response {self.original(index)} closed without confirmation. Check whether it was submitted before retrying."
                     )
                     continue
                 viewer.switch_to.window(handle)
@@ -134,7 +136,7 @@ class Runner:
                     f"{len(pending)} response(s) prepared",
                     [
                         ui._choice("open", "Open a response to review, edit or submit"),
-                        ui._choice("check", "Check submissions"),
+                        ui._choice("check", "Check which responses were submitted"),
                         ui._choice("stop", "Exit and keep remaining responses saved"),
                     ],
                     default="open",
@@ -193,7 +195,9 @@ class Runner:
                     return confirmed
             return True
         except WebDriverException:
-            ui._info("Review browser disconnected. Remaining responses are kept for reconciliation.")
+            ui._info(
+                "The browser disconnected. Remaining answers are saved. Check whether they were submitted before retrying."
+            )
             return False
         finally:
             if viewer is not None:
@@ -202,7 +206,77 @@ class Runner:
                 except Exception as exc:
                     ui._info(f"Could not close the review browser: {exc}")
 
-    def run(self, *, dry_run=False, submit=False):
+    def wait_halt(self, driver, pending):
+        """Keep every review window alive until it is closed or the user stops."""
+        from selenium.common.exceptions import (
+            NoSuchWindowException,
+            StaleElementReferenceException,
+            WebDriverException,
+        )
+
+        from .filler import _positive_confirmation
+
+        ui, c = self.ui, self.config
+        unconfirmed_closed = False
+        ui._info(
+            "The forms are filled. Review or edit them and click Submit yourself if you choose. "
+            "Close the browser or press Ctrl+C when finished."
+        )
+
+        def closed(handle):
+            nonlocal unconfirmed_closed
+            index = pending.pop(handle)
+            unconfirmed_closed = True
+            if self.session:
+                self.session.failed(index, uncertain=True)
+            ui._info(
+                f"Response {self.original(index)} closed before submission was confirmed. "
+                "Its saved answers are kept; check whether it was submitted before retrying."
+            )
+
+        while True:
+            try:
+                handles = driver.window_handles
+                for handle in list(pending):
+                    if handle not in handles:
+                        closed(handle)
+                if not handles:
+                    return not pending and not unconfirmed_closed
+                try:
+                    previous = driver.current_window_handle
+                except WebDriverException:
+                    previous = None
+                selected = previous
+                ordered = sorted(list(pending.items()), key=lambda item: item[0] != previous)
+                for handle, index in ordered:
+                    try:
+                        if selected != handle:
+                            driver.switch_to.window(handle)
+                            selected = handle
+                        if _positive_confirmation(driver, c.confirmation_text, c.url):
+                            self.confirm(index)
+                            del pending[handle]
+                            ui._info(f"Response {self.original(index)}: manual submission confirmed.")
+                    except NoSuchWindowException:
+                        if handle not in driver.window_handles:
+                            closed(handle)
+                        else:
+                            raise
+                    except StaleElementReferenceException:
+                        continue  # A manual submission may replace the document during a scan.
+                if previous in driver.window_handles and selected != previous:
+                    driver.switch_to.window(previous)
+                time.sleep(1)
+            except KeyboardInterrupt:
+                ui._info("Stopped. Unconfirmed responses remain saved.")
+                return not pending and not unconfirmed_closed
+            except WebDriverException:
+                for handle in list(pending):
+                    closed(handle)
+                ui._info("The browser closed. Unconfirmed responses remain saved.")
+                return not pending and not unconfirmed_closed
+
+    def run(self, *, dry_run=False, submit=False, halt=False, compact=False):
         from .browser import get_driver
         from .config import clean_path, validate_config
         from .filler import SubmissionRejectedError, SubmissionUncertainError, submit_response
@@ -211,6 +285,8 @@ class Runner:
         from .logger import validate_log_path
 
         c, ui = self.config, self.ui
+        if halt:
+            submit = False
         validate_config(c)
         self.answers = [validate_answer(c, a) for a in self.answers]
         if len(self.answers) != c.count:
@@ -226,9 +302,9 @@ class Runner:
             raise ValueError(
                 "The form instructions have changed since inspection. Prepare a new response plan."
             )
-        review = self.review_mode(submit)
+        review = "halt" if halt else self.review_mode(submit)
         # Quiet review needs no hidden browser pass. Open fills each requested profile once.
-        if not submit and c.background and review != "check":
+        if not halt and not submit and c.background and review != "check":
             ui._info(f"Prepared {len(self.answers)} exact responses. No window opens until you choose Open.")
             if review == "tabs":
                 return self.background({i: i for i in range(1, len(self.answers) + 1)})
@@ -243,13 +319,15 @@ class Runner:
         ):
             review = "wait"
         mode = "submitted" if submit else "filled"
-        ui._section("Submitting responses" if submit else "Testing or reviewing form filling")
-        driver = get_driver(c.browser, headless=c.headless or c.background)
+        if not compact:
+            ui._section("Submitting responses" if submit else "Testing or reviewing form filling")
+        selected_browser = "auto" if halt and c.browser == "headless" else c.browser
+        driver = get_driver(selected_browser, headless=False if halt else c.headless or c.background)
         completed, pending = 0, {}
         try:
             for index, answer in enumerate(self.answers, 1):
                 try:
-                    if review == "tabs" and index > 1:
+                    if review in {"tabs", "halt"} and index > 1:
                         driver.switch_to.new_window("tab")
                     if not submit and review != "check" and self.session:
                         self.session.review(index)
@@ -294,6 +372,8 @@ class Runner:
                     time.sleep(random.uniform(c.min_delay, c.max_delay))
             if review == "tabs":
                 return self.wait_manual(driver, pending, tabs=True)
+            if halt:
+                return self.wait_halt(driver, pending)
         finally:
             try:
                 driver.quit()

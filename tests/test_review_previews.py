@@ -251,7 +251,7 @@ def test_run_stopped_review_preserves_files(batch, monkeypatch, tmp_path):
     config, answers = batch
     path = cli._save_plan(config, answers, tmp_path / "plan.json")
     monkeypatch.setattr(cli, "_run_fill", lambda *args, **kwargs: False)
-    result = CliRunner().invoke(cli.cli, ["run", str(path), "--browser", "chrome"])
+    result = CliRunner().invoke(cli.run, [str(path), "--browser", "chrome"])
     assert result.exit_code == 0, result.exception
     assert path.exists()
 
@@ -277,7 +277,7 @@ def test_broken_preview_index_does_not_hide_current_folder_plans(batch, monkeypa
 @pytest.mark.parametrize("args", [["fill", "--dry-run", "--submit"], ["fill", "--yes"]])
 def test_conflicting_execution_options_fail_before_form_access(args, monkeypatch):
     monkeypatch.setattr(cli, "_resolve_config", lambda *args: pytest.fail("No form access"))
-    result = CliRunner().invoke(cli.cli, args)
+    result = CliRunner().invoke(cli.fill, args[1:])
     assert result.exit_code != 0 and isinstance(result.exception, ValueError)
 
 
