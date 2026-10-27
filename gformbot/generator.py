@@ -9,6 +9,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
+from .answers import copy_value, csv_value, other_answer
 from .config import QuestionConfig, RunConfig, clean_path, validate_config
 from .grids import grid_groups, random_grid, validate_columns
 from .routing import Routing
@@ -211,11 +212,25 @@ def validate_answer(
             continue
         value = answer.get(q.index, answer.get(str(q.index)))
         value = ([] if q.qtype == "checkbox" else "") if value is None else value
-        if not isinstance(value, str) and not (
-            q.qtype == "checkbox" and isinstance(value, list) and all(isinstance(v, str) for v in value)
+        if (
+            q.allow_other
+            and isinstance(value, str)
+            and value not in q.options
+            and value.lstrip().startswith("{")
+        ):
+            try:
+                value = json.loads(value)
+            except ValueError as exc:
+                raise ValueError(f"Q{q.index}: invalid Other JSON object.") from exc
+        if (
+            not isinstance(value, str)
+            and not (
+                q.qtype == "checkbox" and isinstance(value, list) and all(isinstance(v, str) for v in value)
+            )
+            and not (q.allow_other and isinstance(value, dict))
         ):
             raise ValueError(f"Q{q.index}: answer must be text or a checkbox list.")
-        result[q.index] = value.copy() if isinstance(value, list) else value
+        result[q.index] = copy_value(value)
     routes = routing or Routing(config)
     active_indexes = set(result) if partial else routes.active(result)
     routes.require_supported(active_indexes)
@@ -223,6 +238,9 @@ def validate_answer(
     for q in questions:
         value = result[q.index]
         label = f"Q{q.index} ({q.text})"
+        if isinstance(value, dict):
+            result[q.index] = other_answer(q, value)
+            continue
         if q.qtype == "checkbox":
             value = parse_checkbox(q, value)
             if len(value) != len(set(value)):
@@ -354,7 +372,14 @@ def apply_reference_weights(config: RunConfig, profiles: list[dict[int, Any]]) -
             if q.index not in reached:
                 continue
             value = profile[q.index]
-            for option in value if isinstance(value, list) else [value]:
+            selections = (
+                value["choices"]
+                if isinstance(value, dict) and q.allow_other
+                else value
+                if isinstance(value, list)
+                else [value]
+            )
+            for option in selections:
                 if option in counts:
                     counts[option] += 1
         if any(counts.values()):
@@ -454,10 +479,7 @@ def prepare_responses(
             if sampling == "shuffle"
             else random.choices(profiles, k=config.count)
         )
-        return [
-            {key: value.copy() if isinstance(value, list) else value for key, value in row.items()}
-            for row in chosen
-        ]
+        return [{key: copy_value(value) for key, value in row.items()} for row in chosen]
     return [make_answer(config, routing=routes) for _ in range(config.count)]
 
 
@@ -475,14 +497,7 @@ def write_csv(config: RunConfig, answers: list[dict], path: str | Path) -> Path:
         writer.writerow(headers)
         for answer in answers:
             row = validate_answer(config, answer)
-            writer.writerow(
-                [
-                    json.dumps(row[q.index], ensure_ascii=False)
-                    if isinstance(row[q.index], list)
-                    else row[q.index]
-                    for q in config.questions
-                ]
-            )
+            writer.writerow([csv_value(row[q.index]) for q in config.questions])
     temporary.replace(target)
     return target
 
@@ -491,9 +506,6 @@ def answer_stream(config: RunConfig):
     profiles = load_reference(config, config.pool_file) if config.pool_file else None
     while True:
         if profiles:
-            yield {
-                key: value.copy() if isinstance(value, list) else value
-                for key, value in random.choice(profiles).items()
-            }
+            yield {key: copy_value(value) for key, value in random.choice(profiles).items()}
         else:
             yield make_answer(config)

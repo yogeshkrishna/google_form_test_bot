@@ -31,7 +31,7 @@ def cleanup(plan, expected_digest):
         if plan.is_symlink() or digest(plan) != expected_digest:
             return removed, [plan]
         payload = json.loads(plan.read_text(encoding="utf-8"))
-        if payload.get("kind") != "gformbot-run" or payload.get("schema_version") != 1:
+        if payload.get("kind") != "gformbot-run" or payload.get("schema_version") not in (1, 2):
             return removed, [plan]
         if payload.get("cleanup_on_success") is not True or payload.get("source") not in _TEMPORARY_SOURCES:
             return removed, preserved

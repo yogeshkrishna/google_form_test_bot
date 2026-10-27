@@ -47,7 +47,11 @@ def checkbox_bounds(question):
             minimum = max(minimum, n)
         if kind in ("maximum", "exact"):
             maximum = n if maximum is None else min(maximum, n)
-    if minimum > len(question.options) or maximum is not None and maximum < minimum:
+    if (
+        minimum > len(question.options) + int(question.allow_other)
+        or maximum is not None
+        and maximum < minimum
+    ):
         raise ValueError(f"Impossible checkbox selection constraints for {question.text!r}.")
     return minimum, maximum
 
