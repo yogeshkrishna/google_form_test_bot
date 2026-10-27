@@ -98,7 +98,13 @@ def _page_questions(driver, form: RunConfig):
             by_item.setdefault(question.item_id, []).append(question)
         by_title.setdefault(_normalized(question.text), []).append(question)
     matches, matched_indices = [], set()
-    for box in _question_boxes(driver):
+    boxes = _question_boxes(driver)
+    upload_questions = [q for q in form.questions if q.qtype == "upload"]
+    if upload_questions:
+        for box in _visible(driver.find_elements(By.CSS_SELECTOR, '[role="listitem"]')):
+            if box not in boxes and any(_heading(box) == _normalized(q.text) for q in upload_questions):
+                boxes.append(box)
+    for box in boxes:
         if getattr(form, "email_collection", "unknown") == "verified":
             consent = _verified_email_control(box)
             if consent is not None:
@@ -420,7 +426,11 @@ def _fill_time(driver, question, box, value, timeout):
             raise RuntimeError(f"The time is outside the form's allowed range for {question.text!r}.")
 
 
-def _fill_question(driver, question: QuestionConfig, box, value, timeout):
+def _fill_question(driver, question: QuestionConfig, box, value, timeout, *, uploads=None):
+    if question.qtype == "upload":
+        from .uploads import fill_upload
+
+        return fill_upload(driver, question, box, value, timeout, uploads)
     for attempt in range(3):
         try:
             return _fill_question_once(driver, question, box, value, timeout)
@@ -766,6 +776,7 @@ def execute_response(
     before_review: Callable[[], None] | None = None,
     confirm_email: Callable[[], None] | None = None,
     observe: Callable | None = None,
+    uploads=None,
 ) -> dict:
     """Fill and verify the frozen response's route; submit only at its end."""
     routes = getattr(form, "_routing", None) or Routing(form)
@@ -775,6 +786,10 @@ def execute_response(
     path = list(routes.walk(answers))
     planned = {q.index for section in path for q in routes.questions[section]}
     _require_supported(form, planned, routes)
+    if uploads is None and any(
+        q.qtype == "upload" and q.index in planned and answers[q.index] for q in form.questions
+    ):
+        raise ValueError("Attachment transfer requires a saved plan and explicit upload permission.")
     driver._gformbot_submission_clicked = False
     driver.get(form.url)
     _wait(driver, timeout, lambda d: d.find_elements(By.TAG_NAME, "body"), "The form page did not load.")
@@ -814,7 +829,14 @@ def execute_response(
         for question, box in page:
             if question.index not in answers:
                 raise RuntimeError(f"The frozen response is missing {question.text!r} ({question.index}).")
-            _fill_question(driver, question, box, answers[question.index], timeout)
+            _fill_question(
+                driver,
+                question,
+                box,
+                answers[question.index],
+                timeout,
+                **({"uploads": uploads} if question.qtype == "upload" else {}),
+            )
             filled.append(question.index)
             seen.add(question.index)
         for question, box in page:
@@ -930,6 +952,7 @@ def submit_response(
     before_review: Callable[[], None] | None = None,
     confirm_email: Callable[[], None] | None = None,
     observe: Callable | None = None,
+    uploads=None,
 ) -> tuple[bool, str]:
     """Run one response; a supplied private driver can be reused for a batch."""
     from .browser import get_driver
@@ -947,6 +970,7 @@ def submit_response(
             before_review=before_review,
             confirm_email=confirm_email,
             observe=observe,
+            **({"uploads": uploads} if uploads is not None else {}),
         )
         return True, "submitted" if result["status"] == "confirmed" else "filled"
     finally:

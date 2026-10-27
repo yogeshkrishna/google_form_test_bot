@@ -455,10 +455,44 @@ def _reference_prompt(config, required=False):
     return None
 
 
+def _select_uploads(question):
+    from .uploads import file_answer
+
+    _ask_text("Press Enter to choose attachment files (selection does not upload them)")
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            selected = filedialog.askopenfilenames(parent=root, title=question.text)
+        finally:
+            root.destroy()
+    except (ImportError, RuntimeError) as exc:
+        raise ValueError(
+            "The attachment picker needs a graphical desktop and Tk support; CSV/JSON can specify files."
+        ) from exc
+    except Exception as exc:
+        raise ValueError("Cannot open the attachment picker; CSV/JSON can specify files instead.") from exc
+    if not selected:
+        if question.required:
+            raise FileSelectionCancelled()
+        return ""
+    return file_answer(question, list(selected))
+
+
 def _generate(config, reference=None, instructions="", **options):
     from .ai import complete_responses, generate_responses
     from .previews import remember
 
+    if sys.stdin.isatty():
+        for question in config.questions:
+            if question.qtype == "upload" and question.fixed_value is None:
+                if _ask_confirm(
+                    f"Choose local files for {question.text}? They will not be uploaded during preparation."
+                ):
+                    question.fixed_value = _select_uploads(question)
     if config.media and not config.media_context.strip() and sys.stdin.isatty():
         choice = _ask_select(
             "This form contains images or videos",
@@ -581,7 +615,9 @@ def _save_plan(config, answers, path=None, source="prepared", *, cleanup_on_succ
     from .artifacts import describe
 
     payload = {
-        "schema_version": 2 if config.media or any(q.allow_other for q in config.questions) else 1,
+        "schema_version": 2
+        if config.media or any(q.allow_other or q.qtype == "upload" for q in config.questions)
+        else 1,
         "kind": "gformbot-run",
         "created_at": datetime.now().astimezone().isoformat(),
         "form_fingerprint": schema_fingerprint(config),
@@ -752,6 +788,21 @@ def _track_plan(config, answers, path, expected_digest, *, interactive=None):
         if choice == "cancel":
             raise click.Abort()
         session.reconcile(index, choice == "yes")
+    if any(q.qtype == "upload" for q in config.questions):
+        for index in session.ids:
+            for question, transfer in session.journal.upload_records(index).items():
+                if transfer["state"] == "prepared":
+                    continue
+                if interactive is False or not sys.stdin.isatty():
+                    raise UncertainSubmission(
+                        f"Response {index}, attachment Q{question} has a previous transfer. Reopen interactively to review it; uploads will not repeat automatically."
+                    )
+                if not _ask_confirm(
+                    f"Response {index}, Q{question}: files may already be uploaded. Have you checked/removed those attachments and explicitly authorize another transfer?",
+                    default=False,
+                ):
+                    raise click.Abort()
+                session.journal.reset_upload(index, question)
     if not session.ids:
         raise ValueError(
             "Every response in this preview was already confirmed submitted. Choose View or create a new batch."
@@ -835,8 +886,13 @@ def _edit_batch(config, answers, path):
     routes = Routing(config)
     previously_used = routes.active(answers[index - 1])
     default = json.dumps(current, ensure_ascii=False) if isinstance(current, (list, dict)) else current
+    selected_question = next(q for q in config.questions if q.index == question)
     while True:
-        value = _ask_text("New answer (checkboxes: JSON array; type /blank for empty)", default)
+        value = (
+            _select_uploads(selected_question)
+            if selected_question.qtype == "upload"
+            else _ask_text("New answer (checkboxes: JSON array; type /blank for empty)", default)
+        )
         value = "" if value == "/blank" else value
         candidate = {**answers[index - 1], question: value}
         try:
@@ -1543,8 +1599,23 @@ def _command_answers(
 @cli.command()
 @_response_options
 @click.option("--halt", is_flag=True, help="Fill visible forms without submitting, and leave them open.")
+@click.option(
+    "--allow-uploads",
+    is_flag=True,
+    help="Explicitly allow prepared files to transfer before Submit. Does not clear uncertain transfers.",
+)
 def generate(
-    url, count, message, like, data, browser, halt, sign_in=False, date_order=None, media_context=None
+    url,
+    count,
+    message,
+    like,
+    data,
+    browser,
+    halt,
+    sign_in=False,
+    date_order=None,
+    media_context=None,
+    allow_uploads=False,
 ):
     """Generate answers and submit them automatically. Use --halt to review instead."""
     from .artifacts import digest
@@ -1561,6 +1632,7 @@ def generate(
         **({"media_context": media_context} if media_context is not None else {}),
     )
     remaining = _track_plan(config, answers, path, digest(path), interactive=False)
+    config._allow_uploads = allow_uploads
     _apply_browser(config, config.browser, headless=not halt)
     finished = _run_fill(config, answers=remaining, submit=not halt, halt=halt, compact=True)
     _finish_plan(path, config._plan_digest, keep_files=not owned or finished is False)

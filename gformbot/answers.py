@@ -36,6 +36,10 @@ def other_answer(question, value):
 
 
 def display_value(value):
+    if isinstance(value, dict) and set(value) == {"files"}:
+        from pathlib import Path
+
+        return "\n".join(f"{Path(file['path']).name} ({file['size']} bytes)" for file in value["files"])
     if isinstance(value, dict) and set(value) == {"choices", "other"}:
         return "\n".join([*value["choices"], "Other: " + value["other"]])
     return "\n".join(value) if isinstance(value, list) else value

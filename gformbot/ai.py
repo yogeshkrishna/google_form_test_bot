@@ -156,7 +156,9 @@ def _encode_profile(config: RunConfig, row: dict) -> dict:
         if key not in row and str(key) not in row:
             continue
         value = row.get(key, row.get(str(key)))
-        if isinstance(value, dict) and question.allow_other:
+        if question.qtype == "upload":
+            value = 0
+        elif isinstance(value, dict) and question.allow_other:
             value = {
                 "choices": [question.options.index(option) + 1 for option in value["choices"]],
                 "other": value["other"],
@@ -175,6 +177,16 @@ def _decode_profile(config: RunConfig, row: dict, *, routing=None) -> dict:
     for question in config.questions:
         key = str(question.index)
         value = result.get(key)
+        if question.qtype == "upload":
+            if question.unsupported and value == "":
+                result[key] = ""
+                continue
+            if type(value) is not int or value != 0:
+                raise ValueError(f"Q{key}: AI cannot select or invent attachment paths.")
+            from .answers import copy_value
+
+            result[key] = copy_value(question.fixed_value) if question.fixed_value is not None else ""
+            continue
         structured = question.allow_other and isinstance(value, dict)
         if structured and (set(value) != {"choices", "other"} or not isinstance(value["choices"], list)):
             raise ValueError(f"Q{key}: Other needs choices and other text.")
@@ -228,6 +240,12 @@ def _response_schema(config: RunConfig, count: int, *, routing=None) -> dict:
                 "type": "string",
                 "const": "",
                 "description": "Unsupported: avoid this question's section.",
+            }
+        elif question.qtype == "upload":
+            schema = {
+                "type": "integer",
+                "const": 0,
+                "description": "Files are supplied locally; never generate file paths.",
             }
         elif question.qtype == "checkbox":
             maximum = question.max_select if question.max_select is not None else len(question.options)
@@ -423,6 +441,11 @@ def _generate_responses(
             "This form contains media. Supply --media-context with a description or an explicit decorative declaration, or use supplied answers."
         )
     routes = Routing(config)
+    for question in config.questions:
+        if question.qtype == "upload" and question.required and not question.fixed_value:
+            routes.blockers[question.index] = [
+                f"Q{question.index}: supply attachment files before generating this route."
+            ]
     try:
         routes.choose_route({q.index: q.fixed_value for q in config.questions if q.fixed_value is not None})
     except ValueError as exc:
@@ -469,6 +492,11 @@ def _generate_responses(
                 "description": question.description,
                 "page": question.page,
                 "type": question.qtype,
+                **(
+                    {"files_supplied_locally": bool(question.fixed_value)}
+                    if question.qtype == "upload"
+                    else {}
+                ),
                 "required": question.required,
                 "options": {str(index): option for index, option in enumerate(question.options, 1)},
                 "exclusive_options": getattr(question, "exclusive_options", []),

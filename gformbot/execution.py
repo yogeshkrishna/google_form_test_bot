@@ -29,6 +29,13 @@ class Runner:
     def original(self, index):
         return self.session.ids[index - 1] if self.session else index
 
+    def upload_guard(self, index):
+        if not getattr(self, "_uploads_allowed", False) or self.session is None:
+            return None
+        from .uploads import UploadGuard
+
+        return UploadGuard(self.session.journal, self.original(index), allowed=True)
+
     def log(self, index, ok, message):
         from .logger import log_result
 
@@ -220,6 +227,8 @@ class Runner:
                         f"Opening response {self.original(index)}. Saved answers remain unchanged unless you edit the batch."
                     )
                     options = {"submit": False, "driver": viewer, "observe": self.observer(index)}
+                    if guard := self.upload_guard(index):
+                        options["uploads"] = guard
                     if self.session:
                         options["before_review"] = lambda i=index: self.session.review(i)
                     if resource:
@@ -348,6 +357,30 @@ class Runner:
         if dry_run:
             ui._info("Preview only; no browser was opened.")
             return False
+        if any(q.qtype == "upload" for q in c.questions):
+            has_files = any(
+                q.qtype == "upload" and q.index in c._routing.active(row) and row[q.index]
+                for row in self.answers
+                for q in c.questions
+            )
+            if has_files:
+                if self.session is None:
+                    raise ValueError("Save and reopen the response plan before transferring attachments.")
+                if not submit and not halt and (c.headless or c.browser == "headless"):
+                    raise ValueError(
+                        "A background filling test does not upload files. Use visible review and explicitly allow uploads."
+                    )
+                self._uploads_allowed = bool(getattr(c, "_allow_uploads", False))
+                if not self._uploads_allowed:
+                    if not sys.stdin.isatty():
+                        raise ValueError(
+                            "Attachment transfer requires --allow-uploads. Files can transfer before Submit."
+                        )
+                    self._uploads_allowed = ui._ask_confirm(
+                        "Transfer the prepared files to this form? Uploads happen before Submit, even during review."
+                    )
+                if not self._uploads_allowed:
+                    raise ValueError("File transfer cancelled; the response plan was kept.")
         validate_log_path(c.log_file)
         resource = getattr(c, "_form_browser", None)
         current = ui.config_from_schema(resource.inspect(c.url) if resource else inspect_form(c.url))
@@ -400,6 +433,8 @@ class Runner:
                     if review in {"tabs", "halt"} and index > 1:
                         driver.switch_to.new_window("tab")
                     options = {"submit": submit, "driver": driver, "observe": self.observer(index)}
+                    if guard := self.upload_guard(index):
+                        options["uploads"] = guard
                     if self.session and (
                         (not submit and review != "check") or (resource and c.email_collection == "verified")
                     ):
