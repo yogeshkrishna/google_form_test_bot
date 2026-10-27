@@ -156,7 +156,7 @@ def _encode_profile(config: RunConfig, row: dict) -> dict:
         value = row.get(key, row.get(str(key)))
         if question.qtype == "checkbox":
             value = [question.options.index(option) + 1 for option in value]
-        elif question.qtype in ("radio", "dropdown", "scale"):
+        elif question.qtype in ("radio", "dropdown", "scale", "rating"):
             value = question.options.index(value) + 1 if value else 0
         result[str(key)] = value
     return result
@@ -173,7 +173,13 @@ def _decode_profile(config: RunConfig, row: dict, *, routing=None) -> dict:
         for option in values:
             if isinstance(option, bool):
                 raise ValueError(f"Q{key}: option IDs must be integers.")
-            if isinstance(option, int) and question.qtype in ("radio", "checkbox", "dropdown", "scale"):
+            if isinstance(option, int) and question.qtype in (
+                "radio",
+                "checkbox",
+                "dropdown",
+                "scale",
+                "rating",
+            ):
                 if (
                     option == 0
                     and (not question.required or conditional and question.page > 1)
@@ -212,7 +218,7 @@ def _response_schema(config: RunConfig, count: int, *, routing=None) -> dict:
             }
             if not required and schema["minItems"]:
                 schema = {"anyOf": [{"type": "array", "maxItems": 0}, schema]}
-        elif question.options and question.qtype in ("radio", "dropdown", "scale"):
+        elif question.options and question.qtype in ("radio", "dropdown", "scale", "rating"):
             schema = {
                 "type": "integer",
                 "enum": list(range(1, len(question.options) + 1)) + ([] if required else [0]),

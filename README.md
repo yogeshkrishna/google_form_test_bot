@@ -99,6 +99,8 @@ Dates use `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`; yearless questions use `MM-DD` wit
 
 Clock time uses `HH:MM` (00:00–23:59); duration uses `HH:MM:SS` (hours 00–72, minutes/seconds 00–59). CSV clock values may include AM/PM or zero seconds; nonzero clock seconds are rejected rather than discarded. No timezone conversion is applied.
 
+Icon ratings (stars, hearts and thumbs) retain their question type and use exact numeric strings such as `"4"`; required, optional, import/export and choice-weight behavior matches other single-choice questions.
+
 Supported questions include short text, paragraphs, multiple choice, checkboxes, dropdowns, numeric scales, dates with optional year/time, clock time, duration, and both grid types. Grid rows use their entry IDs or Google CSV headers (`Question [Row]`); required rows and one-response-per-column rules are checked together. Section routing follows each response's choices, including skipped sections and early Submit. Only reached questions require answers; repeated sections stop with an error. Instruction blocks and section descriptions are retained as text. Uploads, unsupported rating types, free-text “Other,” and unsupported custom validation block their sections. A response can avoid those sections only when its complete route is understood; unclear routing and legacy unscoped compatibility findings still block the form. Generated routes respect fixed choices and positive weights while avoiding unsupported sections and loops. Browser navigation and verified-email consent expect English labels. Known one-response limits stop incompatible batches; closed, restricted, or already-answered forms retain unfinished work.
 
 ## Other commands

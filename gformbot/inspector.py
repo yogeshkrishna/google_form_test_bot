@@ -42,6 +42,7 @@ class QuestionSchema:
     grid_row: str = ""
     grid_unique: bool = False
     unsupported: list[str] = field(default_factory=list)
+    rating_icon: str = ""
 
 
 @dataclass
@@ -81,6 +82,7 @@ KINDS = {
     5: "scale",
     9: "date",
     10: "time",
+    18: "rating",
 }
 UNSUPPORTED = {7: "grid", 10: "time", 13: "file upload", 18: "rating"}
 
@@ -308,6 +310,22 @@ def parse_form_html(document: str, url: str) -> FormSchema:
                     q.qtype = "duration"
             except ValueError:
                 form.unsupported.append(f"unrecognized time settings: {title}")
+        if q.qtype == "rating":
+            flags = _get(entry, 14)
+            if (
+                not isinstance(flags, list)
+                or len(flags) > 1
+                or flags
+                and flags[0] is not None
+                and (type(flags[0]) is not int or flags[0] not in (1, 2, 3))
+                or not 3 <= len(options) <= 10
+                or options != [str(i) for i in range(1, len(options) + 1)]
+            ):
+                form.unsupported.append(f"unrecognized rating settings: {title}")
+            else:
+                q.rating_icon = {1: "star", 2: "heart", 3: "thumb_up"}[
+                    flags[0] if flags and flags[0] is not None else 1
+                ]
         if q.qtype == "checkbox":
             _checkbox_rules(q)
             for rule in validation:
@@ -426,6 +444,7 @@ def schema_fingerprint(schema_or_config) -> str:
                     else {}
                 ),
                 **({"unsupported": q.unsupported} if q.unsupported else {}),
+                **({"rating_icon": q.rating_icon} if q.qtype == "rating" else {}),
             }
             for q in source.questions
         ],
