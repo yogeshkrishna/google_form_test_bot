@@ -335,10 +335,12 @@ def _clear_choice(driver, box, question, controls, timeout):
     if all(not _checked(control) for control in controls):
         return
     buttons = _visible(box.find_elements(By.CSS_SELECTOR, "[role='button'], button"))
+    scoped = box.find_elements(By.CSS_SELECTOR, '[jsname="YlCLKb"] [role="button"], [jsname="YlCLKb"] button')
     clear = [
         button
         for button in buttons
-        if "Clear selection"
+        if button in scoped
+        or "Clear selection"
         in {_normalized(button.text), _normalized(button.get_attribute("aria-label") or "")}
     ]
     if len(clear) != 1:
@@ -652,16 +654,24 @@ def _fill_question_once(driver, question: QuestionConfig, box, value, timeout):
 
 
 def _button(driver, label):
+    identities = {"OCpkoe": "Next", "M2UYVd": "Submit", "GeGHKb": "Back", "X5DuWc": "Clear form"}
     matches = []
-    for element in _visible(
-        driver.find_elements(By.CSS_SELECTOR, "[role='button'], button, input[type='submit']")
-    ):
-        values = {
-            _normalized(element.text),
-            _normalized(element.get_attribute("aria-label") or ""),
-            _normalized(element.get_attribute("value") or ""),
-        }
-        if label in values and element.is_enabled():
+    controls = driver.execute_script("""
+        return [...document.querySelectorAll('[role="button"],button,input[type="submit"]')]
+          .map(element=>({element, labels:[element.innerText||'',element.getAttribute('aria-label')||'',
+             element.getAttribute('value')||''], action:element.getAttribute('jsname')}));
+    """)
+    for control in controls:
+        element = control["element"]
+        if not _visible([element]):
+            continue
+        values = {_normalized(text) for text in control["labels"]}
+        identity = identities.get(control["action"])
+        if identity and any(text in identities.values() and text != identity for text in values):
+            raise RuntimeError(
+                "Form control identity conflicts with its label; refusing ambiguous navigation."
+            )
+        if (identity == label or identity is None and label in values) and element.is_enabled():
             matches.append(element)
     if len(matches) > 1:
         raise RuntimeError(f"Found multiple {label} buttons; refusing ambiguous navigation.")
