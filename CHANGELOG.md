@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support both grid types across CSV, saved answers, generation, and verified filling, including shuffled rows and column restrictions.
+
 - Validate number comparisons, text rules, character limits and supported regex patterns through one shared path for CSV, AI output, editing and browser execution. Preserve imported values, display readable constraints, and isolate regex checks with bounded waits without adding dependencies.
 
 - Decode compact Google date settings and exact checkbox counts correctly. Add `--date-order` to `generate`/`prepare`, retain prepared and ambiguous legacy files consistently, and require journal confirmations before temporary-file cleanup.

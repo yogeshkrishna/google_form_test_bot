@@ -214,6 +214,8 @@ def _show_form(config):
                 rules.append("Custom validation (not supported)")
         if q.qtype == "date":
             rules.append(date_format(q))
+        if q.grid_unique:
+            rules.append("Each column can be used in only one row of this grid")
         if rules:
             details += ("\n\n" if details else "") + "\n".join(rules)
         question = q.text + ("\n" + q.description if q.description else "")
@@ -1074,7 +1076,7 @@ def _prepare_source(config, source):
             )
         _check_response_limit(config)
         return prepare_responses(config, profiles, sampling=mode)
-    from .generator import CHOICE_TYPES, _random_from_options, apply_reference_weights
+    from .generator import CHOICE_TYPES, apply_reference_weights, make_answer
     from .routing import Routing
 
     routes = Routing(config)
@@ -1111,13 +1113,15 @@ def _prepare_source(config, source):
     partials = []
     for _ in range(config.count):
         reference_row = random.choice(reference) if reference and distribution == "auto" else None
-        row = {q.index: q.fixed_value for q in config.questions if q.fixed_value is not None}
-        for page in routes.walk(row):
-            for q in routes.questions[page]:
-                if q.fixed_value is None and q.qtype in CHOICE_TYPES:
-                    row[q.index] = (
-                        reference_row[q.index] if reference_row is not None else _random_from_options(q)
-                    )
+        row = (
+            make_answer(config, routing=routes, partial=True)
+            if reference_row is None
+            else {
+                q.index: q.fixed_value if q.fixed_value is not None else reference_row[q.index]
+                for q in config.questions
+                if q.qtype in CHOICE_TYPES or q.fixed_value is not None
+            }
+        )
         partials.append(row)
     if use_ai:
         return _generate(config, reference, instructions, partials=partials)

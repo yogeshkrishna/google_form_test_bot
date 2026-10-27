@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import QuestionConfig, RunConfig, clean_path, validate_config
+from .grids import grid_groups, random_grid, validate_columns
 from .routing import Routing
 from .validation import needs_email, normalize_csv_dates, parse_date, validate_text
 
@@ -223,7 +224,9 @@ def validate_answer(
         if partial
         else (q for page in routes.walk(result) for q in routes.questions[page])
     )
+    active = set()
     for q in questions:
+        active.add(q.index)
         value = result[q.index]
         label = f"Q{q.index} ({q.text})"
         if q.qtype == "checkbox":
@@ -270,6 +273,7 @@ def validate_answer(
         else:
             raise ValueError(f"{label}: unsupported question type {q.qtype!r}.")
         result[q.index] = value
+    validate_columns(config, result, active)
     return result
 
 
@@ -378,7 +382,7 @@ def _random_from_options(q: QuestionConfig) -> Any:
 
 
 def make_answer(
-    config: RunConfig, pool_row: dict | None = None, *, routing: Routing | None = None
+    config: RunConfig, pool_row: dict | None = None, *, routing: Routing | None = None, partial: bool = False
 ) -> dict[int, Any]:
     routes = routing or Routing(config)
     if pool_row is not None:
@@ -389,7 +393,12 @@ def make_answer(
             routing=routes,
         )
     answer = {q.index: q.fixed_value for q in config.questions if q.fixed_value is not None}
+    groups = grid_groups(config)
     for q in (q for page in routes.walk(answer) for q in routes.questions[page]):
+        if q.grid_unique:
+            if not all(row.index in answer for row in groups[q.item_id]):
+                answer.update(random_grid(groups[q.item_id], answer))
+            continue
         if q.fixed_value is not None:
             value = q.fixed_value
         elif q.qtype in CHOICE_TYPES:
@@ -397,9 +406,11 @@ def make_answer(
         elif q.text_pool:
             value = random.choice(q.text_pool)
         else:
+            if partial:
+                continue
             value = ""
         answer[q.index] = value
-    return validate_answer(config, answer, routing=routes)
+    return validate_answer(config, answer, routing=routes, partial=partial)
 
 
 def prepare_responses(

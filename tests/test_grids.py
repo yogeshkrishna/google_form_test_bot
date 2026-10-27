@@ -12,7 +12,9 @@ from gformbot.inspector import parse_form_html, schema_fingerprint
 
 
 def grids(checkbox=False, unique=False, required=True):
-    items = json.loads((Path(__file__).parent / "fixtures/google-grids.json").read_text(encoding="utf-8"))["items"]
+    items = json.loads((Path(__file__).parent / "fixtures/google-grids.json").read_text(encoding="utf-8"))[
+        "items"
+    ]
     item = copy.deepcopy(items[2 if checkbox else 0])
     for row in item[4]:
         row[2] = int(required)
@@ -64,7 +66,9 @@ def test_grid_column_uniqueness_required_rows_and_random(checkbox):
         assert validate_answer(config, profile) == profile
         values = [v for value in profile.values() for v in (value if isinstance(value, list) else [value])]
         assert len(values) == len(set(values)) == 3
-    config.questions[0].fixed_value = [config.questions[0].options[0]] if checkbox else config.questions[0].options[0]
+    config.questions[0].fixed_value = (
+        [config.questions[0].options[0]] if checkbox else config.questions[0].options[0]
+    )
     config.count = 1
     assert prepare_responses(config)[0][1] == config.questions[0].fixed_value
 
@@ -79,6 +83,48 @@ def test_impossible_and_inconsistent_grids_rejected():
     config.questions[1].options.reverse()
     with pytest.raises(ValueError, match="grid|Grid"):
         validate_config(config)
+
+
+def test_optional_grids_and_weighted_unique_assignment():
+    config = grids(checkbox=True, unique=True, required=False)
+    assert validate_answer(config, {}) == {1: [], 2: [], 3: []}
+    config = grids(unique=True)
+    config.questions[0].weights = [1, 1, 0]
+    config.questions[1].weights = [1, 0, 0]
+    config.questions[2].weights = [0, 1, 1]
+    assert set(prepare_responses(config)[0].values()) == set(config.questions[0].options)
+    config.questions[2].weights = [1, 0, 0]
+    with pytest.raises(ValueError, match="assignment"):
+        prepare_responses(config)
+
+
+def test_partial_validation_checks_cross_row_constraints():
+    config = grids(unique=True)
+    with pytest.raises(ValueError, match="column"):
+        validate_answer(config, {1: "Low", 2: "Low"}, partial=True)
+    from gformbot.ai import _response_schema
+
+    assert (
+        _response_schema(config, 1)["properties"]["responses"]["items"]["properties"]["1"]["type"]
+        == "integer"
+    )
+
+
+@pytest.mark.parametrize("change", ["unknown_rule", "bad_options", "unknown_mode", "duplicate_row"])
+def test_unknown_grid_metadata_rejected(change):
+    raw = json.loads((Path(__file__).parent / "fixtures/google-grids.json").read_text(encoding="utf-8"))[
+        "items"
+    ][0]
+    if change == "unknown_rule":
+        raw[8] = [[8, 999]]
+    elif change == "bad_options":
+        raw[4][1][1] = [["Different"]]
+    elif change == "unknown_mode":
+        raw[4][0][11] = [9]
+    else:
+        raw[4][1][3] = raw[4][0][3]
+    with pytest.raises(ValueError, match="grid|Grid"):
+        parse_form_html(document([raw]), URL)
 
 
 @pytest.mark.browser
