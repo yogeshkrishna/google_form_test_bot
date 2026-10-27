@@ -42,6 +42,9 @@ class QuestionConfig:
     date_include_year: bool = True
     date_include_time: bool = False
     branches: dict[str, int] = field(default_factory=dict)
+    grid_title: str = ""
+    grid_row: str = ""
+    grid_unique: bool = False
 
 
 @dataclass
@@ -237,8 +240,10 @@ def validate_config(config: RunConfig) -> None:
             values = [q.fixed_value] if q.fixed_value is not None else q.text_pool
             for value in values:
                 validate_answer(single, {q.index: value})
+    from .grids import grid_groups
     from .routing import Routing
 
+    grid_groups(config)
     Routing(config)
 
 
@@ -264,6 +269,9 @@ def config_from_schema(schema) -> RunConfig:
                 "date_include_year",
                 "date_include_time",
                 "branches",
+                "grid_title",
+                "grid_row",
+                "grid_unique",
             )
         }
         questions.append(QuestionConfig(**values))

@@ -38,6 +38,9 @@ class QuestionSchema:
     date_include_year: bool = True
     date_include_time: bool = False
     branches: dict[str, int] = field(default_factory=dict)
+    grid_title: str = ""
+    grid_row: str = ""
+    grid_unique: bool = False
 
 
 @dataclass
@@ -218,6 +221,16 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         if type_code in (11, 12):  # media have no answer field
             continue
         entries = _get(item, 4)
+        if type_code == 7:
+            from .grids import parse_grid
+
+            rows = parse_grid(item, len(form.questions), len(form.sections))
+            for row in rows:
+                if row.entry_id in seen_ids:
+                    raise ValueError(f"Duplicate answer field ID {row.entry_id}; inspection stopped.")
+                seen_ids.add(row.entry_id)
+            form.questions.extend(rows)
+            continue
         if type_code not in KINDS or not isinstance(entries, list) or len(entries) != 1:
             name = UNSUPPORTED.get(type_code, f"question type {type_code}")
             form.unsupported.append(f"{name}: {title}")
@@ -378,6 +391,11 @@ def schema_fingerprint(schema_or_config) -> str:
                 **(
                     {"date_include_year": q.date_include_year, "date_include_time": q.date_include_time}
                     if q.qtype == "date"
+                    else {}
+                ),
+                **(
+                    {"grid_title": q.grid_title, "grid_row": q.grid_row, "grid_unique": q.grid_unique}
+                    if q.grid_title
                     else {}
                 ),
             }

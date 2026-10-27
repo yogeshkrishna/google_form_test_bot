@@ -403,6 +403,15 @@ def _generate_responses(
                 "options": {str(index): option for index, option in enumerate(question.options, 1)},
                 "exclusive_options": getattr(question, "exclusive_options", []),
                 "validation": getattr(question, "validation", None),
+                **(
+                    {
+                        "grid": question.grid_title,
+                        "row": question.grid_row,
+                        "unique_column": question.grid_unique,
+                    }
+                    if question.grid_title
+                    else {}
+                ),
                 "answer_format": date_format(question)
                 if question.qtype == "date"
                 else "valid email address"
@@ -433,7 +442,8 @@ def _generate_responses(
         "Each profile represents one internally consistent person. Use the numeric option IDs in each "
         "question's options map for choice answers; use 0 for an unanswered optional single-choice field. "
         "Checkbox answers are arrays of option IDs without duplicates. Respect exclusivity and all question "
-        "constraints. Use concise natural "
+        "constraints, including unique_column: within that grid no column may be chosen in multiple rows. "
+        "Use concise natural "
         "text unless instructions require more detail. Optional unanswered text is an empty string and optional "
         "unanswered checkboxes are an empty array. If reference profiles are supplied, follow their approximate "
         "choice frequencies, relationships, and writing style while creating additional examples rather than "

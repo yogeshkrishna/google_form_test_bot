@@ -121,6 +121,17 @@ def _page_questions(driver, form: RunConfig):
             else:
                 candidates = by_title.get(_heading(box), [])
         unique = {question.index: question for question in candidates}
+        if unique and all(q.grid_title for q in unique.values()):
+            rows = list(unique.values())
+            if len({q.item_id for q in rows}) != 1:
+                raise RuntimeError("Ambiguous live grid identity; inspect the form again.")
+            expected = [q for q in form.questions if q.item_id == rows[0].item_id]
+            for question in expected:
+                if question.index in matched_indices:
+                    raise RuntimeError(f"The live page repeats {question.text!r}.")
+                matches.append((question, _grid_row(box, question)))
+                matched_indices.add(question.index)
+            continue
         if len(unique) != 1:
             raise RuntimeError(
                 f"Unknown or ambiguous live question: {_heading(box)!r}. Inspect the form again."
@@ -131,6 +142,31 @@ def _page_questions(driver, form: RunConfig):
         matched_indices.add(question.index)
         matches.append((question, box))
     return matches
+
+
+def _grid_row(box, question):
+    """Bind a row by entry identity inside its parent, never by display order."""
+    fields = box.find_elements(
+        By.CSS_SELECTOR, f'[name="entry.{question.entry_id}"], [name="entry.{question.entry_id}_sentinel"]'
+    )
+    rows = {}
+    for field in fields:
+        for row in field.find_elements(
+            By.XPATH, "./ancestor::*[@role='radiogroup' or @role='group' or @role='row'][1]"
+        ):
+            rows[row.id] = row
+    if len(rows) == 1:
+        return next(iter(rows.values()))
+    # Google may keep response sentinels outside the visual row. Its row label
+    # is then the stable identity within the already identified parent item.
+    rows = {}
+    for row in box.find_elements(By.CSS_SELECTOR, '[role="radiogroup"], [role="group"], [role="row"]'):
+        label = row.get_attribute("aria-label") or ""
+        if _normalized(label) == _normalized(question.grid_row):
+            rows[row.id] = row
+    if len(rows) != 1:
+        raise RuntimeError(f"Unknown or ambiguous grid row {question.grid_row!r}; inspect the form again.")
+    return next(iter(rows.values()))
 
 
 def _control_value(element) -> str:
@@ -260,7 +296,13 @@ def _rebind_box(driver, question, current):
             candidates.append(candidate)
     if len(candidates) > 1:
         raise RuntimeError(f"Ambiguous replacement controls for {question.text!r}; inspect the form again.")
-    return candidates[0] if candidates else None
+    return (
+        _grid_row(candidates[0], question)
+        if candidates and question.grid_title
+        else candidates[0]
+        if candidates
+        else None
+    )
 
 
 def _locate_controls(driver, question, box, selector, timeout):
@@ -686,6 +728,19 @@ def execute_response(
             _fill_question(driver, question, box, answers[question.index], timeout)
             filled.append(question.index)
             seen.add(question.index)
+        for question, box in page:
+            if question.grid_title:
+                role = "checkbox" if question.qtype == "checkbox" else "radio"
+                selected = {
+                    _control_value(control)
+                    for control in box.find_elements(
+                        By.CSS_SELECTOR, f"[role='{role}'], input[type='{role}']"
+                    )
+                    if _checked(control)
+                }
+                expected = answers[question.index]
+                if selected != (set(expected) if role == "checkbox" else {expected} if expected else set()):
+                    raise RuntimeError(f"The browser did not retain the grid row {question.grid_row!r}.")
         errors = _validation_errors(driver)
         if errors:
             raise RuntimeError("Form validation failed: " + "; ".join(errors))
