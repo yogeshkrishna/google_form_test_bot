@@ -1375,6 +1375,11 @@ def _response_options(function):
     options = [
         click.option("--sign-in", is_flag=True, help="Open a temporary browser for Google sign-in."),
         click.option(
+            "--date-order",
+            type=click.Choice(["mdy", "dmy"]),
+            help="CSV dates: month/day/year or day/month/year.",
+        ),
+        click.option(
             "-n",
             "--count",
             type=click.IntRange(1, 500),
@@ -1402,7 +1407,9 @@ def _response_options(function):
     return click.argument("url")(function)
 
 
-def _command_answers(url, count, message, like, data, browser, sign_in=False):
+def _command_answers(
+    url, count, message, like, data, browser, sign_in=False, date_order=None, *, cleanup_on_success=True
+):
     """Reuse the wizard's preparation path without its tables and questions."""
     from .generator import load_reference, prepare_responses
     from .inspector import schema_fingerprint
@@ -1426,6 +1433,8 @@ def _command_answers(url, count, message, like, data, browser, sign_in=False):
     config.requires_signin = current.requires_signin
     config.one_response = current.one_response
     config.email_collection = current.email_collection
+    if date_order is not None:
+        config.csv_date_order = date_order
     if data and clean_path(data).suffix.lower() == ".json":
         config, answers = _load_plan(data)
         if schema_fingerprint(config) != schema_fingerprint(current):
@@ -1464,7 +1473,12 @@ def _command_answers(url, count, message, like, data, browser, sign_in=False):
     else:
         reference = load_reference(config, like) if like else None
         answers = _generate(config, reference, message, browser=config.browser, progress=None, compact=True)
-    path = _save_plan(config, answers, source="command")
+    path = _save_plan(
+        config,
+        answers,
+        source="generate" if cleanup_on_success else "prepare",
+        cleanup_on_success=cleanup_on_success,
+    )
     save_config(config, DEFAULT_CONFIG_NAME)
     return config, answers, path, True
 
@@ -1472,11 +1486,13 @@ def _command_answers(url, count, message, like, data, browser, sign_in=False):
 @cli.command()
 @_response_options
 @click.option("--halt", is_flag=True, help="Fill visible forms without submitting, and leave them open.")
-def generate(url, count, message, like, data, browser, halt, sign_in=False):
+def generate(url, count, message, like, data, browser, halt, sign_in=False, date_order=None):
     """Generate answers and submit them automatically. Use --halt to review instead."""
     from .artifacts import digest
 
-    config, answers, path, owned = _command_answers(url, count, message, like, data, browser, sign_in)
+    config, answers, path, owned = _command_answers(
+        url, count, message, like, data, browser, sign_in, date_order
+    )
     remaining = _track_plan(config, answers, path, digest(path), interactive=False)
     _apply_browser(config, config.browser, headless=not halt)
     finished = _run_fill(config, answers=remaining, submit=not halt, halt=halt, compact=True)
@@ -1485,9 +1501,11 @@ def generate(url, count, message, like, data, browser, halt, sign_in=False):
 
 @cli.command()
 @_response_options
-def prepare(url, count, message, like, data, browser, sign_in=False):
+def prepare(url, count, message, like, data, browser, sign_in=False, date_order=None):
     """Create and save response JSON without filling or submitting the form."""
-    _, _, path, _ = _command_answers(url, count, message, like, data, browser, sign_in)
+    _, _, path, _ = _command_answers(
+        url, count, message, like, data, browser, sign_in, date_order, cleanup_on_success=False
+    )
     _info(f'Ready. Open with: gformbot preview "{path.resolve()}"')
 
 

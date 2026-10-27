@@ -14,6 +14,7 @@ def plan(tmp_path, *, managed=True, source=None):
         "kind": "gformbot-run",
         "schema_version": 1,
         "cleanup_on_success": managed,
+        "source": "prepared",
         "config": {"pool_file": str(source) if source else None},
         "temporary_files": describe([csv], tmp_path),
         "responses": [{"1": "Synthetic"}],
@@ -37,6 +38,19 @@ def test_unknown_retention_policy_preserves_files(tmp_path, policy):
     assert path.exists() and csv.exists()
 
 
+@pytest.mark.parametrize("source", [None, "command", "prepare", "unknown"])
+def test_unknown_or_persistent_origin_preserves_files(tmp_path, source):
+    path, csv, _ = plan(tmp_path)
+    payload = json.loads(path.read_text())
+    if source is None:
+        payload.pop("source")
+    else:
+        payload["source"] = source
+    path.write_text(json.dumps(payload))
+    assert cleanup(path, digest(path)) == ([], [])
+    assert path.exists() and csv.exists()
+
+
 @pytest.mark.parametrize("state", ["prepared", "reviewing", "attempted", "uncertain"])
 def test_cleanup_requires_all_rows_confirmed_in_journal(tmp_path, state):
     path, csv, _ = plan(tmp_path)
@@ -52,6 +66,7 @@ def test_cleanup_requires_all_rows_confirmed_in_journal(tmp_path, state):
 
 def test_success_removes_only_owned_outputs(tmp_path):
     path, csv, before = plan(tmp_path)
+    journal = Journal(batch_id(json.loads(path.read_text())))
     unrelated = tmp_path / "gformbot-generated-other.csv"
     unrelated.write_text("Must stay")
     removed, preserved = cleanup(path, before)
@@ -59,6 +74,7 @@ def test_success_removes_only_owned_outputs(tmp_path):
     assert not preserved
     assert not path.exists() and not csv.exists()
     assert unrelated.read_text() == "Must stay"
+    assert journal.path.exists() and journal.states() == {1: "confirmed"}
 
 
 @pytest.mark.parametrize("changed", ["plan", "csv"])

@@ -66,7 +66,7 @@ Response JSON stores prepared answers and execution progress. The wizard also li
 
 A local submission journal records attempts and confirmations. Confirmed rows are skipped when work resumes. An uncertain outcome requires checking the form's responses before deciding whether to retry. Copied plans share their identity on the same machine; duplicate protection depends on retaining the local journal.
 
-Imported CSV/JSON files are never deleted. Files saved by `prepare` remain available. Temporary response JSON owned by the tool is removed only after every response is confirmed; unfinished or uncertain work stays saved. Using a saved file as `--data` preserves that input.
+Imported CSV/JSON files are never deleted. Files saved by `prepare` remain available. Temporary response JSON owned by the tool is removed only after every response is confirmed in the submission journal; unfinished or uncertain work stays saved. Older files with missing retention settings or ambiguous ownership (including legacy command output) stay saved. Using a saved file as `--data` preserves that input.
 
 Run logs record prepared answers and outcomes. Manual changes in a browser can differ from the prepared values.
 
@@ -93,7 +93,7 @@ Student,"[""Roads, footpaths or crossings"", ""Bus stops""]"
 
 Short text occupies one line; paragraphs may contain newlines. Supported email and checkbox constraints are checked. Checkbox repairs are explicit and recorded.
 
-Dates use `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`; yearless questions use `MM-DD` with optional time. Google Forms CSV dates are normalized without changing the source. Ambiguous month/day ordering needs a choice; impossible dates and nonzero seconds are rejected.
+Dates use `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`; yearless questions use `MM-DD` with optional time. Google Forms CSV dates are normalized without changing the source. For ambiguous dates, `generate` and `prepare` accept `--date-order mdy` or `--date-order dmy`; the wizard asks you to choose. An explicit option overrides matching saved settings. Impossible dates and nonzero seconds are rejected.
 
 Supported questions include short text, paragraphs, multiple choice, checkboxes, dropdowns, numeric scales, and dates with optional year/time. Section routing follows each response's choices, including skipped sections and early Submit. Only reached questions require answers; repeated sections stop with an error. Instruction blocks and section descriptions are retained as text. Uploads, grids, standalone time/duration, unsupported rating types, free-text “Other,” and unsupported custom validation stop execution. Browser navigation and verified-email consent expect English labels. Known one-response limits stop incompatible batches; closed, restricted, or already-answered forms retain unfinished work.
 

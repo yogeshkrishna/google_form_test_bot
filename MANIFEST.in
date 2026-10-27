@@ -1,4 +1,5 @@
 recursive-include tests *.py *.html
+include tests/fixtures/google-inputs.json
 exclude response_pool.csv gformbot_config.yaml gformbot_log.csv gformbot-runs.csv
 exclude gformbot-responses*.json gformbot-generated*.csv gformbot-additional*.csv
 exclude gformbot-export*.csv gformbot-partial*.csv gformbot-generation*.json gformbot-generation*.json.lock

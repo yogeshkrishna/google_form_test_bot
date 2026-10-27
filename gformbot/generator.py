@@ -305,7 +305,10 @@ def load_reference(
             indexes = [i for i, reached in enumerate(active) if question.index in reached]
             if indexes:
                 normalized = normalize_csv_dates(
-                    question, [profiles[i][question.index] for i in indexes], config.csv_date_order
+                    question,
+                    [profiles[i][question.index] for i in indexes],
+                    config.csv_date_order,
+                    row_numbers=[i + 2 for i in indexes],
                 )
                 for i, value in zip(indexes, normalized, strict=True):
                     profiles[i][question.index] = value

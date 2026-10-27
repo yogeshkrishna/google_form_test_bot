@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .access import FormAccessError, check_browser_access, raise_for_access
-from .validation import is_email_rule
+from .validation import checkbox_bounds, date_settings, is_checkbox_rule, is_email_rule
 
 
 @dataclass
@@ -126,26 +126,7 @@ def _checkbox_rules(question: QuestionSchema) -> None:
     match = re.search(r"(?:choose|select|pick)\s+(?:up to|at most|no more than)\s+(\d+)", text, re.I)
     if match:
         question.max_select = int(match.group(1))
-    for rule in question.validation:
-        if not isinstance(rule, list) or len(rule) < 3 or rule[0] != 7 or rule[1] not in (200, 201, 202):
-            continue
-        args = rule[2]
-        if (
-            not isinstance(args, list)
-            or len(args) != 1
-            or isinstance(args[0], bool)
-            or not re.fullmatch(r"\d+", str(args[0]))
-        ):
-            raise ValueError(
-                f"Invalid checkbox selection constraint for {question.text!r}; inspection stopped."
-            )
-        n = int(args[0])
-        if rule[1] == 200:
-            question.min_select = max(question.min_select, n)
-        elif rule[1] == 201:
-            question.max_select = n if question.max_select is None else min(question.max_select, n)
-        elif rule[1] == 202:
-            question.min_select = question.max_select = n
+    question.min_select, question.max_select = checkbox_bounds(question)
 
 
 def parse_form_html(document: str, url: str) -> FormSchema:
@@ -281,19 +262,14 @@ def parse_form_html(document: str, url: str) -> FormSchema:
             branches={str(opt[0]): opt[2] for opt in option_data if _get(opt, 2) is not None},
         )
         if q.qtype == "date":
-            flags = _get(entry, 7)
-            if not isinstance(flags, list) or len(flags) != 2 or any(v not in (0, 1) for v in flags):
+            try:
+                q.date_include_time, q.date_include_year = date_settings(_get(entry, 7))
+            except ValueError:
                 form.unsupported.append(f"unrecognized date settings: {title}")
-            else:
-                q.date_include_time, q.date_include_year = map(bool, flags)
         if q.qtype == "checkbox":
             _checkbox_rules(q)
             for rule in validation:
-                if (
-                    not isinstance(rule, list)
-                    or len(rule) < 3
-                    or rule[:2] not in ([7, 200], [7, 201], [7, 202])
-                ):
+                if not is_checkbox_rule(rule):
                     form.unsupported.append(f"unrecognized checkbox validation: {title}")
         elif validation and not (
             q.qtype in ("text", "textarea") and all(is_email_rule(rule) for rule in validation)

@@ -225,14 +225,14 @@ def test_prepare_sign_in_option_reaches_shared_preparation(tmp_path, monkeypatch
     calls = []
     path = tmp_path / "answers.json"
 
-    def prepare(*args):
-        calls.append(args)
+    def prepare(*args, **kwargs):
+        calls.append((args, kwargs))
         return form_config(), [{1: "Answer"}], path, True
 
     monkeypatch.setattr(cli, "_command_answers", prepare)
     result = CliRunner().invoke(cli.cli, ["prepare", URL, "--sign-in", "--browser", "edge"])
     assert result.exit_code == 0, result.output
-    assert calls == [(URL, None, "", None, None, "edge", True)]
+    assert calls == [((URL, None, "", None, None, "edge", True, None), {"cleanup_on_success": False})]
 
 
 def test_one_response_limit_stops_before_generation_or_output(tmp_path, monkeypatch):

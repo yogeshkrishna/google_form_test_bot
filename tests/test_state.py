@@ -7,7 +7,7 @@ import pytest
 from gformbot import browser, cli, filler, inspector, logger
 from gformbot.artifacts import digest
 from gformbot.config import QuestionConfig, RunConfig
-from gformbot.state import Journal, Session, UncertainSubmission
+from gformbot.state import Journal, Session, UncertainSubmission, batch_id
 
 
 @pytest.fixture
@@ -55,6 +55,31 @@ def test_uncertain_submit_is_not_silently_requeued(saved, monkeypatch):
     restored, rows = cli._load_plan(path)
     with pytest.raises(UncertainSubmission, match="previous outcome"):
         cli._track_plan(restored, rows, path, digest(path))
+
+
+def test_missing_retention_policy_preserves_identity_progress_and_uncertainty(saved):
+    from gformbot.artifacts import cleanup
+
+    _, _, path = saved
+    payload = json.loads(path.read_text())
+    payload.pop("cleanup_on_success")
+    path.write_text(json.dumps(payload))
+    identity, fingerprint = batch_id(payload), payload["form_fingerprint"]
+    current = Session(path, payload, digest(path))
+    current.before_submit(1)
+    current.confirm(1)
+    current.before_submit(2)
+    for _ in range(2):
+        before = path.read_bytes()
+        restored, rows = cli._load_plan(path)
+        assert restored._submitted_indices == [1]
+        with pytest.raises(UncertainSubmission):
+            cli._track_plan(restored, rows, path, digest(path), interactive=False)
+        assert path.read_bytes() == before
+        assert cleanup(path, digest(path)) == ([], [])
+    final = json.loads(path.read_text())
+    assert (final["batch_id"], final["form_fingerprint"]) == (identity, fingerprint)
+    assert current.journal.states() == {1: "confirmed", 2: "attempted"}
 
 
 def test_log_failure_after_success_keeps_confirmed_progress(saved, monkeypatch):

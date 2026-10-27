@@ -6,9 +6,10 @@
       "cupcake": "https://docs.google.com/forms/d/e/1FAIpQLSeu-f2Sdry2bJBlKlv1HgT4bqqLx-V7Oih2MNMZ9ybqwbwj6w/viewform"
     },
     "sanitization": "Only public date/checkbox item arrays retained; no response values, account data, tokens, or form settings. Item array structure unchanged.",
-    "client_descriptor_sha256": "ace98b734a845c24bc845af1ad91ac602e18762765a5c62aba88b2670c63204b",
+    "client_descriptor_sha256": "baa21b461542435ab5f7d48eccda9f8d537464b442dfb73d06a8da6a3a1195d3",
     "client_observation": "Google DateOptions declares includes_time default false and includes_year default true. Validator descriptors name 200 SELECT_AT_LEAST, 201 SELECT_AT_MOST, 204 SELECT_EXACTLY; 202 is CHARACTERS_LESS_THAN.",
-    "browser_observation": "Stress application date [] rendered input[type=date]; Cupcake [1,1] rendered input[type=date] plus Hour/Minute. Inspection only; no submissions."
+    "browser_observation": "Stress application date [] rendered input[type=date]; Cupcake [1,1] rendered input[type=date] plus Hour/Minute. Inspection only; no submissions.",
+    "client_build": "freebird.v.en_GB.-Bbix6ZduFw.O; descriptor hash uses UTF-8 text with LF newlines"
   },
   "items": {
     "date_default": [

@@ -180,6 +180,43 @@ def test_explicit_date_order_overrides_matching_saved_setting(commands, tmp_path
 
 
 @pytest.mark.parametrize("name", ["generate", "prepare"])
+def test_ambiguous_csv_uses_saved_order_or_fails_without_guessing(commands, tmp_path, name):
+    commands.config.questions = [QuestionConfig(1, "Date", "date", True)]
+    csv = tmp_path / "dates.csv"
+    csv.write_text("Date\n05/06/2028\n")
+    result = invoke(name, commands.config.url, "--data", str(csv))
+    assert result.exit_code != 0 and "ambiguous" in str(result.exception)
+    assert not list(tmp_path.glob("gformbot-responses*.json"))
+    commands.config.csv_date_order = "dmy"
+    save_config(commands.config, tmp_path / "gformbot_config.yaml")
+    result = invoke(name, commands.config.url, "--data", str(csv))
+    assert result.exit_code == 0, result.exception
+    _, rows = cli._load_plan(next(tmp_path.glob("gformbot-responses*.json")))
+    assert rows == [{1: "2028-06-05"}]
+
+
+def test_prepare_output_survives_confirmed_wizard_execution(commands, tmp_path, monkeypatch):
+    assert invoke("prepare", commands.config.url).exit_code == 0
+    path = next(tmp_path.glob("gformbot-responses*.json"))
+    config, rows = cli._load_plan(path)
+    identity = batch_id(json.loads(path.read_text()))
+    monkeypatch.setattr(cli, "_next_action", lambda **kw: "submit")
+    monkeypatch.setattr(cli, "_choose_browser", lambda: "headless")
+    monkeypatch.setattr(cli, "_confirm_submit", lambda *a: None)
+
+    def confirmed(config, **kwargs):
+        config._record_submission(1)
+        return True
+
+    monkeypatch.setattr(cli, "_run_fill", confirmed)
+    cli._manage_batch(config, rows, path, saved=True)
+    payload = json.loads(path.read_text())
+    assert payload["submitted_indices"] == [1]
+    assert payload["batch_id"] == identity and payload["cleanup_on_success"] is False
+    assert cli._load_plan(path)[0]._submitted_indices == [1]
+
+
+@pytest.mark.parametrize("name", ["generate", "prepare"])
 def test_default_count_uses_matching_saved_config(commands, tmp_path, name):
     config = copy.deepcopy(commands.config)
     config.count = 4
