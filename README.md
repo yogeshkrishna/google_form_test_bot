@@ -91,7 +91,9 @@ Q1,Q2
 Student,"[""Roads, footpaths or crossings"", ""Bus stops""]"
 ```
 
-Short text occupies one line; paragraphs may contain newlines. Supported email and checkbox constraints are checked. Checkbox repairs are explicit and recorded.
+Short text occupies one line; paragraphs may contain newlines. Number comparisons/ranges, whole numbers, text contains/does-not-contain, character limits, email and checkbox constraints share the same checks across CSV import, AI output, editing, and execution. Number answers retain their original text. Character limits count UTF-16 units as Google's client does, so an emoji can count as two characters. Checkbox repairs are explicit and recorded.
+
+Pattern validation supports verified JavaScript-compatible syntax and all four Forms pattern operations. Checks run in one lazy background process with bounded waits and caches; no regex dependency is installed. Unverified syntax (including backreferences, named groups, lookbehind, inline flags, and `\S` inside character classes) stops explicitly. Patterns are limited to 4,096 characters including operation wrappers, and answers to one million UTF-16 units for pattern checks. URL/phone rules and other unknown validation families remain unsupported. The browser's own validation and positive submission confirmation still apply.
 
 Dates use `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`; yearless questions use `MM-DD` with optional time. Google Forms CSV dates are normalized without changing the source. For ambiguous dates, `generate` and `prepare` accept `--date-order mdy` or `--date-order dmy`; the wizard asks you to choose. An explicit option overrides matching saved settings. Impossible dates and nonzero seconds are rejected.
 

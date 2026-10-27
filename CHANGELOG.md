@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Validate number comparisons, text rules, character limits and supported regex patterns through one shared path for CSV, AI output, editing and browser execution. Preserve imported values, display readable constraints, and isolate regex checks with bounded waits without adding dependencies.
+
 - Decode compact Google date settings and exact checkbox counts correctly. Add `--date-order` to `generate`/`prepare`, retain prepared and ambiguous legacy files consistently, and require journal confirmations before temporary-file cleanup.
 
 - Bundle a private Windows x64 Selenium runtime with only supported browser adapters, their synchronous dependencies and the unchanged Windows Manager. Remove unused OS binaries, generated protocols and asynchronous dependencies; retain official Selenium on other platforms.

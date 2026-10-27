@@ -5,14 +5,13 @@ from __future__ import annotations
 import csv
 import json
 import random
-import re
 import unicodedata
 from pathlib import Path
 from typing import Any
 
 from .config import QuestionConfig, RunConfig, clean_path, validate_config
 from .routing import Routing
-from .validation import EMAIL_PATTERN, needs_email, normalize_csv_dates, parse_date
+from .validation import needs_email, normalize_csv_dates, parse_date, validate_text
 
 CHOICE_TYPES = {"radio", "checkbox", "dropdown", "scale"}
 TEXT_TYPES = {"text", "textarea", "date"}
@@ -263,8 +262,11 @@ def validate_answer(
                 raise ValueError(f"{label}: {value!r} is not an exact option.")
             if value and q.qtype == "date":
                 value, _ = parse_date(q, value)
-            if value and needs_email(q) and not re.fullmatch(EMAIL_PATTERN, value):
-                raise ValueError(f"{label}: enter a valid email address.")
+            if value and q.qtype in ("text", "textarea"):
+                try:
+                    validate_text(q, value)
+                except ValueError as exc:
+                    raise ValueError(f"{label}: {exc}") from exc
         else:
             raise ValueError(f"{label}: unsupported question type {q.qtype!r}.")
         result[q.index] = value

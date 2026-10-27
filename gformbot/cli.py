@@ -159,7 +159,7 @@ def _url_prompt():
 
 
 def _show_form(config):
-    from .validation import date_format, needs_email
+    from .validation import date_format, text_rules
 
     def destination(page):
         return "Submit" if page == 0 else f"Section {page}: {config.sections[page - 1]}"
@@ -207,10 +207,11 @@ def _show_form(config):
             rules.append(f"At most {q.max_select} selections")
         if q.exclusive_options:
             rules.append("Choose alone: " + "; ".join(q.exclusive_options))
-        if needs_email(q):
-            rules.append("Valid email address")
-        elif q.validation and q.qtype != "checkbox":
-            rules.append("Custom validation (not supported)")
+        if q.validation and q.qtype in ("text", "textarea"):
+            try:
+                rules.extend(rule.description for rule in text_rules(q))
+            except ValueError:
+                rules.append("Custom validation (not supported)")
         if q.qtype == "date":
             rules.append(date_format(q))
         if rules:

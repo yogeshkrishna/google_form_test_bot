@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .access import FormAccessError, check_browser_access, raise_for_access
-from .validation import checkbox_bounds, date_settings, is_checkbox_rule, is_email_rule
+from .validation import checkbox_bounds, date_settings, is_checkbox_rule, text_rules
 
 
 @dataclass
@@ -246,7 +246,10 @@ def parse_form_html(document: str, url: str) -> FormSchema:
             form.unsupported.append(f"free-text Other option: {title}")
         if len(options) != len(set(options)):
             form.unsupported.append(f"duplicate option labels: {title}")
-        validation = _get(entry, 4) or []
+        raw_validation = _get(entry, 4)
+        validation = [] if raw_validation is None else raw_validation
+        if not isinstance(validation, list):
+            raise ValueError(f"Unrecognized validation metadata for {title!r}.")
         q = QuestionSchema(
             len(form.questions) + 1,
             title,
@@ -271,10 +274,13 @@ def parse_form_html(document: str, url: str) -> FormSchema:
             for rule in validation:
                 if not is_checkbox_rule(rule):
                     form.unsupported.append(f"unrecognized checkbox validation: {title}")
-        elif validation and not (
-            q.qtype in ("text", "textarea") and all(is_email_rule(rule) for rule in validation)
-        ):
-            form.unsupported.append(f"custom validation on {title!r}")
+        elif validation:
+            try:
+                if q.qtype not in ("text", "textarea"):
+                    raise ValueError("This control does not support text validation.")
+                text_rules(q)
+            except ValueError as exc:
+                form.unsupported.append(f"custom validation on {title!r}: {exc}")
         if q.qtype in ("radio", "checkbox", "dropdown", "scale") and not q.options:
             form.unsupported.append(f"missing option labels: {title}")
         form.questions.append(q)

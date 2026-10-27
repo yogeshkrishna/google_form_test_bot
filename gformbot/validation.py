@@ -1,7 +1,12 @@
-"""Supported email and calendar constraints shared by preparation and execution."""
+"""Google Forms constraints shared by preparation and execution."""
 
+import json
+import math
 import re
+from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 
 # HTML email input syntax; unlike a delivery check, this needs no network.
 EMAIL_PATTERN = r"[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*"
@@ -74,6 +79,168 @@ def is_email_rule(rule):
 
 def needs_email(question):
     return any(is_email_rule(rule) for rule in question.validation)
+
+
+_NUMBER = r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
+
+
+def _number(value):
+    if not isinstance(value, str) or not re.fullmatch(_NUMBER, value.strip()):
+        raise ValueError("Enter a finite number without grouping separators.")
+    try:
+        number = Decimal(value.strip())
+        floating = float(number)
+        if not number.is_finite() or not math.isfinite(floating) or number and not floating:
+            raise ValueError("Number is outside the supported finite range.")
+        return number
+    except (InvalidOperation, OverflowError) as exc:
+        raise ValueError("Enter a finite number.") from exc
+
+
+@dataclass(frozen=True)
+class TextRule:
+    family: int
+    operation: int
+    args: tuple
+    description: str
+    message: str = ""
+    pattern: str = ""
+    compiled: str = ""
+
+
+def text_rules(question):
+    if not question.validation:
+        return ()
+    try:
+        return _text_rules(question.qtype, json.dumps(question.validation, allow_nan=False))
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"{question.text!r}: {exc}") from exc
+
+
+@lru_cache(maxsize=256)
+def _text_rules(kind, encoded):
+    normalized = []
+    for rule in json.loads(encoded):
+        if not isinstance(rule, list) or not 2 <= len(rule) <= 4 or any(type(v) is not int for v in rule[:2]):
+            raise ValueError("Unrecognized validation metadata.")
+        family, operation = rule[:2]
+        args = rule[2] if len(rule) > 2 and rule[2] is not None else []
+        message = rule[3] if len(rule) > 3 and rule[3] is not None else ""
+        if not isinstance(args, list) or not isinstance(message, str):
+            raise ValueError("Invalid validation arguments or error text.")
+        pattern = compiled = ""
+        if family == 1 and kind == "text" and 1 <= operation <= 10:
+            arity = 2 if operation in (7, 8) else 0 if operation in (9, 10) else 1
+            if len(args) != arity or any(type(v) not in (str, int, float) for v in args):
+                raise ValueError("Invalid number constraint arguments.")
+            args = tuple(_number(str(v)) for v in args)
+            if arity == 2 and args[0] > args[1]:
+                raise ValueError("Number range starts above its end.")
+            names = {1: ">", 2: ">=", 3: "<", 4: "<=", 5: "=", 6: "!="}
+            description = (
+                f"Number {names[operation]} {args[0]}"
+                if operation <= 6
+                else f"Number {'outside' if operation == 8 else 'between'} {args[0]} and {args[1]}"
+                if operation <= 8
+                else "Whole number"
+                if operation == 10
+                else "Finite number"
+            )
+        elif family == 2 and operation in (100, 101, 102):
+            arity = 0 if operation == 102 else 1
+            if len(args) != arity or any(not isinstance(v, str) for v in args):
+                raise ValueError("Invalid text constraint arguments.")
+            description = (
+                "Valid email address"
+                if operation == 102
+                else f"{'Contains' if operation == 100 else 'Does not contain'} {args[0]!r}"
+            )
+        elif family == 6 and operation in (202, 203):
+            if len(args) != 1 or type(args[0]) not in (str, int) or not re.fullmatch(r"[0-9]+", str(args[0])):
+                raise ValueError("Invalid character-count constraint.")
+            args = (int(args[0]),)
+            description = f"{'At most' if operation == 202 else 'At least'} {args[0]} characters"
+        elif family == 4 and operation in (299, 300, 301, 302):
+            if len(args) != 1 or not isinstance(args[0], str):
+                raise ValueError("Invalid regular expression arguments.")
+            original = args[0]
+            pattern = {
+                299: original,
+                300: f"^(?!^.*{original}.*$).*$",
+                301: f"^{original}$",
+                302: f"^(?!^{original}$).*$",
+            }[operation]
+            from .patterns import compile_pattern
+
+            compiled = compile_pattern(pattern)
+            verb = {
+                299: "Contains pattern",
+                300: "Does not contain pattern",
+                301: "Matches pattern",
+                302: "Does not match pattern",
+            }[operation]
+            description = f"{verb}: {original}"
+        else:
+            raise ValueError(f"Unsupported validation rule {family}/{operation}.")
+        normalized.append(TextRule(family, operation, tuple(args), description, message, pattern, compiled))
+    minimum = max((r.args[0] for r in normalized if r.family == 6 and r.operation == 203), default=0)
+    maximum = min((r.args[0] for r in normalized if r.family == 6 and r.operation == 202), default=None)
+    if maximum is not None and minimum > maximum:
+        raise ValueError("Minimum character count exceeds maximum.")
+    return tuple(normalized)
+
+
+def validate_text(question, value):
+    for rule in text_rules(question):
+        op, args = rule.operation, rule.args
+        if rule.family == 1:
+            number = _number(value)
+            if op <= 6:
+                bound = args[0]
+                accepted = {
+                    1: number > bound,
+                    2: number >= bound,
+                    3: number < bound,
+                    4: number <= bound,
+                    5: number == bound,
+                    6: number != bound,
+                }[op]
+            elif op in (7, 8):
+                accepted = (args[0] <= number <= args[1]) == (op == 7)
+            else:
+                accepted = op == 9 or number == number.to_integral_value()
+        elif rule.family == 2:
+            accepted = (
+                bool(re.fullmatch(EMAIL_PATTERN, value)) if op == 102 else ((args[0] in value) == (op == 100))
+            )
+        elif rule.family == 6:
+            length = len(value.encode("utf-16-le", errors="surrogatepass")) // 2
+            accepted = length <= args[0] if op == 202 else length >= args[0]
+        else:
+            from .patterns import matches
+
+            accepted = matches(rule.compiled, value)
+        if not accepted:
+            raise ValueError(rule.message or rule.description)
+
+
+def text_schema(question, required):
+    """Prompt guidance; the shared validator remains authoritative for every rule."""
+    result = {"type": "string", "minLength": int(required)}
+    rules = text_rules(question)
+    if rules:
+        result["description"] = "; ".join(r.description for r in rules)
+        if any(r.family == 6 for r in rules):
+            result["description"] += ". Google counts UTF-16 units; an emoji may count as two characters."
+        patterns = [
+            r.pattern if r.family == 4 else "^" + _NUMBER + "$" if r.family == 1 else "" for r in rules
+        ]
+        if needs_email(question):
+            patterns.append("^" + EMAIL_PATTERN + "$")
+        patterns = [p for p in patterns if p]
+        if len(patterns) == 1:
+            result["pattern"] = patterns[0] if required else "(?:" + patterns[0] + ")|^$"
+    return result
 
 
 def date_format(question):

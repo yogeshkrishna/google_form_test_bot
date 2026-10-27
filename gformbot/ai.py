@@ -19,7 +19,7 @@ from gformbot.config import RunConfig, clean_path, config_to_dict, validate_conf
 from gformbot.generator import validate_answer
 from gformbot.inspector import schema_fingerprint
 from gformbot.routing import Routing
-from gformbot.validation import EMAIL_PATTERN, date_format, date_pattern, needs_email
+from gformbot.validation import date_format, date_pattern, needs_email, text_schema
 
 from .chatgpt import ChatGPTError
 from .chatgpt import ask as _chat
@@ -212,9 +212,7 @@ def _response_schema(config: RunConfig, count: int, *, routing=None) -> dict:
                 "enum": list(range(1, len(question.options) + 1)) + ([] if required else [0]),
             }
         elif question.qtype in ("text", "textarea"):
-            schema = {"type": "string", "minLength": int(required)}
-            if needs_email(question):
-                schema["pattern"] = "^" + EMAIL_PATTERN + "$" if required else "^(?:" + EMAIL_PATTERN + ")?$"
+            schema = text_schema(question, required)
         elif question.qtype == "date":
             pattern = date_pattern(question)
             schema = {
