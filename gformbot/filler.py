@@ -639,6 +639,9 @@ def execute_response(
     """Fill and verify the frozen response's route; submit only at its end."""
     _require_supported(form)
     routes = getattr(form, "_routing", None) or Routing(form)
+    from .generator import validate_answer
+
+    answers = validate_answer(form, answers, routing=routes)
     path = list(routes.walk(answers))
     planned = {q.index for section in path for q in routes.questions[section]}
     driver._gformbot_submission_clicked = False

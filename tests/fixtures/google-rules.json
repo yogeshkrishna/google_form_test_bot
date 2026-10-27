@@ -1,0 +1,280 @@
+{
+  "provenance": {
+    "source": "https://docs.google.com/forms/d/e/1FAIpQLScYxE99iMgCABt2Wjm3SDYRKQihLzKWNpfFpEMncN0xKANqAA/viewform",
+    "captured_utc_date": "2026-10-27",
+    "sanitization": "Only public item arrays for number/length/pattern questions retained, unchanged in structure. No response values or account data.",
+    "client_build": "freebird.v.en_GB.-Bbix6ZduFw.O",
+    "descriptor_text_sha256": "baa21b461542435ab5f7d48eccda9f8d537464b442dfb73d06a8da6a3a1195d3",
+    "behavior": "Google client uses inclusive length comparisons on JavaScript string.length, numeric operations 1-10, and RegExp without flags; pattern operations 299-302 wrap patterns differently. Derived tests are labeled synthetic."
+  },
+  "items": [
+    [
+      133331403,
+      "S05 \u2014 Fictional course code",
+      "Use a fictional code, e.g. STU-123",
+      0,
+      [
+        [
+          994951779,
+          null,
+          1,
+          null,
+          [
+            [
+              4,
+              301,
+              [
+                "^STU-[0-9]{3}$"
+              ],
+              "Use the exact example format: STU-123"
+            ]
+          ]
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S05 \u2014 Fictional course code"
+      ],
+      [
+        null,
+        "Use a fictional code, e.g. STU-123"
+      ]
+    ],
+    [
+      1030462466,
+      "S08 \u2014 Fictional years of experience (0 to 40)",
+      "Use a fictional test number.",
+      0,
+      [
+        [
+          1469736529,
+          null,
+          1,
+          null,
+          [
+            [
+              1,
+              7,
+              [
+                "0.0",
+                "40.0"
+              ],
+              "Enter a number from 0 to 40."
+            ]
+          ]
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S08 \u2014 Fictional years of experience (0 to 40)"
+      ],
+      [
+        null,
+        "Use a fictional test number."
+      ]
+    ],
+    [
+      1215367828,
+      "S09 \u2014 Fictional career goal (max 160 characters)",
+      "Fictional response only; 160 characters maximum.",
+      1,
+      [
+        [
+          1439086227,
+          null,
+          1,
+          null,
+          [
+            [
+              6,
+              202,
+              [
+                "160"
+              ],
+              "Keep the answer at or under 160 characters."
+            ]
+          ]
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S09 \u2014 Fictional career goal (max 160 characters)"
+      ],
+      [
+        null,
+        "Fictional response only; 160 characters maximum."
+      ]
+    ],
+    [
+      972741476,
+      "S12 \u2014 Fictional tracking code",
+      "Use a fictional code, e.g. IND-AB12",
+      0,
+      [
+        [
+          1290506688,
+          null,
+          1,
+          null,
+          [
+            [
+              4,
+              301,
+              [
+                "^IND-[A-Z]{2}[0-9]{2}$"
+              ],
+              "Use the exact example format: IND-AB12"
+            ]
+          ]
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S12 \u2014 Fictional tracking code"
+      ],
+      [
+        null,
+        "Use a fictional code, e.g. IND-AB12"
+      ]
+    ],
+    [
+      1913123642,
+      "S13 \u2014 Fictional build idea (max 200 characters)",
+      "Fictional response only; 200 characters maximum.",
+      1,
+      [
+        [
+          819474826,
+          null,
+          1,
+          null,
+          [
+            [
+              6,
+              202,
+              [
+                "200"
+              ],
+              "Keep the answer at or under 200 characters."
+            ]
+          ]
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S13 \u2014 Fictional build idea (max 200 characters)"
+      ],
+      [
+        null,
+        "Fictional response only; 200 characters maximum."
+      ]
+    ],
+    [
+      1286732944,
+      "S15 \u2014 Complexity score (1 to 10)",
+      "Use a fictional test number.",
+      0,
+      [
+        [
+          1868806601,
+          null,
+          1,
+          null,
+          [
+            [
+              1,
+              7,
+              [
+                "1.0",
+                "10.0"
+              ],
+              "Enter a number from 1 to 10."
+            ]
+          ]
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S15 \u2014 Complexity score (1 to 10)"
+      ],
+      [
+        null,
+        "Use a fictional test number."
+      ]
+    ],
+    [
+      1780123487,
+      "S15 \u2014 Optional details (max 200 characters)",
+      "Fictional response only; 200 characters maximum.",
+      1,
+      [
+        [
+          1766520735,
+          null,
+          0,
+          null,
+          [
+            [
+              6,
+              202,
+              [
+                "200"
+              ],
+              "Keep the answer at or under 200 characters."
+            ]
+          ]
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S15 \u2014 Optional details (max 200 characters)"
+      ],
+      [
+        null,
+        "Fictional response only; 200 characters maximum."
+      ]
+    ]
+  ]
+}

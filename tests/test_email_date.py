@@ -48,7 +48,7 @@ def test_inspection_date_settings_and_email(year, time, tmp_path):
 
 def test_unknown_validation_and_date_settings_remain_explicitly_unsupported():
     schema = inspector.parse_form_html(
-        document([item(1, "Pattern", 0, rules=[[2, 100, ["text"]]]), item(2, "Date", 9)]), URL
+        document([item(1, "Pattern", 0, rules=[[2, 999, ["text"]]]), item(2, "Date", 9)]), URL
     )
     assert any("custom validation" in problem for problem in schema.unsupported)
     assert any("date settings" in problem for problem in schema.unsupported)

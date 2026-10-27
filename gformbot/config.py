@@ -197,6 +197,10 @@ def validate_config(config: RunConfig) -> None:
             raise ValueError(f"{label}: exclusive_options must contain distinct known option labels.")
         if not isinstance(q.validation, list) or any(not isinstance(rule, list) for rule in q.validation):
             raise ValueError(f"{label}: validation must be a list of rules.")
+        if q.qtype in ("text", "textarea") and not config.unsupported:
+            from .validation import text_rules
+
+            text_rules(q)
         if not isinstance(q.min_select, int) or isinstance(q.min_select, bool) or q.min_select < 0:
             raise ValueError(f"Q{q.index}: min_select must be a nonnegative integer.")
         if q.max_select is not None and (
