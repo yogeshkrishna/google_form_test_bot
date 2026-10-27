@@ -147,6 +147,73 @@ def test_prepare_saves_exact_json_without_filling(commands, tmp_path):
     assert commands.generated[0][2] == "Short natural answers"
     assert not list(tmp_path.glob("*.csv"))
     assert commands.inspected[0][1].get("display") is False
+    assert json.loads(plans[0].read_text())["cleanup_on_success"] is False
+
+
+@pytest.mark.parametrize("name", ["generate", "prepare"])
+@pytest.mark.parametrize("source", ["--data", "--like"])
+def test_public_csv_date_order(commands, tmp_path, monkeypatch, name, source):
+    commands.config.questions = [QuestionConfig(1, "Date", "date", True)]
+    csv = tmp_path / "dates.csv"
+    csv.write_text("Date\n05/06/2028\n")
+    before = csv.read_bytes()
+    monkeypatch.setattr(cli, "_generate", lambda config, reference, *a, **kw: reference)
+    result = invoke(name, commands.config.url, source, str(csv), "--date-order", "dmy")
+    assert result.exit_code == 0, result.exception
+    assert csv.read_bytes() == before
+    config, rows = cli._load_plan(next(tmp_path.glob("gformbot-responses*.json")))
+    assert rows == [{1: "2028-06-05"}]
+    assert config.csv_date_order == "dmy"
+
+
+@pytest.mark.parametrize("name", ["generate", "prepare"])
+def test_explicit_date_order_overrides_matching_saved_setting(commands, tmp_path, name):
+    commands.config.questions = [QuestionConfig(1, "Date", "date", True)]
+    commands.config.csv_date_order = "mdy"
+    save_config(commands.config, tmp_path / "gformbot_config.yaml")
+    csv = tmp_path / "dates.csv"
+    csv.write_text("Date\n05/06/2028\n")
+    result = invoke(name, commands.config.url, "--data", str(csv), "--date-order", "dmy")
+    assert result.exit_code == 0, result.exception
+    _, rows = cli._load_plan(next(tmp_path.glob("gformbot-responses*.json")))
+    assert rows == [{1: "2028-06-05"}]
+
+
+@pytest.mark.parametrize("name", ["generate", "prepare"])
+def test_ambiguous_csv_uses_saved_order_or_fails_without_guessing(commands, tmp_path, name):
+    commands.config.questions = [QuestionConfig(1, "Date", "date", True)]
+    csv = tmp_path / "dates.csv"
+    csv.write_text("Date\n05/06/2028\n")
+    result = invoke(name, commands.config.url, "--data", str(csv))
+    assert result.exit_code != 0 and "ambiguous" in str(result.exception)
+    assert not list(tmp_path.glob("gformbot-responses*.json"))
+    commands.config.csv_date_order = "dmy"
+    save_config(commands.config, tmp_path / "gformbot_config.yaml")
+    result = invoke(name, commands.config.url, "--data", str(csv))
+    assert result.exit_code == 0, result.exception
+    _, rows = cli._load_plan(next(tmp_path.glob("gformbot-responses*.json")))
+    assert rows == [{1: "2028-06-05"}]
+
+
+def test_prepare_output_survives_confirmed_wizard_execution(commands, tmp_path, monkeypatch):
+    assert invoke("prepare", commands.config.url).exit_code == 0
+    path = next(tmp_path.glob("gformbot-responses*.json"))
+    config, rows = cli._load_plan(path)
+    identity = batch_id(json.loads(path.read_text()))
+    monkeypatch.setattr(cli, "_next_action", lambda **kw: "submit")
+    monkeypatch.setattr(cli, "_choose_browser", lambda: "headless")
+    monkeypatch.setattr(cli, "_confirm_submit", lambda *a: None)
+
+    def confirmed(config, **kwargs):
+        config._record_submission(1)
+        return True
+
+    monkeypatch.setattr(cli, "_run_fill", confirmed)
+    cli._manage_batch(config, rows, path, saved=True)
+    payload = json.loads(path.read_text())
+    assert payload["submitted_indices"] == [1]
+    assert payload["batch_id"] == identity and payload["cleanup_on_success"] is False
+    assert cli._load_plan(path)[0]._submitted_indices == [1]
 
 
 @pytest.mark.parametrize("name", ["generate", "prepare"])

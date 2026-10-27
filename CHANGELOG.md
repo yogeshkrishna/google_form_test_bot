@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Decode compact Google date settings and exact checkbox counts correctly. Add `--date-order` to `generate`/`prepare`, retain prepared and ambiguous legacy files consistently, and require journal confirmations before temporary-file cleanup.
+
 - Bundle a private Windows x64 Selenium runtime with only supported browser adapters, their synchronous dependencies and the unchanged Windows Manager. Remove unused OS binaries, generated protocols and asynchronous dependencies; retain official Selenium on other platforms.
 - Keep directions and links from visited form pages and confirmed completion screens. Show a short next-steps summary and add `log --followups` for saved instructions across automatic and manual review modes, without affecting submission recovery.
 - Follow answer-based section routes across CSV import, generation, previews, and filling, including skipped required questions and early Submit. Stop before submission if the browser deviates from the planned route.

@@ -69,6 +69,21 @@ def test_mixed_date_orders_cannot_be_guessed_per_row():
         normalize_csv_dates(date_question(), ["10/15/2023 14:30:00", "20/11/2023 14:30:00"])
 
 
+def test_branched_csv_error_names_original_row(tmp_path):
+    c = RunConfig(
+        "https://docs.google.com/forms/d/e/test/viewform",
+        sections=["Choice", "Date"],
+        questions=[
+            QuestionConfig(1, "Route", "radio", True, ["Skip", "Date"], branches={"Skip": 0, "Date": 2}),
+            QuestionConfig(2, "Date needed", "date", True, page=2),
+        ],
+    )
+    path = tmp_path / "dates.csv"
+    path.write_text("Route,Date needed\nSkip,unused\nDate,not a date\n")
+    with pytest.raises(ValueError, match="CSV row 3"):
+        generator.load_reference(c, path)
+
+
 def test_date_only_and_yearless_exports():
     assert normalize_csv_dates(date_question(time=False), ["10/15/2023"]) == ["2023-10-15"]
     assert normalize_csv_dates(date_question(year=False), ["10/15 14:30:00"]) == ["10-15 14:30"]

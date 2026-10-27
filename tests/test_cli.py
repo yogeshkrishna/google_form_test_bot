@@ -352,9 +352,14 @@ def test_saved_plan_interactive_next_choices(config, monkeypatch, tmp_path, acti
     monkeypatch.setattr(cli, "_choose_browser", lambda: "chrome")
     monkeypatch.setattr(cli, "_confirm_submit", lambda *args: None)
     calls = []
-    monkeypatch.setattr(
-        cli, "_run_fill", lambda c, **kwargs: calls.append((c.browser, c.headless, kwargs["submit"]))
-    )
+
+    def confirmed_fill(c, **kwargs):
+        calls.append((c.browser, c.headless, kwargs["submit"]))
+        for index in range(1, len(kwargs["answers"]) + 1):
+            c._record_submission(index)
+        return True
+
+    monkeypatch.setattr(cli, "_run_fill", confirmed_fill)
     cli.run.callback(
         str(target), browser=None, headless=None, dry_run=False, submit=False, yes=False, keep_files=False
     )
@@ -371,9 +376,14 @@ def test_run_success_cleanup_and_keep_files(config, monkeypatch, tmp_path, keep)
     generated = generator.write_csv(config, profiles(), tmp_path / "generated.csv")
     target = cli._save_plan(config, profiles(), artifacts=[generated])
     calls = []
-    monkeypatch.setattr(
-        cli, "_run_fill", lambda c, **kwargs: calls.append((c.browser, c.headless, kwargs["submit"]))
-    )
+
+    def confirmed_fill(c, **kwargs):
+        calls.append((c.browser, c.headless, kwargs["submit"]))
+        for index in range(1, len(kwargs["answers"]) + 1):
+            c._record_submission(index)
+        return True
+
+    monkeypatch.setattr(cli, "_run_fill", confirmed_fill)
     args = [str(target), "--browser", "chrome"] + (["--keep-files"] if keep else [])
     result = CliRunner().invoke(cli.run, args)
     assert result.exit_code == 0, result.exception
@@ -413,7 +423,14 @@ def test_wizard_visible_default_and_completed_files_removed(config, monkeypatch,
     config._generated_artifacts = [generated]
     monkeypatch.setattr(cli, "_prepare_source", lambda *args: profiles())
     calls = []
-    monkeypatch.setattr(cli, "_run_fill", lambda c, **kwargs: calls.append((c.browser, c.headless)))
+
+    def confirmed_fill(c, **kwargs):
+        calls.append((c.browser, c.headless))
+        for index in range(1, len(kwargs["answers"]) + 1):
+            c._record_submission(index)
+        return True
+
+    monkeypatch.setattr(cli, "_run_fill", confirmed_fill)
     cli._new_batch_wizard()
     assert defaults[-1] == "auto-background"
     assert calls == [("chrome", False)]

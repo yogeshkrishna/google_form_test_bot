@@ -6,6 +6,62 @@ from datetime import datetime
 # HTML email input syntax; unlike a delivery check, this needs no network.
 EMAIL_PATTERN = r"[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*"
 
+CHECKBOX_RULES = {200: "minimum", 201: "maximum", 204: "exact"}
+
+
+def is_checkbox_rule(rule):
+    return (
+        isinstance(rule, list)
+        and len(rule) >= 3
+        and type(rule[0]) is int
+        and rule[0] == 7
+        and type(rule[1]) is int
+        and rule[1] in CHECKBOX_RULES
+    )
+
+
+def checkbox_bounds(question):
+    """Intersect verified Google rules with existing explicit selection limits."""
+    minimum, maximum = question.min_select, question.max_select
+    for rule in question.validation:
+        if not is_checkbox_rule(rule):
+            continue
+        args = rule[2]
+        if (
+            not isinstance(args, list)
+            or len(args) != 1
+            or type(args[0]) not in (str, int)
+            or not re.fullmatch(r"\d+", str(args[0]))
+        ):
+            raise ValueError(
+                f"Invalid checkbox selection constraint for {question.text!r}; inspection stopped."
+            )
+        n = int(args[0])
+        kind = CHECKBOX_RULES[rule[1]]
+        if kind in ("minimum", "exact"):
+            minimum = max(minimum, n)
+        if kind in ("maximum", "exact"):
+            maximum = n if maximum is None else min(maximum, n)
+    if minimum > len(question.options) or maximum is not None and maximum < minimum:
+        raise ValueError(f"Impossible checkbox selection constraints for {question.text!r}.")
+    return minimum, maximum
+
+
+def date_settings(flags):
+    """DateOptions omits defaults: includes_time=false, includes_year=true."""
+    if (
+        not isinstance(flags, list)
+        or len(flags) > 2
+        or any(
+            value is not None and (type(value) not in (int, bool) or value not in (0, 1)) for value in flags
+        )
+    ):
+        raise ValueError("Unrecognized date settings.")
+    return tuple(
+        bool(flags[i]) if i < len(flags) and flags[i] is not None else default
+        for i, default in enumerate((False, True))
+    )
+
 
 def is_email_rule(rule):
     return (
@@ -97,12 +153,13 @@ def _csv_date(question, value, order):
     return canonical
 
 
-def normalize_csv_dates(question, values, order=None):
+def normalize_csv_dates(question, values, order=None, *, row_numbers=None):
     """Infer one consistent date order for an entire column, never per cell."""
     possibilities, errors = {}, []
+    numbers = row_numbers if row_numbers is not None else range(2, len(values) + 2)
     for candidate in [order] if order else ["mdy", "dmy"]:
         normalized = []
-        for row, value in enumerate(values, 2):
+        for row, value in zip(numbers, values, strict=True):
             try:
                 normalized.append(_csv_date(question, value, candidate))
             except ValueError as exc:

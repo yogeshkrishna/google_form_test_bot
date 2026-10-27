@@ -4,6 +4,9 @@ import hashlib
 import json
 from pathlib import Path
 
+# Old "command" plans did not distinguish prepare from temporary execution.
+_TEMPORARY_SOURCES = {"prepared", "fresh", "reference", "enlarge", "own", "random", "edited", "generate"}
+
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -30,8 +33,23 @@ def cleanup(plan, expected_digest):
         payload = json.loads(plan.read_text(encoding="utf-8"))
         if payload.get("kind") != "gformbot-run" or payload.get("schema_version") != 1:
             return removed, [plan]
-        if not payload.get("cleanup_on_success", True):
+        if payload.get("cleanup_on_success") is not True or payload.get("source") not in _TEMPORARY_SOURCES:
             return removed, preserved
+        from .state import Journal, batch_id
+
+        responses = payload.get("responses")
+        submitted = payload.get("submitted_indices", [])
+        if (
+            not isinstance(responses, list)
+            or not responses
+            or not isinstance(submitted, list)
+            or any(type(index) is not int for index in submitted)
+            or sorted(submitted) != list(range(1, len(responses) + 1))
+        ):
+            return removed, [plan]
+        outcomes = Journal(batch_id(payload)).states()
+        if any(outcomes.get(index) != "confirmed" for index in submitted):
+            return removed, [plan]
         source = payload.get("config", {}).get("pool_file")
         source = Path(source).resolve() if source else None
         directory = plan.resolve().parent
