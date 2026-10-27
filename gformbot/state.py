@@ -73,6 +73,107 @@ class Journal:
         except (sqlite3.Error, OSError) as exc:
             raise ValueError(f"Cannot read submission journal {self.path}: {exc}") from exc
 
+    @contextmanager
+    def _upload_connection(self):
+        with self._connect() as connection:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS uploads (batch TEXT NOT NULL, response INTEGER NOT NULL, question INTEGER NOT NULL, manifest TEXT NOT NULL, state TEXT NOT NULL, ids TEXT NOT NULL, PRIMARY KEY(batch,response,question))"
+            )
+            yield connection
+
+    def upload_records(self, response):
+        if not self.path.exists():
+            return {}
+        with self._upload_connection() as connection:
+            return {
+                q: {"manifest": digest, "state": state, "ids": json.loads(ids)}
+                for q, digest, state, ids in connection.execute(
+                    "SELECT question,manifest,state,ids FROM uploads WHERE batch=? AND response=?",
+                    (self.identity, response),
+                )
+            }
+
+    def upload_record(self, response, question):
+        return self.upload_records(response).get(question)
+
+    @contextmanager
+    def upload_lock(self, response, question):
+        """An OS lock prevents reconciliation while a transfer is still running."""
+        import os
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        path = self.path.with_name(f"upload-{self.identity}-{response}-{question}.lock")
+        with path.open("a+b") as handle:
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise ValueError(
+                    "This attachment transfer is still running; wait before reviewing or retrying it."
+                ) from exc
+            try:
+                yield
+            finally:
+                if os.name == "nt":
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+
+    def begin_upload(self, response, question, manifest):
+        with self._upload_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            previous = connection.execute(
+                "SELECT manifest,state FROM uploads WHERE batch=? AND response=? AND question=?",
+                (self.identity, response, question),
+            ).fetchone()
+            if previous and previous != (manifest, "prepared"):
+                raise ValueError(
+                    "A previous upload is already verified or uncertain; review it before retrying."
+                )
+            connection.execute(
+                "INSERT INTO uploads VALUES(?,?,?,?,?,?) ON CONFLICT(batch,response,question) DO UPDATE SET state='uploading',ids='[]'",
+                (self.identity, response, question, manifest, "uploading", "[]"),
+            )
+
+    def finish_upload(self, response, question, manifest, *, ids=None, uncertain=False):
+        if not uncertain and (
+            not isinstance(ids, list) or not ids or any(not isinstance(i, str) or not i for i in ids)
+        ):
+            raise ValueError("Upload verification requires accepted file identities.")
+        with self._upload_connection() as connection:
+            result = connection.execute(
+                "UPDATE uploads SET state=?,ids=? WHERE batch=? AND response=? AND question=? AND manifest=? AND state='uploading'",
+                (
+                    "uncertain" if uncertain else "verified",
+                    json.dumps(ids or []),
+                    self.identity,
+                    response,
+                    question,
+                    manifest,
+                ),
+            )
+            if result.rowcount != 1:
+                raise ValueError("Upload state changed; inspect the saved transfer before continuing.")
+
+    def reset_upload(self, response, question):
+        """Called only after an explicit user reconciliation, never by resume flags."""
+        with self.upload_lock(response, question), self._upload_connection() as connection:
+            connection.execute(
+                "UPDATE uploads SET state='prepared',ids='[]' WHERE batch=? AND response=? AND question=?",
+                (self.identity, response, question),
+            )
+
     def record_followups(self, response, section, stage, blocks, log_path, title):
         from .config import clean_path
 

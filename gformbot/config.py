@@ -49,6 +49,9 @@ class QuestionConfig:
     rating_icon: str = ""
     allow_other: bool = False
     other_branch: int | None = None
+    upload_types: list[int] = field(default_factory=list)
+    upload_max_files: int = 1
+    upload_max_size: int = 0
 
 
 @dataclass
@@ -193,6 +196,7 @@ def validate_config(config: RunConfig) -> None:
                 "dropdown",
                 "scale",
                 "rating",
+                "upload",
             }
             and not config.unsupported
         ):
@@ -230,6 +234,10 @@ def validate_config(config: RunConfig) -> None:
             )
         ):
             raise ValueError(f"{label}: invalid rating values or icon.")
+        if q.qtype == "upload" and not q.unsupported:
+            from .uploads import upload_settings
+
+            upload_settings(q, ["", q.upload_types, q.upload_max_files, q.upload_max_size])
         if (
             not isinstance(q.exclusive_options, list)
             or any(not isinstance(option, str) or option not in q.options for option in q.exclusive_options)
@@ -318,6 +326,9 @@ def config_from_schema(schema) -> RunConfig:
                 "rating_icon",
                 "allow_other",
                 "other_branch",
+                "upload_types",
+                "upload_max_files",
+                "upload_max_size",
             )
         }
         questions.append(QuestionConfig(**values))

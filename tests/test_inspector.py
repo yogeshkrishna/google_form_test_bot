@@ -153,7 +153,8 @@ def test_unavailable_or_changed_schema_is_not_an_empty_success():
 def test_unsupported_questions_are_still_available_for_display():
     form = parse_form_html(document([item(1, "Upload a document", 13)]), URL)
     assert form.questions[0].text == "Upload a document"
-    assert form.questions[0].qtype == "file upload"
+    assert form.questions[0].qtype == "upload"
+    assert form.questions[0].unsupported  # Missing upload settings still block execution.
     with pytest.raises(ValueError, match="file upload"):
         form.require_supported()
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Prepare explicit attachments with file hashes, separate transfer permission, and durable upload recovery. Local file-input filling is verified; live Google picker compatibility remains pending Phase 6. Unrecognized pickers stop before transfer.
+
 - Recognize verified navigation and clear-selection identities across translated labels; reject conflicting controls and batch navigation metadata reads.
 
 - Preserve ordered media and attachments; accept explicit visual context or a decorative declaration for AI generation without adding a vision dependency.

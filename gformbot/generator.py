@@ -227,7 +227,8 @@ def validate_answer(
             and not (
                 q.qtype == "checkbox" and isinstance(value, list) and all(isinstance(v, str) for v in value)
             )
-            and not (q.allow_other and isinstance(value, dict))
+            and not ((q.allow_other or q.qtype == "upload") and isinstance(value, dict))
+            and not (q.qtype == "upload" and isinstance(value, list))
         ):
             raise ValueError(f"Q{q.index}: answer must be text or a checkbox list.")
         result[q.index] = copy_value(value)
@@ -238,6 +239,11 @@ def validate_answer(
     for q in questions:
         value = result[q.index]
         label = f"Q{q.index} ({q.text})"
+        if q.qtype == "upload":
+            from .uploads import file_answer
+
+            result[q.index] = file_answer(q, value)
+            continue
         if isinstance(value, dict):
             result[q.index] = other_answer(q, value)
             continue
@@ -338,6 +344,18 @@ def load_reference(
                     try:
                         profiles[i][question.index] = parse_time(
                             question, profiles[i][question.index], csv=True
+                        )
+                    except ValueError as exc:
+                        raise ValueError(f"CSV row {i + 2}: {exc}") from exc
+    from .uploads import file_answer
+
+    for question in config.questions:
+        if question.qtype == "upload" and columns[question.index]:
+            for i, reached in enumerate(active):
+                if question.index in reached:
+                    try:
+                        profiles[i][question.index] = file_answer(
+                            question, profiles[i][question.index], base=clean_path(path).resolve().parent
                         )
                     except ValueError as exc:
                         raise ValueError(f"CSV row {i + 2}: {exc}") from exc

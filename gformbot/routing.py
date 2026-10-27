@@ -8,6 +8,7 @@ SUPPORTED_TYPES = {
     "dropdown",
     "scale",
     "rating",
+    "upload",
     "text",
     "textarea",
     "date",
