@@ -31,9 +31,9 @@ class SubmissionRejectedError(RuntimeError):
     """The form explicitly rejected an attempted submission."""
 
 
-def _require_supported(config: RunConfig, active=None):
+def _require_supported(config: RunConfig, active=None, routing=None):
     try:
-        Routing(config).require_supported(active)
+        (routing or Routing(config)).require_supported(active)
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     if not config.questions:
@@ -724,7 +724,7 @@ def execute_response(
     answers = validate_answer(form, answers, routing=routes)
     path = list(routes.walk(answers))
     planned = {q.index for section in path for q in routes.questions[section]}
-    _require_supported(form, planned)
+    _require_supported(form, planned, routes)
     driver._gformbot_submission_clicked = False
     driver.get(form.url)
     _wait(driver, timeout, lambda d: d.find_elements(By.TAG_NAME, "body"), "The form page did not load.")

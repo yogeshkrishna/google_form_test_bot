@@ -220,9 +220,7 @@ def validate_answer(
     active_indexes = set(result) if partial else routes.active(result)
     routes.require_supported(active_indexes)
     questions = (q for q in config.questions if q.index in active_indexes)
-    active = set()
     for q in questions:
-        active.add(q.index)
         value = result[q.index]
         label = f"Q{q.index} ({q.text})"
         if q.qtype == "checkbox":
@@ -271,7 +269,7 @@ def validate_answer(
         else:
             raise ValueError(f"{label}: unsupported question type {q.qtype!r}.")
         result[q.index] = value
-    validate_columns(config, result, active)
+    validate_columns(config, result, active_indexes)
     return result
 
 
@@ -404,7 +402,7 @@ def make_answer(
         answer.update(routes.choose_route(answer))
     else:
         routes.require_supported()
-    groups = grid_groups(config)
+    groups = grid_groups(config) if any(q.grid_unique for q in config.questions) else {}
     for q in (q for page in routes.walk(answer) for q in routes.questions[page]):
         if q.grid_unique:
             if not all(row.index in answer for row in groups[q.item_id]):
