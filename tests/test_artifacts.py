@@ -3,24 +3,51 @@ import json
 import pytest
 
 from gformbot.artifacts import cleanup, describe, digest
+from gformbot.state import Journal, batch_id
 
 
 def plan(tmp_path, *, managed=True, source=None):
     csv = tmp_path / "generated.csv"
     csv.write_text("Q1\nSynthetic\n")
     path = tmp_path / "plan.json"
-    path.write_text(
-        json.dumps(
-            {
-                "kind": "gformbot-run",
-                "schema_version": 1,
-                "cleanup_on_success": managed,
-                "config": {"pool_file": str(source) if source else None},
-                "temporary_files": describe([csv], tmp_path),
-            }
-        )
-    )
+    payload = {
+        "kind": "gformbot-run",
+        "schema_version": 1,
+        "cleanup_on_success": managed,
+        "config": {"pool_file": str(source) if source else None},
+        "temporary_files": describe([csv], tmp_path),
+        "responses": [{"1": "Synthetic"}],
+        "submitted_indices": [1],
+    }
+    path.write_text(json.dumps(payload))
+    Journal(batch_id(payload)).set(1, "confirmed")
     return path, csv, digest(path)
+
+
+@pytest.mark.parametrize("policy", [None, "true", 1, {}, []])
+def test_unknown_retention_policy_preserves_files(tmp_path, policy):
+    path, csv, _ = plan(tmp_path)
+    payload = json.loads(path.read_text())
+    if policy is None:
+        payload.pop("cleanup_on_success")
+    else:
+        payload["cleanup_on_success"] = policy
+    path.write_text(json.dumps(payload))
+    assert cleanup(path, digest(path)) == ([], [])
+    assert path.exists() and csv.exists()
+
+
+@pytest.mark.parametrize("state", ["prepared", "reviewing", "attempted", "uncertain"])
+def test_cleanup_requires_all_rows_confirmed_in_journal(tmp_path, state):
+    path, csv, _ = plan(tmp_path)
+    payload = json.loads(path.read_text())
+    payload["responses"].append({"1": "Unfinished"})
+    payload["submitted_indices"] = [1, 2]  # Stale/edited progress is insufficient.
+    path.write_text(json.dumps(payload))
+    Journal(batch_id(payload)).set(2, state)
+    removed, preserved = cleanup(path, digest(path))
+    assert not removed and path in preserved
+    assert path.exists() and csv.exists()
 
 
 def test_success_removes_only_owned_outputs(tmp_path):

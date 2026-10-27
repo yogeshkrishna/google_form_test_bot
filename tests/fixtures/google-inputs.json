@@ -1,0 +1,171 @@
+{
+  "provenance": {
+    "captured_utc_date": "2026-10-27",
+    "sources": {
+      "stress": "https://docs.google.com/forms/d/e/1FAIpQLScYxE99iMgCABt2Wjm3SDYRKQihLzKWNpfFpEMncN0xKANqAA/viewform",
+      "cupcake": "https://docs.google.com/forms/d/e/1FAIpQLSeu-f2Sdry2bJBlKlv1HgT4bqqLx-V7Oih2MNMZ9ybqwbwj6w/viewform"
+    },
+    "sanitization": "Only public date/checkbox item arrays retained; no response values, account data, tokens, or form settings. Item array structure unchanged.",
+    "client_descriptor_sha256": "ace98b734a845c24bc845af1ad91ac602e18762765a5c62aba88b2670c63204b",
+    "client_observation": "Google DateOptions declares includes_time default false and includes_year default true. Validator descriptors name 200 SELECT_AT_LEAST, 201 SELECT_AT_MOST, 204 SELECT_EXACTLY; 202 is CHARACTERS_LESS_THAN.",
+    "browser_observation": "Stress application date [] rendered input[type=date]; Cupcake [1,1] rendered input[type=date] plus Hour/Minute. Inspection only; no submissions."
+  },
+  "items": {
+    "date_default": [
+      1440620549,
+      "S06 \u2014 Fictional application date",
+      null,
+      9,
+      [
+        [
+          885510713,
+          null,
+          1,
+          null,
+          null,
+          null,
+          null,
+          []
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S06 \u2014 Fictional application date"
+      ]
+    ],
+    "date_time": [
+      1522511294,
+      "Date needed",
+      null,
+      9,
+      [
+        [
+          814570148,
+          null,
+          0,
+          null,
+          null,
+          null,
+          null,
+          [
+            1,
+            1
+          ]
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "Date needed"
+      ]
+    ],
+    "checkbox_exact": [
+      1107764088,
+      "S07 \u2014 Select exactly two project tools",
+      null,
+      4,
+      [
+        [
+          875134702,
+          [
+            [
+              "Python"
+            ],
+            [
+              "JavaScript"
+            ],
+            [
+              "Java"
+            ],
+            [
+              "C"
+            ],
+            [
+              "SQL"
+            ]
+          ],
+          1,
+          null,
+          [
+            [
+              7,
+              204,
+              [
+                "2"
+              ],
+              "Select exactly 2 choices."
+            ]
+          ]
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S07 \u2014 Select exactly two project tools"
+      ]
+    ],
+    "checkbox_minimum": [
+      1367708453,
+      "S10 \u2014 Select at least two backlog priorities",
+      null,
+      4,
+      [
+        [
+          1566051017,
+          [
+            [
+              "Reliability"
+            ],
+            [
+              "Performance"
+            ],
+            [
+              "Accessibility"
+            ],
+            [
+              "Documentation"
+            ]
+          ],
+          1,
+          null,
+          [
+            [
+              7,
+              200,
+              [
+                "2"
+              ],
+              "Select at least 2 choices."
+            ]
+          ]
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S10 \u2014 Select at least two backlog priorities"
+      ]
+    ]
+  }
+}
