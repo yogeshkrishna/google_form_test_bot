@@ -14,7 +14,7 @@ from .grids import grid_groups, random_grid, validate_columns
 from .routing import Routing
 from .validation import needs_email, normalize_csv_dates, parse_date, parse_time, validate_text
 
-CHOICE_TYPES = {"radio", "checkbox", "dropdown", "scale"}
+CHOICE_TYPES = {"radio", "checkbox", "dropdown", "scale", "rating"}
 TEXT_TYPES = {"text", "textarea", "date", "time", "duration"}
 
 

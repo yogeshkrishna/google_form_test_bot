@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support icon ratings as a distinct type with existing choice validation, generation and browser readback.
+
 - Add clock time/duration and route-aware compatibility checks. Preserve unused imported answers, block unsupported selected sections, and generate supported terminating routes without retry loops.
 
 - Support both grid types across CSV, saved answers, generation, and verified filling, including shuffled rows and column restrictions.

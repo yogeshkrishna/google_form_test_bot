@@ -46,6 +46,7 @@ class QuestionConfig:
     grid_row: str = ""
     grid_unique: bool = False
     unsupported: list[str] = field(default_factory=list)
+    rating_icon: str = ""
 
 
 @dataclass
@@ -174,7 +175,18 @@ def validate_config(config: RunConfig) -> None:
             raise ValueError(f"{label}: question and description must be text.")
         if not isinstance(q.qtype, str) or (
             q.qtype
-            not in {"text", "textarea", "date", "time", "duration", "radio", "checkbox", "dropdown", "scale"}
+            not in {
+                "text",
+                "textarea",
+                "date",
+                "time",
+                "duration",
+                "radio",
+                "checkbox",
+                "dropdown",
+                "scale",
+                "rating",
+            }
             and not config.unsupported
         ):
             raise ValueError(f"{label}: unsupported question type {q.qtype!r}.")
@@ -194,6 +206,16 @@ def validate_config(config: RunConfig) -> None:
             raise ValueError(f"{label}: options must be a list of nonempty text labels.")
         if q.qtype in {"radio", "checkbox", "dropdown", "scale"} and not q.options and not config.unsupported:
             raise ValueError(f"{label}: choice questions need at least one option.")
+        if (
+            q.qtype == "rating"
+            and not q.unsupported
+            and (
+                q.rating_icon not in ("star", "heart", "thumb_up")
+                or not 3 <= len(q.options) <= 10
+                or q.options != [str(i) for i in range(1, len(q.options) + 1)]
+            )
+        ):
+            raise ValueError(f"{label}: invalid rating values or icon.")
         if (
             not isinstance(q.exclusive_options, list)
             or any(not isinstance(option, str) or option not in q.options for option in q.exclusive_options)
@@ -279,6 +301,7 @@ def config_from_schema(schema) -> RunConfig:
                 "grid_row",
                 "grid_unique",
                 "unsupported",
+                "rating_icon",
             )
         }
         questions.append(QuestionConfig(**values))

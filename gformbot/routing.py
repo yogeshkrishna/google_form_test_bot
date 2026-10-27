@@ -2,7 +2,18 @@
 
 import random
 
-SUPPORTED_TYPES = {"radio", "checkbox", "dropdown", "scale", "text", "textarea", "date", "time", "duration"}
+SUPPORTED_TYPES = {
+    "radio",
+    "checkbox",
+    "dropdown",
+    "scale",
+    "rating",
+    "text",
+    "textarea",
+    "date",
+    "time",
+    "duration",
+}
 
 
 class Routing:

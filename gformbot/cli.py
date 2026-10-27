@@ -216,6 +216,8 @@ def _show_form(config):
             rules.append(date_format(q))
         if q.qtype in ("time", "duration"):
             rules.append(time_format(q))
+        if q.qtype == "rating":
+            rules.append("Icon: " + q.rating_icon)
         if q.grid_unique:
             rules.append("Each column can be used in only one row of this grid")
         if rules:
