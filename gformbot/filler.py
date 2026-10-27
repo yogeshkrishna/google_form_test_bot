@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from .config import QuestionConfig, RunConfig
 from .followups import observe_page
-from .routing import Routing
+from .routing import SUPPORTED_TYPES, Routing
 from .selenium_runtime import (
     By,
     ElementClickInterceptedException,
@@ -18,9 +18,9 @@ from .selenium_runtime import (
     TimeoutException,
     WebDriverWait,
 )
-from .validation import parse_date
+from .validation import parse_date, parse_time
 
-_SUPPORTED = {"radio", "checkbox", "dropdown", "scale", "text", "textarea", "date"}
+_SUPPORTED = SUPPORTED_TYPES
 
 
 class SubmissionUncertainError(RuntimeError):
@@ -31,12 +31,18 @@ class SubmissionRejectedError(RuntimeError):
     """The form explicitly rejected an attempted submission."""
 
 
-def _require_supported(config: RunConfig):
-    if config.unsupported:
-        raise RuntimeError("This form cannot be filled reliably: " + "; ".join(config.unsupported))
+def _require_supported(config: RunConfig, active=None, routing=None):
+    try:
+        (routing or Routing(config)).require_supported(active)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     if not config.questions:
         raise RuntimeError("No answerable questions are configured.")
-    unknown = [q.text for q in config.questions if q.qtype not in _SUPPORTED]
+    unknown = [
+        q.text
+        for q in config.questions
+        if q.qtype not in _SUPPORTED and (active is None or q.index in active)
+    ]
     if unknown:
         raise RuntimeError("Unsupported controls: " + "; ".join(unknown))
     if not config.sections:
@@ -382,6 +388,36 @@ def _fill_date(driver, question, box, value, timeout):
             raise RuntimeError(f"The date is outside the form's allowed range for {question.text!r}.")
 
 
+def _fill_time(driver, question, box, value, timeout):
+    canonical = parse_time(question, value)
+    box, fields = _locate_controls(driver, question, box, "input:not([type='hidden'])", timeout)
+    native = [field for field in fields if field.get_attribute("type") == "time"]
+    if len(native) == 1 and question.qtype == "time":
+        targets = [(native[0], canonical)]
+    else:
+        parts = {}
+        required = ("hour", "minute", "second") if question.qtype == "duration" else ("hour", "minute")
+        for field in fields:
+            label, name = (field.get_attribute("aria-label") or "").lower(), field.get_attribute("name") or ""
+            for part in required:
+                if label == part or name.endswith("_" + part):
+                    if part in parts:
+                        raise RuntimeError(f"Ambiguous time controls for {question.text!r}.")
+                    parts[part] = field
+        if native or set(parts) != set(required):
+            raise RuntimeError(f"Could not identify the time controls for {question.text!r}.")
+        values = canonical.split(":") if canonical else [""] * len(required)
+        targets = [
+            (parts[part], str(int(text)) if text else "") for part, text in zip(required, values, strict=True)
+        ]
+    for field, text in targets:
+        _set_value(
+            driver, field, text, timeout, f"The browser did not retain the time for {question.text!r}."
+        )
+        if text and not driver.execute_script("return arguments[0].validity.valid;", field):
+            raise RuntimeError(f"The time is outside the form's allowed range for {question.text!r}.")
+
+
 def _fill_question(driver, question: QuestionConfig, box, value, timeout):
     for attempt in range(3):
         try:
@@ -404,6 +440,9 @@ def _fill_question_once(driver, question: QuestionConfig, box, value, timeout):
         raise RuntimeError(f"Unsupported question type {question.qtype!r}: {question.text}")
     if question.qtype == "date":
         _fill_date(driver, question, box, value, timeout)
+        return
+    if question.qtype in ("time", "duration"):
+        _fill_time(driver, question, box, value, timeout)
         return
     if question.qtype in {"text", "textarea"}:
         box, fields = _locate_controls(driver, question, box, "input:not([type='hidden']), textarea", timeout)
@@ -679,13 +718,13 @@ def execute_response(
     observe: Callable | None = None,
 ) -> dict:
     """Fill and verify the frozen response's route; submit only at its end."""
-    _require_supported(form)
     routes = getattr(form, "_routing", None) or Routing(form)
     from .generator import validate_answer
 
     answers = validate_answer(form, answers, routing=routes)
     path = list(routes.walk(answers))
     planned = {q.index for section in path for q in routes.questions[section]}
+    _require_supported(form, planned, routes)
     driver._gformbot_submission_clicked = False
     driver.get(form.url)
     _wait(driver, timeout, lambda d: d.find_elements(By.TAG_NAME, "body"), "The form page did not load.")

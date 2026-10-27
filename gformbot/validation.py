@@ -243,6 +243,56 @@ def text_schema(question, required):
     return result
 
 
+def time_settings(flags):
+    if (
+        not isinstance(flags, list)
+        or len(flags) > 1
+        or flags
+        and flags[0] is not None
+        and (type(flags[0]) not in (bool, int) or flags[0] not in (0, 1))
+    ):
+        raise ValueError("Unrecognized time settings.")
+    return bool(flags and flags[0])
+
+
+def time_format(question):
+    return "HH:MM:SS (hours 00–72)" if question.qtype == "duration" else "HH:MM (24-hour clock)"
+
+
+def time_pattern(question):
+    return (
+        r"(?:[0-6][0-9]|7[0-2]):[0-5][0-9]:[0-5][0-9]"
+        if question.qtype == "duration"
+        else r"(?:[01][0-9]|2[0-3]):[0-5][0-9]"
+    )
+
+
+def parse_time(question, value, *, csv=False):
+    if not isinstance(value, str):
+        raise ValueError(f"Use {time_format(question)} for {question.text!r}.")
+    if csv:
+        value = value.strip()
+    if not value:
+        return ""
+    if csv:
+        match = re.fullmatch(r"\s*([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?\s*(AM|PM)?\s*", value, re.I)
+        if match:
+            hour, minute, second, period = match.groups()
+            h, m, s = int(hour), int(minute), int(second or 0)
+            if period:
+                if question.qtype == "duration" or not 1 <= h <= 12:
+                    raise ValueError(f"Invalid time for {question.text!r}: {value!r}.")
+                h = h % 12 + (12 if period.upper() == "PM" else 0)
+            if question.qtype == "time" and s:
+                raise ValueError(f"Clock time does not accept nonzero seconds for {question.text!r}.")
+            if question.qtype == "duration" and second is None:
+                raise ValueError(f"Use HH:MM:SS for duration {question.text!r}.")
+            value = f"{h:02d}:{m:02d}" + (f":{s:02d}" if question.qtype == "duration" else "")
+    if not re.fullmatch(time_pattern(question), value):
+        raise ValueError(f"Invalid time/duration; use {time_format(question)} for {question.text!r}.")
+    return value
+
+
 def date_format(question):
     return ("YYYY-MM-DD" if question.date_include_year else "MM-DD") + (
         " HH:MM" if question.date_include_time else ""

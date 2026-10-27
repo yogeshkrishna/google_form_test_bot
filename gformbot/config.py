@@ -45,6 +45,7 @@ class QuestionConfig:
     grid_title: str = ""
     grid_row: str = ""
     grid_unique: bool = False
+    unsupported: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -172,7 +173,8 @@ def validate_config(config: RunConfig) -> None:
         if not isinstance(q.text, str) or not isinstance(q.description, str):
             raise ValueError(f"{label}: question and description must be text.")
         if not isinstance(q.qtype, str) or (
-            q.qtype not in {"text", "textarea", "date", "radio", "checkbox", "dropdown", "scale"}
+            q.qtype
+            not in {"text", "textarea", "date", "time", "duration", "radio", "checkbox", "dropdown", "scale"}
             and not config.unsupported
         ):
             raise ValueError(f"{label}: unsupported question type {q.qtype!r}.")
@@ -187,7 +189,7 @@ def validate_config(config: RunConfig) -> None:
         if q.pool_column is not None and (not isinstance(q.pool_column, str) or not q.pool_column.strip()):
             raise ValueError(f"{label}: pool_column must be nonempty text or null.")
         if not isinstance(q.options, list) or any(
-            not isinstance(option, str) or not option.strip() for option in q.options
+            not isinstance(option, str) or not option.strip() and not q.unsupported for option in q.options
         ):
             raise ValueError(f"{label}: options must be a list of nonempty text labels.")
         if q.qtype in {"radio", "checkbox", "dropdown", "scale"} and not q.options and not config.unsupported:
@@ -200,6 +202,10 @@ def validate_config(config: RunConfig) -> None:
             raise ValueError(f"{label}: exclusive_options must contain distinct known option labels.")
         if not isinstance(q.validation, list) or any(not isinstance(rule, list) for rule in q.validation):
             raise ValueError(f"{label}: validation must be a list of rules.")
+        if not isinstance(q.unsupported, list) or any(
+            not isinstance(issue, str) or not issue for issue in q.unsupported
+        ):
+            raise ValueError(f"{label}: unsupported findings must be nonempty text values.")
         if q.qtype in ("text", "textarea") and not config.unsupported:
             from .validation import text_rules
 
@@ -212,7 +218,7 @@ def validate_config(config: RunConfig) -> None:
             or q.max_select < max(q.min_select, int(q.required and q.qtype == "checkbox"))
         ):
             raise ValueError(f"Q{q.index}: invalid checkbox selection bounds.")
-        if len(q.options) != len(set(q.options)):
+        if len(q.options) != len(set(q.options)) and not q.unsupported:
             raise ValueError(f"Q{q.index}: duplicate options are ambiguous.")
         if q.weights is not None:
             if (
@@ -272,6 +278,7 @@ def config_from_schema(schema) -> RunConfig:
                 "grid_title",
                 "grid_row",
                 "grid_unique",
+                "unsupported",
             )
         }
         questions.append(QuestionConfig(**values))

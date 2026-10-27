@@ -159,7 +159,7 @@ def _url_prompt():
 
 
 def _show_form(config):
-    from .validation import date_format, text_rules
+    from .validation import date_format, text_rules, time_format
 
     def destination(page):
         return "Submit" if page == 0 else f"Section {page}: {config.sections[page - 1]}"
@@ -214,6 +214,8 @@ def _show_form(config):
                 rules.append("Custom validation (not supported)")
         if q.qtype == "date":
             rules.append(date_format(q))
+        if q.qtype in ("time", "duration"):
+            rules.append(time_format(q))
         if q.grid_unique:
             rules.append("Each column can be used in only one row of this grid")
         if rules:
@@ -1189,8 +1191,11 @@ def _new_batch_wizard():
     _print_banner()
     _info("Arrow keys to choose; Enter to select; Ctrl+C to cancel.")
     config = _run_inspect(_url_prompt())
-    if config.unsupported:
-        raise ValueError("This form contains unsupported questions: " + "; ".join(config.unsupported))
+    from .routing import Routing
+
+    Routing(config).choose_route(
+        {q.index: q.fixed_value for q in config.questions if q.fixed_value is not None}
+    )
     config._prompt_csv_count = True
     while True:
         source = _ask_select(

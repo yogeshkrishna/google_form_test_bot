@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .access import FormAccessError, check_browser_access, raise_for_access
-from .validation import checkbox_bounds, date_settings, is_checkbox_rule, text_rules
+from .validation import checkbox_bounds, date_settings, is_checkbox_rule, text_rules, time_settings
 
 
 @dataclass
@@ -41,6 +41,7 @@ class QuestionSchema:
     grid_title: str = ""
     grid_row: str = ""
     grid_unique: bool = False
+    unsupported: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -64,13 +65,23 @@ class FormSchema:
         return next((q for q in self.questions if q.index == index), None)
 
     def require_supported(self) -> None:
-        if self.unsupported:
-            raise ValueError("This form cannot be filled reliably: " + "; ".join(self.unsupported))
+        from .routing import Routing
+
+        Routing(self).require_supported()
         if not self.questions:
             raise ValueError("No answerable questions were found in this form.")
 
 
-KINDS = {0: "text", 1: "textarea", 2: "radio", 3: "dropdown", 4: "checkbox", 5: "scale", 9: "date"}
+KINDS = {
+    0: "text",
+    1: "textarea",
+    2: "radio",
+    3: "dropdown",
+    4: "checkbox",
+    5: "scale",
+    9: "date",
+    10: "time",
+}
 UNSUPPORTED = {7: "grid", 10: "time", 13: "file upload", 18: "rating"}
 
 
@@ -242,6 +253,7 @@ def parse_form_html(document: str, url: str) -> FormSchema:
                     page=len(form.sections),
                     item_id=str(item_id),
                     description=description,
+                    unsupported=[form.unsupported[-1]] if type_code in (13, 18) else [],
                 )
             )
             continue
@@ -252,12 +264,20 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         if entry_id in seen_ids:
             raise ValueError(f"Duplicate answer field ID {entry_id}; inspection stopped.")
         seen_ids.add(entry_id)
-        option_data = _get(entry, 1) or []
+        raw_options = _get(entry, 1)
+        option_data = [] if raw_options is None else raw_options
+        if not isinstance(option_data, list) or any(
+            not isinstance(opt, list) or not opt for opt in option_data
+        ):
+            raise ValueError(f"Unrecognized choices or routing metadata for {title!r}.")
         options = [str(opt[0]) for opt in option_data if isinstance(opt, list) and opt]
+        issue_start = len(form.unsupported)
         other = any(_get(opt, 4) == 1 for opt in option_data)
         if other:
             form.unsupported.append(f"free-text Other option: {title}")
         if len(options) != len(set(options)):
+            if any(_get(opt, 2) is not None for opt in option_data):
+                raise ValueError(f"Ambiguous routing choices for {title!r}; inspection stopped.")
             form.unsupported.append(f"duplicate option labels: {title}")
         raw_validation = _get(entry, 4)
         validation = [] if raw_validation is None else raw_validation
@@ -282,6 +302,12 @@ def parse_form_html(document: str, url: str) -> FormSchema:
                 q.date_include_time, q.date_include_year = date_settings(_get(entry, 7))
             except ValueError:
                 form.unsupported.append(f"unrecognized date settings: {title}")
+        if q.qtype == "time":
+            try:
+                if time_settings(_get(entry, 6)):
+                    q.qtype = "duration"
+            except ValueError:
+                form.unsupported.append(f"unrecognized time settings: {title}")
         if q.qtype == "checkbox":
             _checkbox_rules(q)
             for rule in validation:
@@ -296,6 +322,7 @@ def parse_form_html(document: str, url: str) -> FormSchema:
                 form.unsupported.append(f"custom validation on {title!r}: {exc}")
         if q.qtype in ("radio", "checkbox", "dropdown", "scale") and not q.options:
             form.unsupported.append(f"missing option labels: {title}")
+        q.unsupported = form.unsupported[issue_start:]
         form.questions.append(q)
     form.pages = len(form.sections)
     form.section_ids = [str(value) for value in section_ids]
@@ -398,6 +425,7 @@ def schema_fingerprint(schema_or_config) -> str:
                     if q.grid_title
                     else {}
                 ),
+                **({"unsupported": q.unsupported} if q.unsupported else {}),
             }
             for q in source.questions
         ],

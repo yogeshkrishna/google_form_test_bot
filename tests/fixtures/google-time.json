@@ -1,0 +1,32 @@
+{
+  "source": "Owned Branching Labyrinth stress form, captured 2026-10-27. Unchanged raw TIME item. Google client TimeOptions.is_duration defaults false; validator accepts hours 0-23 for clock time and 0-72 for duration, minutes/seconds 0-59. Duration variants in tests are synthetic.",
+  "items": [
+    [
+      1991707146,
+      "S12 — Fictional preferred meeting time",
+      null,
+      10,
+      [
+        [
+          1264271861,
+          null,
+          1,
+          null,
+          null,
+          null,
+          []
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S12 — Fictional preferred meeting time"
+      ]
+    ]
+  ]
+}
