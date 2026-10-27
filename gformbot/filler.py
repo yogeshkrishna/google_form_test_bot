@@ -436,6 +436,46 @@ def _fill_question(driver, question: QuestionConfig, box, value, timeout):
 
 
 def _fill_question_once(driver, question: QuestionConfig, box, value, timeout):
+    if question.allow_other:
+        from dataclasses import replace
+
+        from .answers import other_answer
+
+        structured = other_answer(question, value) if isinstance(value, dict) else None
+        sentinel = "__other_option__"
+        if sentinel in question.options:
+            raise RuntimeError(f"Ambiguous Other identity for {question.text!r}.")
+        fields = box.find_elements(
+            By.CSS_SELECTOR,
+            f'input[name="entry.{question.entry_id}.other_option_response"], input[type="text"]',
+        )
+        fields = _visible(fields)
+        if len(fields) != 1:
+            raise RuntimeError(f"Could not identify the Other text field for {question.text!r}.")
+        adapted = replace(question, allow_other=False, options=[*question.options, sentinel])
+        choices = [*structured["choices"], sentinel] if structured else value
+        if structured and question.qtype == "radio":
+            choices = sentinel
+        if not structured:
+            _set_value(
+                driver,
+                fields[0],
+                "",
+                timeout,
+                f"The browser did not clear the Other text for {question.text!r}.",
+            )
+        _fill_question_once(driver, adapted, box, choices, timeout)
+        if structured:
+            _set_value(
+                driver,
+                fields[0],
+                structured["other"],
+                timeout,
+                f"The browser did not retain the Other text for {question.text!r}.",
+            )
+            # Typing custom text can update the choice control; verify both.
+            _fill_question_once(driver, adapted, box, choices, timeout)
+        return
     if question.qtype not in _SUPPORTED:
         raise RuntimeError(f"Unsupported question type {question.qtype!r}: {question.text}")
     if question.qtype == "date":

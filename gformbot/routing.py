@@ -61,6 +61,15 @@ class Routing:
             ):
                 raise ValueError(f"Q{question.index}: invalid section routing choices or destinations.")
             self.enabled |= bool(branches)
+            if question.other_branch is not None:
+                if (
+                    not question.allow_other
+                    or question.qtype != "radio"
+                    or type(question.other_branch) is not int
+                    or not 0 <= question.other_branch <= count
+                ):
+                    raise ValueError(f"Q{question.index}: invalid Other routing destination.")
+                self.enabled = True
             self.questions[question.page].append(question)
         scoped = {issue for q in form.questions for issue in q.unsupported}
         self.global_issues = [issue for issue in form.unsupported if issue not in scoped]
@@ -93,11 +102,16 @@ class Routing:
             seen.add(page)
             outcomes = {self.destinations[page - 1]: {}}
             for q in self.questions[page]:
-                if not q.branches:
+                if not q.branches and q.other_branch is None:
                     continue
                 if q.index in preset:
                     values = [preset[q.index]]
-                    if values[0] not in q.options and not (not q.required and values[0] == ""):
+                    if isinstance(values[0], dict):
+                        from .answers import other_answer
+
+                        other_answer(q, values[0])
+                        values = [None]
+                    elif values[0] not in q.options and not (not q.required and values[0] == ""):
                         raise ValueError(f"Q{q.index}: choose an exact routing option.")
                 else:
                     options = [
@@ -116,7 +130,14 @@ class Routing:
                 following = {}
                 for value in values:
                     for target, answers in outcomes.items():
-                        following.setdefault(q.branches.get(value, target), {**answers, q.index: value})
+                        destination = (
+                            q.other_branch
+                            if value is None and q.other_branch is not None
+                            else q.branches.get(value, target)
+                        )
+                        following.setdefault(
+                            destination, {**answers, q.index: preset[q.index] if value is None else value}
+                        )
                 outcomes = following
             if page == len(self.questions):
                 outcomes = {0: next(iter(outcomes.values()), {})}
@@ -131,9 +152,16 @@ class Routing:
             return 0
         target = self.destinations[page - 1]
         for question in self.questions[page]:
-            if not question.branches:
+            if not question.branches and question.other_branch is None:
                 continue
             value = answer.get(question.index, answer.get(str(question.index), ""))
+            if isinstance(value, dict):
+                from .answers import other_answer
+
+                other_answer(question, value)
+                if question.other_branch is not None:
+                    target = question.other_branch
+                continue
             if value is None or value == "":
                 if question.required:
                     raise ValueError(

@@ -43,6 +43,8 @@ class QuestionSchema:
     grid_unique: bool = False
     unsupported: list[str] = field(default_factory=list)
     rating_icon: str = ""
+    allow_other: bool = False
+    other_branch: int | None = None
 
 
 @dataclass
@@ -272,11 +274,11 @@ def parse_form_html(document: str, url: str) -> FormSchema:
             not isinstance(opt, list) or not opt for opt in option_data
         ):
             raise ValueError(f"Unrecognized choices or routing metadata for {title!r}.")
-        options = [str(opt[0]) for opt in option_data if isinstance(opt, list) and opt]
+        other_options = [opt for opt in option_data if _get(opt, 4) == 1]
+        if len(other_options) > 1 or other_options and type_code not in (2, 4):
+            raise ValueError(f"Unrecognized Other option metadata for {title!r}.")
+        options = [str(opt[0]) for opt in option_data if _get(opt, 4) != 1]
         issue_start = len(form.unsupported)
-        other = any(_get(opt, 4) == 1 for opt in option_data)
-        if other:
-            form.unsupported.append(f"free-text Other option: {title}")
         if len(options) != len(set(options)):
             if any(_get(opt, 2) is not None for opt in option_data):
                 raise ValueError(f"Ambiguous routing choices for {title!r}; inspection stopped.")
@@ -297,7 +299,11 @@ def parse_form_html(document: str, url: str) -> FormSchema:
             description=description,
             min_select=1 if entry[2] and type_code == 4 else 0,
             validation=validation,
-            branches={str(opt[0]): opt[2] for opt in option_data if _get(opt, 2) is not None},
+            branches={
+                str(opt[0]): opt[2] for opt in option_data if _get(opt, 2) is not None and _get(opt, 4) != 1
+            },
+            allow_other=bool(other_options),
+            other_branch=_get(other_options[0], 2) if other_options else None,
         )
         if q.qtype == "date":
             try:
@@ -338,7 +344,7 @@ def parse_form_html(document: str, url: str) -> FormSchema:
                 text_rules(q)
             except ValueError as exc:
                 form.unsupported.append(f"custom validation on {title!r}: {exc}")
-        if q.qtype in ("radio", "checkbox", "dropdown", "scale") and not q.options:
+        if q.qtype in ("radio", "checkbox", "dropdown", "scale") and not q.options and not q.allow_other:
             form.unsupported.append(f"missing option labels: {title}")
         q.unsupported = form.unsupported[issue_start:]
         form.questions.append(q)
@@ -362,6 +368,8 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         question.branches = {
             option: destination(value, question.page) for option, value in question.branches.items()
         }
+        if question.other_branch is not None:
+            question.other_branch = destination(question.other_branch, question.page)
     from .routing import Routing
 
     Routing(form)
@@ -445,6 +453,7 @@ def schema_fingerprint(schema_or_config) -> str:
                 ),
                 **({"unsupported": q.unsupported} if q.unsupported else {}),
                 **({"rating_icon": q.rating_icon} if q.qtype == "rating" else {}),
+                **({"allow_other": True, "other_branch": q.other_branch} if q.allow_other else {}),
             }
             for q in source.questions
         ],

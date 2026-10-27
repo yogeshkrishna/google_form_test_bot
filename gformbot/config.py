@@ -47,6 +47,8 @@ class QuestionConfig:
     grid_unique: bool = False
     unsupported: list[str] = field(default_factory=list)
     rating_icon: str = ""
+    allow_other: bool = False
+    other_branch: int | None = None
 
 
 @dataclass
@@ -204,8 +206,15 @@ def validate_config(config: RunConfig) -> None:
             not isinstance(option, str) or not option.strip() and not q.unsupported for option in q.options
         ):
             raise ValueError(f"{label}: options must be a list of nonempty text labels.")
-        if q.qtype in {"radio", "checkbox", "dropdown", "scale"} and not q.options and not config.unsupported:
+        if (
+            q.qtype in {"radio", "checkbox", "dropdown", "scale"}
+            and not q.options
+            and not q.allow_other
+            and not config.unsupported
+        ):
             raise ValueError(f"{label}: choice questions need at least one option.")
+        if type(q.allow_other) is not bool or q.allow_other and q.qtype not in ("radio", "checkbox"):
+            raise ValueError(f"{label}: Other is supported only on radio/checkbox questions.")
         if (
             q.qtype == "rating"
             and not q.unsupported
@@ -264,7 +273,7 @@ def validate_config(config: RunConfig) -> None:
             # need the answer validator, which deliberately does not recurse.
             from .generator import validate_answer
 
-            single = RunConfig(config.url, questions=[replace(q, page=1, branches={})])
+            single = RunConfig(config.url, questions=[replace(q, page=1, branches={}, other_branch=None)])
             values = [q.fixed_value] if q.fixed_value is not None else q.text_pool
             for value in values:
                 validate_answer(single, {q.index: value})
@@ -302,6 +311,8 @@ def config_from_schema(schema) -> RunConfig:
                 "grid_unique",
                 "unsupported",
                 "rating_icon",
+                "allow_other",
+                "other_branch",
             )
         }
         questions.append(QuestionConfig(**values))

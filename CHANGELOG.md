@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support explicit Other answers on radio/checkbox questions, including CSV, AI generation, editing, routing and saved-plan recovery. Existing answer formats remain unchanged.
+
 - Support icon ratings as a distinct type with existing choice validation, generation and browser readback.
 
 - Add clock time/duration and route-aware compatibility checks. Preserve unused imported answers, block unsupported selected sections, and generate supported terminating routes without retry loops.

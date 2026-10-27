@@ -1,0 +1,158 @@
+{
+  "source": "https://docs.google.com/forms/d/e/1FAIpQLSeIIY8c5jeEJKNaQeqbL_Q7KUb6boHgeaRIE_NEHHJhz2wfxw/viewform",
+  "captured": "2026-10-27",
+  "notes": "Unchanged raw public responder RADIO and CHECKBOX item arrays. No answers or submissions. The option at field choice index 4 is 1 for Other and its label is empty. Tests relabel and change required/validation settings explicitly.",
+  "items": [
+    [
+      765860013,
+      "What gender do you most identify with?",
+      null,
+      2,
+      [
+        [
+          1354861864,
+          [
+            [
+              "Male",
+              null,
+              null,
+              null,
+              0
+            ],
+            [
+              "Female",
+              null,
+              null,
+              null,
+              0
+            ],
+            [
+              "Non-Binary",
+              null,
+              null,
+              null,
+              0
+            ],
+            [
+              "Prefer not to say",
+              null,
+              null,
+              null,
+              0
+            ],
+            [
+              "",
+              null,
+              null,
+              null,
+              1
+            ]
+          ],
+          0,
+          null,
+          null,
+          null,
+          null,
+          null,
+          0
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "What gender do you most identify with?"
+      ]
+    ],
+    [
+      621506437,
+      "How would you describe yourself? (Please check all that apply)",
+      null,
+      4,
+      [
+        [
+          751147047,
+          [
+            [
+              "Hispanic or Latino American",
+              null,
+              null,
+              null,
+              0
+            ],
+            [
+              "Black or African American",
+              null,
+              null,
+              null,
+              0
+            ],
+            [
+              "Asian",
+              null,
+              null,
+              null,
+              0
+            ],
+            [
+              "American Indian or Alaska Native",
+              null,
+              null,
+              null,
+              0
+            ],
+            [
+              "Native Hawaiian or Other Pacific Islander",
+              null,
+              null,
+              null,
+              0
+            ],
+            [
+              "White",
+              null,
+              null,
+              null,
+              0
+            ],
+            [
+              "Arab",
+              null,
+              null,
+              null,
+              0
+            ],
+            [
+              "",
+              null,
+              null,
+              null,
+              1
+            ]
+          ],
+          0,
+          null,
+          null,
+          null,
+          null,
+          null,
+          0
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "How would you describe yourself? (Please check all that apply)"
+      ]
+    ]
+  ]
+}

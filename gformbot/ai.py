@@ -136,6 +136,8 @@ def _restore_checkpoint(path, key, count, config, partials):
 
 
 def _preserve_presets(answer, fixed, partial=None):
+    from .answers import copy_value
+
     presets = {**partial, **fixed} if partial else fixed
     for key, preset in presets.items():
         matches = set(answer[key]) == set(preset) if isinstance(preset, list) else answer[key] == preset
@@ -143,7 +145,7 @@ def _preserve_presets(answer, fixed, partial=None):
             raise ValueError(
                 f"Q{key}: preserve the preselected answer {preset!r}; generate only missing answers."
             )
-        answer[key] = list(preset) if isinstance(preset, list) else preset
+        answer[key] = copy_value(preset)
 
 
 def _encode_profile(config: RunConfig, row: dict) -> dict:
@@ -154,7 +156,12 @@ def _encode_profile(config: RunConfig, row: dict) -> dict:
         if key not in row and str(key) not in row:
             continue
         value = row.get(key, row.get(str(key)))
-        if question.qtype == "checkbox":
+        if isinstance(value, dict) and question.allow_other:
+            value = {
+                "choices": [question.options.index(option) + 1 for option in value["choices"]],
+                "other": value["other"],
+            }
+        elif question.qtype == "checkbox":
             value = [question.options.index(option) + 1 for option in value]
         elif question.qtype in ("radio", "dropdown", "scale", "rating"):
             value = question.options.index(value) + 1 if value else 0
@@ -168,7 +175,16 @@ def _decode_profile(config: RunConfig, row: dict, *, routing=None) -> dict:
     for question in config.questions:
         key = str(question.index)
         value = result.get(key)
-        values = value if question.qtype == "checkbox" and isinstance(value, list) else [value]
+        structured = question.allow_other and isinstance(value, dict)
+        if structured and (set(value) != {"choices", "other"} or not isinstance(value["choices"], list)):
+            raise ValueError(f"Q{key}: Other needs choices and other text.")
+        values = (
+            value["choices"]
+            if structured
+            else value
+            if question.qtype == "checkbox" and isinstance(value, list)
+            else [value]
+        )
         decoded = []
         for option in values:
             if isinstance(option, bool):
@@ -191,7 +207,13 @@ def _decode_profile(config: RunConfig, row: dict, *, routing=None) -> dict:
                 else:
                     raise ValueError(f"Q{key}: unknown option ID {option}.")
             decoded.append(option)
-        result[key] = decoded if question.qtype == "checkbox" and isinstance(value, list) else decoded[0]
+        result[key] = (
+            {"choices": decoded, "other": value["other"]}
+            if structured
+            else decoded
+            if question.qtype == "checkbox" and isinstance(value, list)
+            else decoded[0]
+        )
     return result
 
 
@@ -235,6 +257,29 @@ def _response_schema(config: RunConfig, count: int, *, routing=None) -> dict:
             raise GenerationError(
                 f"Question {question.index} ({question.qtype}) is not supported for generation."
             )
+        if question.allow_other:
+            schema = {
+                "anyOf": [
+                    schema,
+                    {
+                        "type": "object",
+                        "properties": {
+                            "choices": {
+                                "type": "array",
+                                "items": {
+                                    "type": "integer",
+                                    "enum": list(range(1, len(question.options) + 1)),
+                                },
+                                "uniqueItems": True,
+                                "maxItems": len(question.options) if question.qtype == "checkbox" else 0,
+                            },
+                            "other": {"type": "string", "minLength": 1, "pattern": "^[^\\r\\n]+$"},
+                        },
+                        "required": ["choices", "other"],
+                        "additionalProperties": False,
+                    },
+                ]
+            }
         if question.fixed_value is not None:
             schema["const"] = _encode_profile(config, {question.index: question.fixed_value})[key]
         properties[key] = schema
@@ -271,7 +316,13 @@ def _reference_context(config: RunConfig, reference: list[dict[int, Any]]) -> di
             if question.index not in reached:
                 continue
             value = row[question.index]
-            counts.update(value if isinstance(value, list) else [value])
+            counts.update(
+                value["choices"]
+                if isinstance(value, dict) and question.allow_other
+                else value
+                if isinstance(value, list)
+                else [value]
+            )
         frequencies[str(question.index)] = {
             str(index): counts[option] for index, option in enumerate(question.options, 1)
         }
@@ -416,6 +467,16 @@ def _generate_responses(
                 "required": question.required,
                 "options": {str(index): option for index, option in enumerate(question.options, 1)},
                 "exclusive_options": getattr(question, "exclusive_options", []),
+                **(
+                    {
+                        "other_answer": {
+                            "choices": "array of known option IDs",
+                            "other": "custom text; counts as one selection",
+                        }
+                    }
+                    if question.allow_other
+                    else {}
+                ),
                 "validation": getattr(question, "validation", None),
                 **(
                     {
@@ -452,6 +513,15 @@ def _generate_responses(
                 for q in config.questions
                 if q.branches
             },
+            **(
+                {
+                    "other_choices": {
+                        str(q.index): q.other_branch for q in config.questions if q.other_branch is not None
+                    }
+                }
+                if any(q.other_branch is not None for q in config.questions)
+                else {}
+            ),
         }
     system = (
         "Create synthetic test response profiles for a form. Return only JSON matching the supplied schema. "

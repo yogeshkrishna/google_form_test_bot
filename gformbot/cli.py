@@ -220,6 +220,8 @@ def _show_form(config):
             rules.append("Icon: " + q.rating_icon)
         if q.grid_unique:
             rules.append("Each column can be used in only one row of this grid")
+        if q.allow_other:
+            rules.append('Other: use {"choices": [...], "other": "custom text"}')
         if rules:
             details += ("\n\n" if details else "") + "\n".join(rules)
         question = q.text + ("\n" + q.description if q.description else "")
@@ -557,7 +559,7 @@ def _save_plan(config, answers, path=None, source="prepared", *, cleanup_on_succ
     from .artifacts import describe
 
     payload = {
-        "schema_version": 1,
+        "schema_version": 2 if any(q.allow_other for q in config.questions) else 1,
         "kind": "gformbot-run",
         "created_at": datetime.now().astimezone().isoformat(),
         "form_fingerprint": schema_fingerprint(config),
@@ -674,7 +676,7 @@ def _load_plan(path):
 
     try:
         payload = json.loads(clean_path(path).read_text(encoding="utf-8-sig"))
-        if payload.get("schema_version") != 1 or payload.get("kind") != "gformbot-run":
+        if payload.get("schema_version") not in (1, 2) or payload.get("kind") != "gformbot-run":
             raise ValueError("Unknown response plan format.")
         config = config_from_dict(payload["config"])
         config._instructions_known = "instructions" in payload["config"]
@@ -748,6 +750,7 @@ def _track_plan(config, answers, path, expected_digest, *, interactive=None):
 
 
 def _show_answer(answer, config, index=1):
+    from .answers import display_value
     from .routing import Routing
 
     active = Routing(config).active(answer)
@@ -757,7 +760,7 @@ def _show_answer(answer, config, index=1):
     table.add_column("Answer", ratio=3)
     for q in config.questions:
         value = answer[q.index]
-        text = "\n".join(value) if isinstance(value, list) else value
+        text = display_value(value)
         display = (
             (text or "(blank)") if q.index in active else ((text + " (not used)") if text else "(skipped)")
         )
@@ -809,12 +812,15 @@ def _edit_batch(config, answers, path):
     current = answers[index - 1][question]
     routes = Routing(config)
     previously_used = routes.active(answers[index - 1])
-    default = json.dumps(current, ensure_ascii=False) if isinstance(current, list) else current
+    default = json.dumps(current, ensure_ascii=False) if isinstance(current, (list, dict)) else current
     while True:
         value = _ask_text("New answer (checkboxes: JSON array; type /blank for empty)", default)
         value = "" if value == "/blank" else value
         candidate = {**answers[index - 1], question: value}
         try:
+            candidate[question] = validate_answer(config, {question: value}, partial=True, routing=routes)[
+                question
+            ]
             if routes.enabled:
                 for page in routes.walk(candidate):
                     for q in routes.questions[page]:
