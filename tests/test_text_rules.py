@@ -189,7 +189,7 @@ def test_public_commands_enforce_supplied_rules(tmp_path, monkeypatch, rule, goo
 
 @pytest.mark.browser
 @pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Enable local browser fixtures.")
-def test_supported_regex_semantics_match_google_javascript_wrappers():
+def test_supported_regex_semantics_match_google_javascript_wrappers(html_page):
     from gformbot.browser import get_driver
     from gformbot.patterns import matches
 
@@ -244,6 +244,7 @@ def test_supported_regex_semantics_match_google_javascript_wrappers():
                 compiled.append((rule.compiled, value))
     driver = get_driver("chrome", headless=True)
     try:
+        driver.get(html_page("<!doctype html><html><body>Regex conformance fixture</body></html>"))
         expected = driver.execute_script(
             "return arguments[0].map(([pattern,value])=>new RegExp(pattern).test(value))", cases
         )
