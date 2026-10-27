@@ -14,13 +14,17 @@ from gformbot.inspector import parse_form_html, schema_fingerprint
 
 
 def time_config(duration=False):
-    raw = json.loads((Path(__file__).parent / "fixtures/google-time.json").read_text(encoding="utf-8"))["items"][0]
+    raw = json.loads((Path(__file__).parent / "fixtures/google-time.json").read_text(encoding="utf-8"))[
+        "items"
+    ][0]
     raw = copy.deepcopy(raw)
     raw[4][0][6] = [1] if duration else []
     return config_from_schema(parse_form_html(document([raw]), URL))
 
 
-@pytest.mark.parametrize("duration,value", [(False, "00:00"), (False, "23:59"), (True, "27:15:00"), (True, "72:59:59")])
+@pytest.mark.parametrize(
+    "duration,value", [(False, "00:00"), (False, "23:59"), (True, "27:15:00"), (True, "72:59:59")]
+)
 def test_time_pipeline_roundtrip(duration, value, tmp_path):
     config = time_config(duration)
     assert not config.unsupported
@@ -32,16 +36,31 @@ def test_time_pipeline_roundtrip(duration, value, tmp_path):
     path = tmp_path / "time.csv"
     write_csv(config, [answer], path)
     assert load_reference(config, path) == [answer]
-    assert ai._response_schema(config, 1)["properties"]["responses"]["items"]["properties"]["1"]["type"] == "string"
+    assert (
+        ai._response_schema(config, 1)["properties"]["responses"]["items"]["properties"]["1"]["type"]
+        == "string"
+    )
 
 
-@pytest.mark.parametrize("duration,value", [(False, "24:00"), (False, "12:60"), (False, "12:30:01"), (True, "73:00:00"), (True, "27:15:60"), (True, "-1:00:00")])
+@pytest.mark.parametrize(
+    "duration,value",
+    [
+        (False, "24:00"),
+        (False, "12:60"),
+        (False, "12:30:01"),
+        (True, "73:00:00"),
+        (True, "27:15:60"),
+        (True, "-1:00:00"),
+    ],
+)
 def test_invalid_time_fails_before_browser(duration, value):
     with pytest.raises(ValueError, match="time|duration|HH"):
         validate_answer(time_config(duration), {1: value})
 
 
-@pytest.mark.parametrize("value,expected", [("2:05 PM", "14:05"), ("12:00 AM", "00:00"), ("14:05:00", "14:05")])
+@pytest.mark.parametrize(
+    "value,expected", [("2:05 PM", "14:05"), ("12:00 AM", "00:00"), ("14:05:00", "14:05")]
+)
 def test_csv_clock_formats(value, expected, tmp_path):
     path = tmp_path / "time.csv"
     path.write_text("Q1\n" + value + "\n")
@@ -80,6 +99,13 @@ def test_random_avoids_unsupported_and_looping_routes():
     config.questions[0].fixed_value = "Worker"
     with pytest.raises(ValueError, match="route|Upload|upload"):
         prepare_responses(config)
+    from gformbot.routing import Routing
+
+    config.questions[0].fixed_value = None
+    config.section_next = [2, 1, 4, 0]
+    for _ in range(10):
+        planned = Routing(config).choose_route({})
+        assert list(Routing(config).walk(planned)) == [1]
 
 
 def test_unknown_branch_rules_fail_closed_and_legacy_findings_stay_global():
@@ -92,6 +118,49 @@ def test_unknown_branch_rules_fail_closed_and_legacy_findings_stay_global():
         q.unsupported = []
     with pytest.raises(ValueError, match="Unsupported|reliably"):
         validate_answer(config, {1: "Skip"})
+    items = branch_items()
+    items[0][4][0][1][1][0] = "Student"
+    with pytest.raises(ValueError, match="Ambiguous routing"):
+        parse_form_html(document(items), URL)
+
+
+def test_ai_schema_and_corrections_respect_selected_route():
+    config = branch_config()
+    fields = ai._response_schema(config, 1)["properties"]["responses"]["items"]["properties"]
+    assert fields["3"]["const"] == ""
+    valid, errors = ai._validate_batch(
+        config, json.dumps({"responses": [{"1": 3, "2": "", "3": "", "4": ""}]}), 1
+    )
+    assert not errors and valid[0][1] == "Skip"
+    valid, errors = ai._validate_batch(
+        config, json.dumps({"responses": [{"1": 2, "2": "", "3": "", "4": "Hi"}]}), 1
+    )
+    assert not valid and "Upload" in errors[0]
+
+
+def test_unknown_time_settings_and_lossy_csv_rejected(tmp_path):
+    raw = json.loads((Path(__file__).parent / "fixtures/google-time.json").read_text(encoding="utf-8"))[
+        "items"
+    ][0]
+    raw[4][0][6] = [2]
+    form = parse_form_html(document([raw]), URL)
+    with pytest.raises(ValueError, match="time settings"):
+        form.require_supported()
+    path = tmp_path / "time.csv"
+    path.write_text("Q1\n14:05:01\n")
+    with pytest.raises(ValueError, match="CSV row 2.*seconds"):
+        load_reference(time_config(), path)
+
+
+def test_unsupported_route_blocks_before_opening_browser():
+    from gformbot.filler import execute_response
+
+    class Unopened:
+        def get(self, url):
+            pytest.fail("Unsupported route opened a browser")
+
+    with pytest.raises(ValueError, match="Upload"):
+        execute_response(Unopened(), branch_config(), {1: "Worker", 4: "Hi"})
 
 
 @pytest.mark.browser
@@ -103,13 +172,19 @@ def test_time_browser_readback(duration, value, html_page):
 
     config = time_config(duration)
     q = config.questions[0]
-    fields = "".join(f'<input name="entry.{q.entry_id}_{part}" aria-label="{part.title()}" type="number">'
-                     for part in (["hour", "minute", "second"] if duration else ["hour", "minute"]))
-    config.url = html_page(f'<div role="listitem"><div role="heading">{q.text}</div>{fields}</div><button>Submit</button>')
+    fields = "".join(
+        f'<input name="entry.{q.entry_id}_{part}" aria-label="{part.title()}" type="number">'
+        for part in (["hour", "minute", "second"] if duration else ["hour", "minute"])
+    )
+    config.url = html_page(
+        f'<div role="listitem"><div role="heading">{q.text}</div>{fields}</div><button>Submit</button>'
+    )
     driver = get_driver("chrome", headless=True)
     try:
         execute_response(driver, config, {1: value}, submit=False, timeout=3)
-        assert driver.execute_script('return [...document.querySelectorAll("input")].map(e=>Number(e.value))') == list(map(int, value.split(":")))
+        assert driver.execute_script(
+            'return [...document.querySelectorAll("input")].map(e=>Number(e.value))'
+        ) == list(map(int, value.split(":")))
         q.required = False
         execute_response(driver, config, {1: ""}, submit=False, timeout=3)
         assert driver.execute_script('return [...document.querySelectorAll("input")].every(e=>e.value==="")')

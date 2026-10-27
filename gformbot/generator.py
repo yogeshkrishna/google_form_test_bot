@@ -12,10 +12,10 @@ from typing import Any
 from .config import QuestionConfig, RunConfig, clean_path, validate_config
 from .grids import grid_groups, random_grid, validate_columns
 from .routing import Routing
-from .validation import needs_email, normalize_csv_dates, parse_date, validate_text
+from .validation import needs_email, normalize_csv_dates, parse_date, parse_time, validate_text
 
 CHOICE_TYPES = {"radio", "checkbox", "dropdown", "scale"}
-TEXT_TYPES = {"text", "textarea", "date"}
+TEXT_TYPES = {"text", "textarea", "date", "time", "duration"}
 
 
 class CheckboxRepairError(ValueError):
@@ -195,8 +195,6 @@ def validate_answer(
     routing: Routing | None = None,
     partial: bool = False,
 ) -> dict[int, Any]:
-    if config.unsupported:
-        raise ValueError("Unsupported form: " + "; ".join(config.unsupported))
     if not config.questions:
         raise ValueError("The form has no answerable questions.")
     if not isinstance(answer, dict):
@@ -219,11 +217,9 @@ def validate_answer(
             raise ValueError(f"Q{q.index}: answer must be text or a checkbox list.")
         result[q.index] = value.copy() if isinstance(value, list) else value
     routes = routing or Routing(config)
-    questions = (
-        (q for q in config.questions if q.index in result)
-        if partial
-        else (q for page in routes.walk(result) for q in routes.questions[page])
-    )
+    active_indexes = set(result) if partial else routes.active(result)
+    routes.require_supported(active_indexes)
+    questions = (q for q in config.questions if q.index in active_indexes)
     active = set()
     for q in questions:
         active.add(q.index)
@@ -265,6 +261,8 @@ def validate_answer(
                 raise ValueError(f"{label}: {value!r} is not an exact option.")
             if value and q.qtype == "date":
                 value, _ = parse_date(q, value)
+            if value and q.qtype in ("time", "duration"):
+                value = parse_time(q, value)
             if value and q.qtype in ("text", "textarea"):
                 try:
                     validate_text(q, value)
@@ -318,6 +316,15 @@ def load_reference(
                 )
                 for i, value in zip(indexes, normalized, strict=True):
                     profiles[i][question.index] = value
+        elif question.qtype in ("time", "duration") and column:
+            for i, reached in enumerate(active):
+                if question.index in reached:
+                    try:
+                        profiles[i][question.index] = parse_time(
+                            question, profiles[i][question.index], csv=True
+                        )
+                    except ValueError as exc:
+                        raise ValueError(f"CSV row {i + 2}: {exc}") from exc
     result = []
     for line, row in enumerate(profiles, 2):
         local_changes = []
@@ -393,14 +400,18 @@ def make_answer(
             routing=routes,
         )
     answer = {q.index: q.fixed_value for q in config.questions if q.fixed_value is not None}
+    if routes.enabled:
+        answer.update(routes.choose_route(answer))
+    else:
+        routes.require_supported()
     groups = grid_groups(config)
     for q in (q for page in routes.walk(answer) for q in routes.questions[page]):
         if q.grid_unique:
             if not all(row.index in answer for row in groups[q.item_id]):
                 answer.update(random_grid(groups[q.item_id], answer))
             continue
-        if q.fixed_value is not None:
-            value = q.fixed_value
+        if q.index in answer:
+            value = answer[q.index]
         elif q.qtype in CHOICE_TYPES:
             value = _random_from_options(q)
         elif q.text_pool:

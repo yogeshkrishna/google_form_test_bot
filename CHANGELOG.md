@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add clock time/duration and route-aware compatibility checks. Preserve unused imported answers, block unsupported selected sections, and generate supported terminating routes without retry loops.
+
 - Support both grid types across CSV, saved answers, generation, and verified filling, including shuffled rows and column restrictions.
 
 - Validate number comparisons, text rules, character limits and supported regex patterns through one shared path for CSV, AI output, editing and browser execution. Preserve imported values, display readable constraints, and isolate regex checks with bounded waits without adding dependencies.
