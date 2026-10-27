@@ -79,11 +79,16 @@ class RunConfig:
     email_collection: str = "unknown"
     section_ids: list[str] = field(default_factory=list)
     section_next: list[int] = field(default_factory=list)
+    media: list[dict] = field(default_factory=list)
+    media_context: str = ""
 
 
 def validate_config(config: RunConfig) -> None:
     if not isinstance(config, RunConfig):
         raise ValueError("Configuration must be a RunConfig object.")
+    from .media import validate_media
+
+    validate_media(config)
     if not isinstance(config.requires_signin, bool):
         raise ValueError("requires_signin must be true or false.")
     if config.one_response is not None and type(config.one_response) is not bool:
@@ -330,6 +335,7 @@ def config_from_schema(schema) -> RunConfig:
         email_collection=getattr(schema, "email_collection", "unknown"),
         section_ids=getattr(schema, "section_ids", []),
         section_next=getattr(schema, "section_next", []),
+        media=getattr(schema, "media", []),
     )
 
 

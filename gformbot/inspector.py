@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .access import FormAccessError, check_browser_access, raise_for_access
+from .media import inspect_media
 from .validation import checkbox_bounds, date_settings, is_checkbox_rule, text_rules, time_settings
 
 
@@ -63,6 +64,7 @@ class FormSchema:
     email_collection: str = "unknown"
     section_ids: list[str] = field(default_factory=list)
     section_next: list[int] = field(default_factory=list)
+    media: list[dict] = field(default_factory=list)
 
     def get(self, index: int) -> QuestionSchema | None:
         return next((q for q in self.questions if q.index == index), None)
@@ -207,6 +209,7 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         # These fields are already plain text in Google's JSON. Treating
         # literal code/entity examples as HTML would change CSV headers.
         title, description = str(title or "").strip(), str(description or "").strip()
+        form.media.extend(inspect_media(item, len(form.questions) + 1, len(form.sections)))
         if type_code == 8:
             if type(item_id) is not int or item_id < 0 or item_id in section_ids:
                 raise ValueError("Unrecognized or duplicate section identity; inspection stopped.")
@@ -460,6 +463,8 @@ def schema_fingerprint(schema_or_config) -> str:
     }
     from .routing import Routing
 
+    if source.media:
+        payload["media"] = source.media
     if Routing(source).enabled:
         payload["routing"] = {
             "section_ids": source.section_ids,

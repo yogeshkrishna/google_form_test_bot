@@ -232,6 +232,15 @@ def _show_form(config):
             Text(details or "Free text"),
         )
     console.print(table)
+    if config.media:
+        media_table = Table(title="Images and videos (in form order)")
+        for label in ("Section", "Placement", "Caption / reference"):
+            media_table.add_column(label)
+        for asset in config.media:
+            media_table.add_row(
+                str(asset["page"]), asset["placement"], Text(asset["caption"] or asset["key"])
+            )
+        console.print(media_table)
     for note in getattr(config, "instructions", []):
         if note["before_question"] > len(config.questions):
             _info(note["title"] + ("\n" + note["description"] if note["description"] else ""))
@@ -450,6 +459,19 @@ def _generate(config, reference=None, instructions="", **options):
     from .ai import complete_responses, generate_responses
     from .previews import remember
 
+    if config.media and not config.media_context.strip() and sys.stdin.isatty():
+        choice = _ask_select(
+            "This form contains images or videos",
+            [
+                _choice("describe", "Add the visual information needed to answer"),
+                _choice("decorative", "I reviewed them; they are decorative"),
+            ],
+        )
+        config.media_context = (
+            "The user reviewed all form media and declares it decorative."
+            if choice == "decorative"
+            else _ask_text("Describe the media, identifying each question or option")
+        )
     partials = options.pop("partials", None)
     compact = options.pop("compact", False)
     completed = False
@@ -559,7 +581,7 @@ def _save_plan(config, answers, path=None, source="prepared", *, cleanup_on_succ
     from .artifacts import describe
 
     payload = {
-        "schema_version": 2 if any(q.allow_other for q in config.questions) else 1,
+        "schema_version": 2 if config.media or any(q.allow_other for q in config.questions) else 1,
         "kind": "gformbot-run",
         "created_at": datetime.now().astimezone().isoformat(),
         "form_fingerprint": schema_fingerprint(config),
@@ -1405,6 +1427,11 @@ def _response_options(function):
         ),
         click.option("-m", "--message", default="", help="Extra instructions for ChatGPT."),
         click.option(
+            "--media-context",
+            default=None,
+            help="Describe visual information, or explicitly declare form media decorative.",
+        ),
+        click.option(
             "--like",
             type=click.Path(exists=True, dir_okay=False),
             help="Use a CSV as a guide for AI answers.",
@@ -1426,7 +1453,17 @@ def _response_options(function):
 
 
 def _command_answers(
-    url, count, message, like, data, browser, sign_in=False, date_order=None, *, cleanup_on_success=True
+    url,
+    count,
+    message,
+    like,
+    data,
+    browser,
+    sign_in=False,
+    date_order=None,
+    *,
+    cleanup_on_success=True,
+    media_context=None,
 ):
     """Reuse the wizard's preparation path without its tables and questions."""
     from .generator import load_reference, prepare_responses
@@ -1451,6 +1488,8 @@ def _command_answers(
     config.requires_signin = current.requires_signin
     config.one_response = current.one_response
     config.email_collection = current.email_collection
+    if media_context is not None:
+        config.media_context = media_context
     if date_order is not None:
         config.csv_date_order = date_order
     if data and clean_path(data).suffix.lower() == ".json":
@@ -1504,12 +1543,22 @@ def _command_answers(
 @cli.command()
 @_response_options
 @click.option("--halt", is_flag=True, help="Fill visible forms without submitting, and leave them open.")
-def generate(url, count, message, like, data, browser, halt, sign_in=False, date_order=None):
+def generate(
+    url, count, message, like, data, browser, halt, sign_in=False, date_order=None, media_context=None
+):
     """Generate answers and submit them automatically. Use --halt to review instead."""
     from .artifacts import digest
 
     config, answers, path, owned = _command_answers(
-        url, count, message, like, data, browser, sign_in, date_order
+        url,
+        count,
+        message,
+        like,
+        data,
+        browser,
+        sign_in,
+        date_order,
+        **({"media_context": media_context} if media_context is not None else {}),
     )
     remaining = _track_plan(config, answers, path, digest(path), interactive=False)
     _apply_browser(config, config.browser, headless=not halt)
@@ -1519,10 +1568,19 @@ def generate(url, count, message, like, data, browser, halt, sign_in=False, date
 
 @cli.command()
 @_response_options
-def prepare(url, count, message, like, data, browser, sign_in=False, date_order=None):
+def prepare(url, count, message, like, data, browser, sign_in=False, date_order=None, media_context=None):
     """Create and save response JSON without filling or submitting the form."""
     _, _, path, _ = _command_answers(
-        url, count, message, like, data, browser, sign_in, date_order, cleanup_on_success=False
+        url,
+        count,
+        message,
+        like,
+        data,
+        browser,
+        sign_in,
+        date_order,
+        cleanup_on_success=False,
+        **({"media_context": media_context} if media_context is not None else {}),
     )
     _info(f'Ready. Open with: gformbot preview "{path.resolve()}"')
 
