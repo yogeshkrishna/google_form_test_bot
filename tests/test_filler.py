@@ -45,6 +45,8 @@ class Box:
         self.controls = controls
 
     def find_elements(self, by, selector):
+        if "button" in selector:
+            return []
         return self.controls
 
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recognize verified navigation and clear-selection identities across translated labels; reject conflicting controls and batch navigation metadata reads.
+
 - Preserve ordered media and attachments; accept explicit visual context or a decorative declaration for AI generation without adding a vision dependency.
 
 - Support explicit Other answers on radio/checkbox questions, including CSV, AI generation, editing, routing and saved-plan recovery. Existing answer formats remain unchanged.
