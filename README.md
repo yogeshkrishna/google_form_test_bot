@@ -84,6 +84,8 @@ AI generation uses [ChatGPT](https://chatgpt.com/) in a visible private browser,
 
 The form context, instructions, reference frequencies, and up to six complete reference examples are sent to ChatGPT. Returned profiles are checked against supported formats, choices, and constraints. These checks do not prove that generated answers are meaningful, representative, or accurate. Failed generation preserves accepted work instead of substituting random answers.
 
+Outgoing requests redact known secret URL parameters and omit embedded credentials, account links and edit-response links. Public invitation links remain available. This does not detect private information written as ordinary text. Original form metadata, supplied answers and AI checkpoints remain unchanged in local plaintext files; keep them private.
+
 ## Data and form support
 
 CSV columns map through question titles, `Q1` / `Q2` headers, or `entry.ID` identifiers. Review ambiguous or unmatched mappings in the wizard. Blank optional answers stay blank; missing required answers must be resolved. Reference CSVs also need complete valid profiles.
