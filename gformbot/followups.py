@@ -201,6 +201,15 @@ class Recorder:
         try:
             blocks = driver.execute_script(_COLLECT, stage)
             base = driver.current_url
+            self.record(blocks, response, section, stage, base)
+        except Exception:
+            self.warning = (
+                "Some form instructions could not be captured or saved. Submission status is unchanged."
+            )
+
+    def record(self, blocks, response, section, stage, base):
+        """Store scoped instructions from either transport using the same privacy policy."""
+        try:
             by_stage = defaultdict(list)
             for raw in blocks:
                 block = _sanitize(raw, base)

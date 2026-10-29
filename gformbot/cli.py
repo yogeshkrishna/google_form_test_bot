@@ -248,15 +248,15 @@ def _show_form(config):
         console.print(Text(issue, style="yellow"))
 
 
-def _run_inspect(url, browser="headless", save=False, output=DEFAULT_CONFIG_NAME, *, display=True):
+def _run_inspect(url, save=False, output=DEFAULT_CONFIG_NAME, *, display=True):
     from .access import require_public_form
     from .inspector import inspect_form
 
     if display:
         with console.status("Reading form..."):
-            schema = inspect_form(url, browser=browser, headless=True)
+            schema = inspect_form(url)
     else:
-        schema = inspect_form(url, browser=browser, headless=True)
+        schema = inspect_form(url)
     require_public_form(schema)
     config = config_from_schema(schema)
     if display:
@@ -612,14 +612,14 @@ def _next_action(saved=False):
         choices
         + [
             _choice("fill", "Fill for review (I click Submit myself)"),
-            _choice("submit", "Fill and submit automatically"),
-            _choice("test", "Test without a window (no submission; answers stay saved)"),
+            _choice("submit", "Send responses automatically (recommended)"),
+            _choice("test", "Check answers without submitting (answers stay saved)"),
             _choice("inspect", "View one response"),
             _choice("edit", "Edit a response and save a copy"),
             _choice("export", "Save remaining responses as a CSV"),
             _choice("back", "Go back (keep my answers saved)"),
         ],
-        default="fill",
+        default="submit",
     )
 
 
@@ -630,7 +630,6 @@ def _choose_browser():
             _choice("auto-background", "Open only when I choose (default browser, recommended)"),
             _choice("chrome-background", "Open only when I choose (Chrome)"),
             _choice("chrome", "Chrome (always visible)"),
-            _choice("headless", "Chrome (no visible window)"),
             _choice("firefox", "Firefox (visible)"),
             _choice("edge", "Edge (visible)"),
             _choice("auto", "Use my default browser (visible)"),
@@ -639,19 +638,10 @@ def _choose_browser():
     )
 
 
-def _apply_browser(config, browser=None, headless=None):
+def _apply_browser(config, browser=None):
     if browser is not None:
         config.background = browser.endswith("-background")
         config.browser = browser.removesuffix("-background") if config.background else browser
-        config.headless = config.browser == "headless"
-    if headless is not None:
-        config.headless = headless
-        if not headless and config.browser == "headless":
-            config.browser = "chrome"
-    if headless is False:
-        config.background = False
-    if config.headless:
-        config.background = False
 
 
 def _load_plan(path):
@@ -869,13 +859,13 @@ def _manage_batch(config, answers, path, *, saved=False, keep_files=False):
             _pending_preview(config, answers)
             continue
         remaining = _track_plan(config, answers, path, digest(path))
-        if action == "test":
-            _apply_browser(config, "headless")
-        else:
+        if action == "fill":
             _apply_browser(config, _choose_browser())
         _confirm_submit(config, action == "submit")
         save_config(config, DEFAULT_CONFIG_NAME)
-        finished = _run_fill(config, answers=remaining, submit=action == "submit")
+        finished = _run_fill(
+            config, answers=remaining, submit=action == "submit", check_only=action == "test"
+        )
         _finish_plan(
             path, config._plan_digest, keep_files=keep_files or action == "test" or finished is False
         )
@@ -903,7 +893,9 @@ def _runner(config, answers):
     return Runner(config, answers, _run_ui(), getattr(config, "_session", None))
 
 
-def _run_fill(config, dry_run=False, *, answers=None, submit=False, halt=False, compact=False):
+def _run_fill(
+    config, dry_run=False, *, answers=None, submit=False, halt=False, compact=False, check_only=False
+):
     from .access import require_public_form
 
     require_public_form(config)
@@ -916,6 +908,8 @@ def _run_fill(config, dry_run=False, *, answers=None, submit=False, halt=False, 
         options["halt"] = True
     if compact:
         options["compact"] = True
+    if check_only:
+        options["check_only"] = True
     return _runner(config, answers).run(**options)
 
 
@@ -1263,7 +1257,7 @@ def _response_options(function):
         click.option(
             "--browser",
             type=click.Choice(["auto", "chrome", "firefox", "edge"]),
-            help="Browser to use; defaults to saved settings or auto.",
+            help="Visible browser for ChatGPT or --halt review; submission uses HTTP.",
         ),
     ]
     for option in reversed(options):
@@ -1323,7 +1317,7 @@ def _command_answers(
         config.requires_signin = current.requires_signin
         config.one_response = current.one_response
         config.email_collection = current.email_collection
-        config.browser = browser or (config.browser if config.browser != "headless" else "auto")
+        config.browser = browser or config.browser
         save_config(config, DEFAULT_CONFIG_NAME)
         return config, answers, clean_path(data), False
     if count is not None:
@@ -1335,7 +1329,7 @@ def _command_answers(
         config.pool_column_map = {}
         for question in config.questions:
             question.pool_column = None
-    config.browser = browser or (config.browser if config.browser != "headless" else "auto")
+    config.browser = browser or config.browser
     config.pool_file = str(clean_path(data).resolve()) if data else None
     validate_config(config)
     if data:
@@ -1367,7 +1361,7 @@ def generate(
     date_order=None,
     media_context=None,
 ):
-    """Generate answers and submit them automatically. Use --halt to review instead."""
+    """Generate answers and send them by HTTP. Use --halt for browser review."""
     from .artifacts import digest
 
     config, answers, path, owned = _command_answers(
@@ -1381,7 +1375,9 @@ def generate(
         **({"media_context": media_context} if media_context is not None else {}),
     )
     remaining = _track_plan(config, answers, path, digest(path), interactive=False)
-    _apply_browser(config, config.browser, headless=not halt)
+    if halt:
+        _apply_browser(config, config.browser)
+        config.background = False
     finished = _run_fill(config, answers=remaining, submit=not halt, halt=halt, compact=True)
     _finish_plan(path, config._plan_digest, keep_files=not owned or finished is False)
 
@@ -1548,23 +1544,24 @@ def doctor(check=False):
     table.add_column("Result")
     table.add_row("Python", sys.version.split()[0])
     installed = available_browsers()
-    table.add_row("Browsers found", ", ".join(installed) or "None detected; install Chrome, Firefox or Edge")
+    table.add_row("Execution", "Direct HTTP; no browser needed for supplied answers")
+    table.add_row("Browsers found", ", ".join(installed) or "None detected (needed for ChatGPT or review)")
     table.add_row("Default browser", detect_default_browser() if installed else "Unavailable")
     from .selenium_runtime import PACKAGE
 
-    missing = [] if installed else ["a supported browser"]
-    for module in ("selenium", "tkinter", "pyperclip"):
+    missing = []
+    for module in ("urllib3", "selenium", "tkinter", "pyperclip"):
         present = importlib.util.find_spec(PACKAGE if module == "selenium" else module) is not None
-        if module == "selenium" and not present:
-            missing.append("Selenium")
+        if module == "urllib3" and not present:
+            missing.append("HTTP support (urllib3)")
         table.add_row(
             module,
             ("Available (included)" if module == "selenium" and PACKAGE != "selenium" else "Available")
             if present
-            else "Missing" + (" (optional clipboard support)" if module == "pyperclip" else ""),
+            else "Missing" + (" (optional)" if module != "urllib3" else ""),
         )
     table.add_row("Output folder", "Writable" if os.access(Path.cwd(), os.W_OK) else "Not writable")
-    table.add_row("Driver", "Selenium Manager resolves it on first browser use; internet may be needed")
+    table.add_row("Driver", "Needed only for ChatGPT or review; resolved on first browser use")
     console.print(table)
     if check and (missing or not os.access(Path.cwd(), os.W_OK)):
         raise click.ClickException(

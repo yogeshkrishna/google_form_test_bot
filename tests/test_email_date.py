@@ -206,7 +206,7 @@ def test_browser_email_all_date_modes_blanks_and_range():
     driver = None
     try:
         c.url = f"http://127.0.0.1:{server.server_port}/viewform"
-        driver = get_driver(browser="chrome", headless=True)
+        driver = get_driver(browser="chrome")
         answers = {
             1: "profile@example.com",
             2: "2026-10-12 00:05",

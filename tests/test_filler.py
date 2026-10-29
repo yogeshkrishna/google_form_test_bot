@@ -448,7 +448,7 @@ def test_literal_text_and_optional_blank_controls_never_submit(html_page):
       document.addEventListener('keydown',e=>{if(e.key==='Enter')window.enterKeys++});
       document.addEventListener('input',()=>window.inputEvents++);
       </script></body></html>"""
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         driver.get(html_page(markup))
 
@@ -487,7 +487,7 @@ def test_literal_text_and_optional_blank_controls_never_submit(html_page):
 def test_blank_dropdown_without_empty_option_does_not_silently_keep_value(html_page):
     from gformbot.browser import get_driver
 
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         driver.get(html_page("<div id='q'><select><option value='B'>B</option></select></div>"))
         with pytest.raises(RuntimeError, match="Cannot clear"):
@@ -529,7 +529,7 @@ def test_replaced_dropdown_rebinds_nested_google_item_identity(html_page, duplic
         page,
         questions=[QuestionConfig(1, "Payload encoding", "dropdown", True, ["Plain text"], item_id="42")],
     )
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         driver.get(page)
         q, box = browser._page_questions(driver, config)[0]
@@ -554,7 +554,7 @@ def test_local_multipage_fill_and_submit(local_form, tmp_path):
     form, answers, accepted = local_form
     from gformbot.browser import get_driver
 
-    driver = get_driver(browser="chrome", headless=True)
+    driver = get_driver(browser="chrome")
     try:
         result = browser.execute_response(driver, form, answers, submit=False)
         assert result["status"] == "filled"
@@ -577,7 +577,7 @@ def test_local_validation_blocks_next(local_form, tmp_path):
     answers[2] = ["Roads, footpaths or crossings", "Bus stops", "Other"]
     from gformbot.browser import get_driver
 
-    driver = get_driver(browser="chrome", headless=True)
+    driver = get_driver(browser="chrome")
     try:
         with pytest.raises(GFormBotError, match="validation"):
             browser.execute_response(driver, form, answers, submit=True)
@@ -598,13 +598,13 @@ def test_review_batch_with_real_private_tabs_and_manual_confirmation(local_form,
     from gformbot.artifacts import digest
 
     form, answer, accepted = local_form
-    form.browser, form.headless, form.count = "chrome", False, 2
+    form.browser, form.count = "chrome", 2
     form.min_delay = form.max_delay = 0
     form.log_file = str(tmp_path / "runs.csv")
     answers = [dict(answer), {**answer, 6: "Second response, preserved separately."}]
     target = cli._save_plan(form, answers, tmp_path / "plan.json")
     cli._track_plan(form, answers, target, digest(target))
-    driver = factory.get_driver("chrome", headless=True)
+    driver = factory.get_driver("chrome")
     monkeypatch.setattr(factory, "get_driver", lambda *args, **kwargs: driver)
     monkeypatch.setattr(inspector, "inspect_form", lambda *args: form)
     monkeypatch.setattr("gformbot.execution.config_from_schema", lambda value: value)
@@ -659,7 +659,7 @@ def test_background_batch_opens_only_requested_profiles_in_review_browser(local_
     from gformbot.artifacts import digest
 
     form, answer, accepted = local_form
-    form.browser, form.headless, form.background, form.count = "chrome", False, True, 2
+    form.browser, form.background, form.count = "chrome", True, 2
     form.min_delay = form.max_delay = 0
     form.log_file = str(tmp_path / "runs.csv")
     answers = [dict(answer), {**answer, 6: "Explicitly opened second response."}]
@@ -668,10 +668,9 @@ def test_background_batch_opens_only_requested_profiles_in_review_browser(local_
     real_factory = factory.get_driver
     launches = []
 
-    def launch(browser, headless):
-        launches.append(headless)
-        # Both test windows are headless; production receives the requested flag.
-        return real_factory(browser, headless=True)
+    def launch(browser):
+        launches.append(browser)
+        return real_factory(browser)
 
     monkeypatch.setattr(factory, "get_driver", launch)
     monkeypatch.setattr(inspector, "inspect_form", lambda *args: form)
@@ -695,7 +694,7 @@ def test_background_batch_opens_only_requested_profiles_in_review_browser(local_
 
     monkeypatch.setattr(browser, "_positive_confirmation", confirm)
     assert cli._run_fill(form, answers=answers) is True
-    assert launches == [False]
+    assert launches == ["chrome"]
     assert accepted == [{str(k): v for k, v in a.items()} for a in answers]
     assert json.loads(target.read_text())["submitted_indices"] == [1, 2]
 

@@ -44,8 +44,7 @@ def halted(tmp_path, monkeypatch):
     config = RunConfig(
         "https://docs.google.com/forms/d/e/test/viewform",
         count=2,
-        browser="headless",
-        headless=True,
+        browser="auto",
         background=True,
         min_delay=0,
         max_delay=0,
@@ -70,9 +69,7 @@ def halted(tmp_path, monkeypatch):
     monkeypatch.setattr("gformbot.execution.sys.stdin", SimpleNamespace(isatty=lambda: False))
     monkeypatch.setattr(inspector, "inspect_form", lambda *args: config)
     monkeypatch.setattr("gformbot.execution.config_from_schema", lambda value: value)
-    monkeypatch.setattr(
-        browser, "get_driver", lambda name, headless: launches.append((name, headless)) or driver
-    )
+    monkeypatch.setattr(browser, "get_driver", lambda name: launches.append(name) or driver)
     monkeypatch.setattr(logger, "log_result", lambda *args, **kwargs: logs.append((args, kwargs)))
 
     def fill(config, answer, **options):
@@ -116,7 +113,7 @@ def test_halt_fills_private_tabs_without_prompts_or_tool_submission(halted, monk
 
     monkeypatch.setattr("gformbot.execution.time.sleep", close)
     assert h.runner.run(halt=True, submit=True, compact=True) is False
-    assert h.launches == [("auto", False)]
+    assert h.launches == ["auto"]
     assert not h.sections
     assert h.session.journal.states() == {1: "uncertain", 2: "uncertain"}
     assert h.plan.exists()
@@ -272,7 +269,6 @@ def test_halt_local_chrome_keeps_filled_tabs_open_without_submission(tmp_path, m
         html_page(html),
         count=2,
         browser="auto",
-        headless=False,
         min_delay=0,
         max_delay=0,
         questions=[QuestionConfig(1, "Answer", "text", True, entry_id="21", item_id="42")],
@@ -283,9 +279,9 @@ def test_halt_local_chrome_keeps_filled_tabs_open_without_submission(tmp_path, m
     launched = []
     real_factory = browser.get_driver
 
-    def launch(name, headless):
-        assert (name, headless) == ("auto", False)
-        driver = real_factory("chrome", headless=True)
+    def launch(name):
+        assert name == "auto"
+        driver = real_factory("chrome")
         launched.append(driver)
         return driver
 

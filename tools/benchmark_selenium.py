@@ -78,7 +78,7 @@ server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 base = f'http://127.0.0.1:{server.server_port}'
 start = time.perf_counter()
-driver = get_driver(name, headless=True)
+driver = get_driver(name)
 driver.get(base + '/ready')
 startup = time.perf_counter() - start
 try:

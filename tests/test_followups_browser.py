@@ -26,7 +26,7 @@ pytestmark = [
 
 @pytest.fixture(scope="module")
 def driver():
-    value = browser.get_driver("chrome", headless=True)
+    value = browser.get_driver("chrome")
     yield value
     value.quit()
 
@@ -93,36 +93,29 @@ def form_server():
 @pytest.mark.parametrize(
     "mode,fault",
     [
-        ("auto", ""),
-        ("fill", ""),
         ("wait", ""),
         ("tabs", ""),
         ("background", ""),
         ("halt", ""),
-        ("auto", "capture"),
-        ("auto", "storage"),
-        ("auto", "display"),
-        ("resume", ""),
-        ("batch", ""),
+        ("wait", "capture"),
+        ("wait", "storage"),
+        ("wait", "display"),
     ],
 )
-def test_directions_survive_every_run_mode(driver, form_server, tmp_path, monkeypatch, mode, fault):
+def test_directions_survive_visible_review(driver, form_server, tmp_path, monkeypatch, mode, fault):
     url, accepted = form_server
     config = configuration(url)
     config.confirmation_text = (
         ""  # Trust the existing live confirmation marker, not a fixture-specific sentence.
     )
-    config.count = 2 if mode in {"resume", "batch"} else 1
-    config.browser, config.headless = "chrome", mode == "fill"
+    config.count = 1
+    config.browser = "chrome"
     config.background = mode == "background"
     config.min_delay = config.max_delay = 0
     config.log_file = str(tmp_path / "runs.csv")
     answers = [response(config, "Student") for _ in range(config.count)]
     target = _save_plan(config, answers, tmp_path / "responses.json")
     session = Session(target, json.loads(target.read_text(encoding="utf-8")), digest(target))
-    if mode == "resume":
-        session.reconcile(1, True)
-        config.count, answers = 1, answers[1:]
     messages = []
     choices = iter(["tabs", "open"] if mode == "background" else ["tabs" if mode == "tabs" else "wait"])
     ui = SimpleNamespace(
@@ -176,9 +169,7 @@ def test_directions_survive_every_run_mode(driver, form_server, tmp_path, monkey
             raise KeyboardInterrupt
 
         monkeypatch.setattr("gformbot.execution.time.sleep", stop)
-    assert runner.run(submit=mode in {"auto", "resume", "batch"}, halt=mode == "halt", compact=True) is (
-        mode != "fill"
-    )
+    assert runner.run(halt=mode == "halt", compact=True) is True
     records = session.journal.followups()
     if fault:
         assert len(accepted) == 1 and session.journal.states() == {1: "confirmed"}
@@ -186,7 +177,7 @@ def test_directions_survive_every_run_mode(driver, form_server, tmp_path, monkey
         if fault in {"capture", "storage"}:
             assert records == [] and any("could not" in m for m in messages)
         return
-    assert {r["response"] for r in records} == ({2} if mode == "resume" else set(range(1, config.count + 1)))
+    assert {r["response"] for r in records} == set(range(1, config.count + 1))
     saved = json.dumps(records, ensure_ascii=False)
     assert "https://discord.gg/public" in saved and "usg=" not in saved
     assert f"{url.rsplit('/', 1)[0]}/students" in saved
@@ -203,18 +194,13 @@ def test_directions_survive_every_run_mode(driver, form_server, tmp_path, monkey
             "edit2=",
         )
     )
-    if mode == "fill":
-        assert not accepted and not any(r["stage"] == "confirmation" for r in records)
-    else:
-        assert len(accepted) == config.count and all(
-            state == "confirmed" for state in session.journal.states().values()
-        )
-        assert "https://chat.whatsapp.com/PublicInvite" in saved and "வணக்கம்" in saved
+    assert len(accepted) == config.count and all(
+        state == "confirmed" for state in session.journal.states().values()
+    )
+    assert "https://chat.whatsapp.com/PublicInvite" in saved and "வணக்கம்" in saved
     output = "\n".join(messages)
     assert output.count("Next steps") == 1
     assert "Plain question instructions" not in output
-    if mode == "batch":
-        assert output.count("https://chat.whatsapp.com/PublicInvite") == 1
 
 
 def test_collector_preserves_links_but_excludes_controls_and_nested_hidden_content(driver, html_page):

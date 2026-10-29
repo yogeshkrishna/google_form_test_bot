@@ -108,13 +108,11 @@ def test_optional_csv_mapping_requires_explicit_blank_acknowledgement(batch, mon
     assert len(seen) == 1 and seen[0][1] == "map"
 
 
-def test_no_headless_overrides_saved_background_setting(batch):
+def test_visible_browser_choice_clears_saved_background_setting(batch):
     config, _, _ = batch
     config.background = True
-    config.headless = True
-    config.browser = "chrome"
-    cli._apply_browser(config, headless=False)
-    assert not config.background and not config.headless
+    cli._apply_browser(config, "chrome")
+    assert config.browser == "chrome" and not config.background
 
 
 def test_preview_rejects_execution_overrides(batch):

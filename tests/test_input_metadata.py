@@ -146,7 +146,7 @@ def test_captured_fields_roundtrip_and_fill_without_submitting(html_page, tmp_pa
     restored, answers = cli._load_plan(plan)
     from gformbot.browser import get_driver
 
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         assert filler.execute_response(driver, restored, answers[0], submit=False)["status"] == "filled"
         assert driver.execute_script(

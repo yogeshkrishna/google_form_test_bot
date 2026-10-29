@@ -23,7 +23,7 @@ python -m ruff check .
 python -m ruff format --check .
 ```
 
-For local Chrome fixtures:
+For optional visible-browser fixtures on a graphical desktop:
 
 ```powershell
 $env:GFORMBOT_BROWSER_TESTS = '1'

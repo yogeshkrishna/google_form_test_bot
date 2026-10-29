@@ -15,7 +15,7 @@ def test_localized_navigation_and_conflicts(html_page):
     from gformbot.filler import _button
 
     ids = json.loads((Path(__file__).parent / "fixtures/google-controls.json").read_text())
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         driver.get(
             html_page(
@@ -45,7 +45,7 @@ def test_localized_clear_uses_scoped_container(html_page):
     from gformbot.selenium_runtime import By
 
     q = QuestionConfig(1, "Choice", "radio", False, ["A"])
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         driver.get(
             html_page(

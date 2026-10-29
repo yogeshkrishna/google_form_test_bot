@@ -224,7 +224,6 @@ def test_relative_pool_path_resolves_against_config_directory(tmp_path, monkeypa
         ("max_delay", float("nan")),
         ("min_delay", -1),
         ("max_delay", 0),
-        ("headless", "false"),
         ("browser", "bad"),
     ],
 )

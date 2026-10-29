@@ -131,7 +131,7 @@ def test_browser_fast_snapshot_never_transfers_embedded_metadata(text, state):
 def test_browser_access_snapshot_handles_visibility_questions_and_confirmations(html_page):
     from gformbot.browser import get_driver
 
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         cases = [
             ("<h1>You need permission</h1>", "permission_denied"),

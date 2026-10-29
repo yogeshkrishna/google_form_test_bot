@@ -82,7 +82,7 @@ def test_rating_fill_readback_change_and_clear(html_page, icon):
     url = html_page(
         f'<div role="listitem"><div role="heading">{q.text}</div><input type="hidden" name="entry.{q.entry_id}_sentinel">{choices}<button onclick="document.querySelectorAll(\'[role=radio]\').forEach(e=>e.setAttribute(\'aria-checked\',\'false\'))">Clear selection</button></div>'
     )
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         driver.get(url)
         question, box = _page_questions(driver, config)[0]
@@ -115,7 +115,7 @@ def test_late_rating_handler_uses_existing_timeout_without_extra_clicks(html_pag
         "window.clicks++;if(ready===null)ready=performance.now()+1700;if(performance.now()<ready)return;"
         'document.querySelectorAll("[role=radio]").forEach(e=>e.setAttribute("aria-checked",String(Number(e.dataset.value)<=Number(target.dataset.value))));}</script>'
     )
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         driver.get(config.url)
         question, box = _page_questions(driver, config)[0]

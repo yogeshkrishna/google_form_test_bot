@@ -13,7 +13,7 @@ gformbot
 
 This checkout is `0.4.0.dev0`, an unpublished development build. The commands and features below describe GitHub master. `python -m pip install gformbot` installs the older published release instead.
 
-Requires Python 3.10 or newer and an installed Chrome, Firefox, or Edge browser for generation and filling. Selenium manages the driver. Use `python -m gformbot` if the command is not on your PATH.
+Requires Python 3.10 or newer. Automatic submission uses direct HTTP and needs no installed browser. ChatGPT generation and visible review still need Chrome, Firefox, or Edge; Selenium manages their driver. Use `python -m gformbot` if the command is not on your PATH.
 
 Windows x64 wheels include a private Selenium subset with the original Windows driver manager. Other platforms use official Selenium. Existing Selenium installations can coexist; pip does not remove old shared dependencies during an upgrade. [Build details and measurements](docs/windows-selenium.md).
 
@@ -21,12 +21,12 @@ The wizard's file picker opens after you press Enter. It needs a graphical deskt
 
 ## Choose a workflow
 
-**`generate` fills and submits automatically.** Use `prepare` to save answers without filling a form, or add `--halt` to keep filled tabs open and click Submit yourself. The no-argument wizard asks which action to take.
+**`generate` submits automatically over HTTP.** It validates the exact prepared answers and selected route, sends only reached answers, and requires a Google confirmation before recording success. Use `prepare` to save answers without submitting, or add `--halt` to review filled browser tabs and click Submit yourself. The no-argument wizard asks which action to take.
 
 | Command | Behavior |
 | --- | --- |
 | `gformbot` | Guided setup, answer sources, saved work, review, and execution choices. |
-| `gformbot generate URL` | Prepare answers, fill the form, and submit. `--halt` stops before submission and keeps the filled tabs open. |
+| `gformbot generate URL` | Prepare answers and submit directly over HTTP. `--halt` instead opens visible filled tabs for manual review and submission. |
 | `gformbot prepare URL` | Prepare and save response JSON without filling or submitting a form. AI preparation can still open ChatGPT. |
 | `gformbot preview [FILE.json]` | Open a JSON file in your system's default app. Without a file, choose unfinished saved responses or saved AI work, newest first. This command does not fill or submit. |
 
@@ -52,7 +52,7 @@ gformbot generate "FORM_URL" --data "gformbot-responses.json" --halt
 gformbot generate "FORM_URL" -n 10 --like "reference.csv" -m "Include varied age groups"
 ```
 
-Both `generate` and `prepare` accept `-n` for the response count, `-m` / `--message` for instructions, `--like` for a reference CSV, `--data` for supplied CSV or saved gformbot JSON, and `--browser` for browser selection. `--halt` belongs to `generate`. Without `-n`, the tool uses a matching saved form configuration's count, or one response when none matches. Saved JSON carries its own response data and progress. Output filenames are chosen automatically.
+Both `generate` and `prepare` accept `-n` for the response count, `-m` / `--message` for instructions, `--like` for a reference CSV, `--data` for supplied CSV or saved gformbot JSON, and `--browser` for ChatGPT or visible review. Browser selection does not change automatic HTTP execution. `--halt` belongs to `generate`. Without `-n`, the tool uses a matching saved form configuration's count, or one response when none matches. Saved JSON carries its own response data and progress. Output filenames are chosen automatically.
 
 Use `--data` to execute supplied answers and `--like` to guide newly generated answers. Reference patterns and instructions guide generation; they do not establish statistical fidelity or semantic consistency.
 
@@ -62,13 +62,13 @@ The wizard offers AI generation, your own data, or random choice answers. AI gen
 
 Random mode supports multiple choice, checkboxes, dropdowns, and numeric scales. Automatic reference sampling keeps whole choice profiles together. Manual option weights are relative chances, not exact quotas. AI can complete written/date answers; optional unanswered fields can stay blank.
 
-Review the prepared answers, view a response, edit a copy, export CSV, save for later, test filling without submission, or explicitly choose submission. Quiet review opens no browser until you select a response. Already open responses keep your edits; restarting fills the saved prepared answers.
+Review the prepared answers, view a response, edit a copy, export CSV, save for later, check the HTTP request without sending it, or explicitly choose submission. Request checks validate metadata and serialization without posting answers; they do not exercise browser controls or prove server acceptance. Quiet review opens no browser until you select a response. Already open responses keep your edits; restarting fills the saved prepared answers.
 
 ## Saved work and recovery
 
 Response JSON stores prepared answers and execution progress. The wizard also lists saved AI progress and can resume accepted work after an interruption. Supplied JSON can be used through `--data`. `preview` opens these files for viewing; use the wizard or `generate --data` to continue work.
 
-A local submission journal records attempts and confirmations. Confirmed rows are skipped when work resumes. An uncertain outcome requires checking the form's responses before deciding whether to retry. Copied plans share their identity on the same machine; duplicate protection depends on retaining the local journal.
+A local submission journal records intent before a submission request and confirms it only after Google's completion page. Confirmed rows are skipped when work resumes. A request timeout or unrecognized outcome is uncertain and requires checking the form's responses before deciding whether to retry; there is no automatic POST retry or fallback to a browser. Copied plans share their identity on the same machine; duplicate protection depends on retaining the local journal.
 
 Imported CSV/JSON files are never deleted. Files saved by `prepare` remain available. Temporary response JSON owned by the tool is removed only after every response is confirmed in the submission journal; unfinished or uncertain work stays saved. Older files with missing retention settings or ambiguous ownership (including legacy command output) stay saved. Using a saved file as `--data` preserves that input.
 
@@ -76,7 +76,7 @@ Run logs record prepared answers and outcomes. Manual changes in a browser can d
 
 Form directions and link destinations are saved from the introduction, visited sections, question descriptions, and the confirmed completion screen. A short **Next steps** summary shows links and custom completion messages once. Read everything later with `gformbot log --followups`, or `gformbot log "custom-runs.csv" --followups` for a custom log. `--last` limits the number of responses shown. These notes stay in the local journal after temporary response files are cleaned up.
 
-Completion messages are captured only when the browser confirms submission, including manual review and `--halt`. Filling alone or manually reconciling an uncertain result does not create a completion observation. The tool never follows these links or performs outside actions. Public group invites are preserved; embedded URL credentials, account/edit-response links and known secret URL parameters are excluded or redacted. Redacted links may not work. Ordinary instruction text is retained without automatic secret detection.
+Completion messages are captured only after an HTTP confirmation or a confirmed manual browser submission, including `--halt`. Request checks, filling alone and manually reconciling an uncertain result do not create a completion observation. The tool never follows these links or performs outside actions. Public group invites are preserved; embedded URL credentials, account/edit-response links and known secret URL parameters are excluded or redacted. Redacted links may not work. Ordinary instruction text is retained without automatic secret detection.
 
 ## ChatGPT generation
 
@@ -111,7 +111,7 @@ For an actual Other selection, use `{"choices": ["Python"], "other": "Rust"}` (r
 
 Media items and question/option attachments stay in form order. AI generation needs `--media-context "description of the relevant visual information"` or an explicit decorative declaration; the wizard asks once when needed. Theme images do not trigger this. Supplied-answer workflows need no AI media interpretation. No images/videos are downloaded or interpreted automatically.
 
-Next, Submit and per-question clearing prefer verified Google control identities over English labels. Unknown or conflicting controls stop explicitly. This does not claim universal language support: unrecognized translated account-consent prompts still require manual handling.
+Visible review identifies Next, Submit and per-question clearing through verified Google control identities before English labels. Unknown or conflicting controls stop explicitly. This does not claim universal language support: unrecognized translated account-consent prompts still require manual handling. Automatic HTTP submission does not interact with these controls; it validates routing and inspects the server response instead.
 
 File-upload questions are unsupported and never transfer files. Older plans containing prepared uploads cannot execute; their files and journal records are preserved. CSV/JSON import and export still work normally.
 
@@ -142,10 +142,10 @@ python -m build
 python -m twine check dist/*
 ```
 
-Set `GFORMBOT_BROWSER_TESTS=1` for local Chrome fixtures. These exercise a local test server without Google submissions or live AI. Firefox and Edge need their own environment checks.
+Set `GFORMBOT_BROWSER_TESTS=1` for optional visible-browser fixtures on a graphical desktop. These exercise a local test server without Google submissions or live AI.
 Set `GFORMBOT_TEST_BROWSER=edge` or `firefox` to run the same fixtures against that installed browser.
 
-CI checks Windows/Ubuntu on Python 3.10, 3.12, 3.13, and 3.14, builds both wheel variants, smoke-tests them outside the checkout, and runs Chrome fixtures on Ubuntu plus Chrome/Edge/Firefox fixtures on Windows. It uploads build artifacts without publishing packages or creating releases.
+CI checks Windows/Ubuntu on Python 3.10, 3.12, 3.13, and 3.14, builds both wheel variants and smoke-tests them outside the checkout. Browser compatibility jobs are not part of CI. It uploads build artifacts without publishing packages or creating releases.
 
 ## License
 

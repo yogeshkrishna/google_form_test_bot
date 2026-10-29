@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-BrowserName = Literal["chrome", "firefox", "edge", "auto", "headless"]
+BrowserName = Literal["chrome", "firefox", "edge", "auto"]
 
 _WINDOWS = sys.platform == "win32"
 _MACOS = sys.platform == "darwin"
@@ -146,28 +146,17 @@ def detect_default_browser() -> BrowserName:
 # ---------------------------------------------------------------------------
 
 
-def get_driver(browser: BrowserName = "auto", headless: bool = False):
-    """
-    Return a configured Selenium WebDriver.
-
-    Parameters
-    ----------
-    browser  : "auto" | "chrome" | "firefox" | "edge" | "headless"
-    headless : Force headless mode even if browser is named.
-    """
-    if browser == "headless":
-        headless = True
-        browser = "chrome"
-
+def get_driver(browser: BrowserName = "auto"):
+    """Return a visible private browser for review or ChatGPT generation."""
     if browser == "auto":
         browser = detect_default_browser()
 
     factories = {"chrome": _chrome_driver, "firefox": _firefox_driver, "edge": _edge_driver}
     if browser not in factories:
-        raise ValueError("Browser must be auto, headless, chrome, firefox, or edge.")
+        raise ValueError("Browser must be auto, chrome, firefox, or edge.")
     driver = None
     try:
-        driver = factories[browser](headless)
+        driver = factories[browser]()
         driver.set_page_load_timeout(30)
         driver.set_script_timeout(30)
         return driver
@@ -183,7 +172,7 @@ def get_driver(browser: BrowserName = "auto", headless: bool = False):
         ) from exc
 
 
-def _chrome_driver(headless: bool):
+def _chrome_driver():
     from .selenium_runtime import options, webdriver
 
     opts = options("chrome")
@@ -194,24 +183,19 @@ def _chrome_driver(headless: bool):
     opts.add_argument("--no-first-run")
     opts.add_experimental_option("prefs", {"intl.accept_languages": "en-US,en"})
     opts.add_experimental_option("excludeSwitches", ["enable-logging"])
-    if headless:
-        opts.add_argument("--headless=new")
-        opts.add_argument("--window-size=1920,1080")
     return webdriver.Chrome(options=opts)
 
 
-def _firefox_driver(headless: bool):
+def _firefox_driver():
     from .selenium_runtime import options, webdriver
 
     opts = options("firefox")
     opts.add_argument("-private")
     opts.set_preference("intl.accept_languages", "en-US,en")
-    if headless:
-        opts.add_argument("--headless")
     return webdriver.Firefox(options=opts)
 
 
-def _edge_driver(headless: bool):
+def _edge_driver():
     from .selenium_runtime import options, webdriver
 
     opts = options("edge")
@@ -220,7 +204,4 @@ def _edge_driver(headless: bool):
     opts.add_argument("--disable-notifications")
     opts.add_argument("--lang=en-US")
     opts.add_experimental_option("prefs", {"intl.accept_languages": "en-US,en"})
-    if headless:
-        opts.add_argument("--headless=new")
-        opts.add_argument("--window-size=1920,1080")
     return webdriver.Edge(options=opts)

@@ -157,6 +157,7 @@ def test_runner_rejects_account_forms_before_browser_or_submission(
     monkeypatch.setattr("gformbot.execution.config_from_schema", lambda schema: schema)
     monkeypatch.setattr(browser, "get_driver", lambda *a, **kw: pytest.fail("Account form opened a browser"))
     monkeypatch.setattr(filler, "submit_response", lambda *a, **kw: pytest.fail("Account form filled"))
+    monkeypatch.setattr("gformbot.execution.sys.stdin", SimpleNamespace(isatty=lambda: True))
     ui = SimpleNamespace(_info=lambda message: None)
     with pytest.raises(FormAccessError, match="without an account"):
-        Runner(config, [{1: "Fictional answer"}], ui).run(submit=True)
+        Runner(config, [{1: "Fictional answer"}], ui).run(halt=True)

@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from urllib.parse import urlparse
 
+from .access import SubmissionRejectedError, SubmissionUncertainError
 from .config import QuestionConfig, RunConfig
 from .followups import observe_page
 from .routing import SUPPORTED_TYPES, Routing
@@ -22,14 +23,6 @@ from .selenium_runtime import (
 from .validation import parse_date, parse_time
 
 _SUPPORTED = SUPPORTED_TYPES
-
-
-class SubmissionUncertainError(RuntimeError):
-    """Submit was clicked, but acceptance could not be confirmed."""
-
-
-class SubmissionRejectedError(RuntimeError):
-    """The form explicitly rejected an attempted submission."""
 
 
 def _require_supported(config: RunConfig, active=None, routing=None):
@@ -937,7 +930,7 @@ def submit_response(
     require_public_form(config)
     owns_driver = driver is None
     if owns_driver:
-        driver = get_driver(browser=config.browser, headless=config.headless)
+        driver = get_driver(browser=config.browser)
     try:
         result = execute_response(
             driver,

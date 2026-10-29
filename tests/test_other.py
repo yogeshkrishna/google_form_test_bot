@@ -130,7 +130,7 @@ def test_other_browser_selection_and_text(checkbox, html_page):
     url = html_page(
         f'<div role="listitem"><div role="heading">Tools</div>{controls}<input name="entry.{q.entry_id}.other_option_response" type="text"></div>'
     )
-    d = get_driver("chrome", headless=True)
+    d = get_driver("chrome")
     try:
         d.get(url)
         question, box = _page_questions(d, c)[0]
