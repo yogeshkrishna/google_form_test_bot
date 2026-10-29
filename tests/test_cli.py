@@ -9,7 +9,7 @@ import pytest
 from click.testing import CliRunner
 from rich.console import Console
 
-from gformbot import ai, browser, cli, execution, filler, generator, inspector, logger
+from gformbot import ai, browser, cli, execution, filler, generator, inspector, logger, transport
 from gformbot.config import QuestionConfig, RunConfig, save_config
 
 
@@ -175,7 +175,7 @@ def test_existing_artifacts_are_not_overwritten(config, tmp_path):
 
 
 def setup_execution(config, monkeypatch):
-    state = SimpleNamespace(launches=0, calls=[], logs=[], quit_count=0)
+    state = SimpleNamespace(launches=0, calls=[], logs=[], quit_count=0, clients=0, closed_clients=0)
 
     class Driver:
         current_url = config.url
@@ -195,31 +195,51 @@ def setup_execution(config, monkeypatch):
     monkeypatch.setattr(execution, "config_from_schema", lambda value: value)
     monkeypatch.setattr(logger, "validate_log_path", lambda *args: None)
     monkeypatch.setattr(logger, "log_result", lambda *args: state.logs.append(args))
+
+    class Client:
+        def __init__(self, config):
+            current = inspector.inspect_form(config.url)
+            if inspector.schema_fingerprint(current) != inspector.schema_fingerprint(config):
+                raise ValueError("The form has changed since inspection.")
+            state.clients += 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            state.closed_clients += 1
+
+        def validate(self, answer, **kwargs):
+            state.calls.append(dict(answer))
+            return True, "checked"
+
+        def submit(self, answer, before_submit=None, **kwargs):
+            if before_submit:
+                before_submit()
+            state.calls.append(dict(answer))
+            return True, "submitted"
+
+    state.client = Client
+    monkeypatch.setattr(transport, "Client", Client)
     return state
 
 
-def test_batch_reuses_one_browser_and_exact_answers(config, monkeypatch):
+def test_batch_checks_exact_answers_with_one_http_client(config, monkeypatch):
     state = setup_execution(config, monkeypatch)
 
-    def execute(c, answer, submit, driver, observe=None):
-        state.calls.append((dict(answer), submit, driver))
-        return True, "filled"
-
-    monkeypatch.setattr(filler, "submit_response", execute)
     cli._run_fill(config, answers=profiles())
-    assert state.launches == state.quit_count == 1
-    assert [row for row, _, _ in state.calls] == profiles()
-    assert not any(submit for _, submit, _ in state.calls)
-    assert state.calls[0][2] is state.calls[1][2]
+    assert state.launches == state.quit_count == 0
+    assert state.clients == state.closed_clients == 1
+    assert state.calls == profiles()
 
 
 def test_false_result_stops_with_honest_count(config, monkeypatch):
     state = setup_execution(config, monkeypatch)
-    results = iter([(True, "filled"), (False, "Validation failed")])
-    monkeypatch.setattr(filler, "submit_response", lambda *args, **kwargs: next(results))
-    with pytest.raises(ValueError, match="1/2 filled"):
+    results = iter([(True, "checked"), (False, "Validation failed")])
+    monkeypatch.setattr(state.client, "validate", lambda *args, **kwargs: next(results))
+    with pytest.raises(ValueError, match="rejected"):
         cli._run_fill(config, answers=profiles())
-    assert state.quit_count == 1
+    assert state.closed_clients == 1 and state.launches == 0
     assert [row[3] for row in state.logs] == [True, False]
 
 
@@ -230,7 +250,7 @@ def test_uncertain_submit_is_logged_once_and_never_retried(config, monkeypatch):
         state.calls.append(1)
         raise filler.SubmissionUncertainError("Check the form before retrying")
 
-    monkeypatch.setattr(filler, "submit_response", execute)
+    monkeypatch.setattr(state.client, "submit", execute)
     with pytest.raises(ValueError, match="Check the form"):
         cli._run_fill(config, answers=profiles(), submit=True)
     assert len(state.calls) == len(state.logs) == 1
@@ -323,7 +343,7 @@ def test_main_error_exit_is_nonzero(monkeypatch):
 
 def test_visible_rehearsal_waits_for_each_manual_submission(config, monkeypatch):
     state = setup_execution(config, monkeypatch)
-    config.browser, config.headless = "chrome", False
+    config.browser = "chrome"
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(filler, "submit_response", lambda *args, **kwargs: (True, "filled"))
     monkeypatch.setattr(cli, "_ask_select", lambda *args, **kwargs: "wait")
@@ -363,14 +383,14 @@ def test_saved_plan_interactive_next_choices(config, monkeypatch, tmp_path, acti
     calls = []
 
     def confirmed_fill(c, **kwargs):
-        calls.append((c.browser, c.headless, kwargs["submit"]))
+        calls.append((c.browser, kwargs["submit"]))
         for index in range(1, len(kwargs["answers"]) + 1):
             c._record_submission(index)
         return True
 
     monkeypatch.setattr(cli, "_run_fill", confirmed_fill)
     cli._manage_batch(config, profiles(), target, saved=True)
-    assert calls == [("chrome", False, action == "submit")]
+    assert calls == [("chrome" if action == "fill" else "auto", action == "submit")]
     assert not target.exists()
 
 
@@ -381,7 +401,7 @@ def test_generate_preserves_supplied_plan_and_its_artifacts(config, monkeypatch,
     calls = []
 
     def confirmed_fill(c, **kwargs):
-        calls.append((c.browser, c.headless, kwargs["submit"]))
+        calls.append((c.browser, kwargs["submit"]))
         for index in range(1, len(kwargs["answers"]) + 1):
             c._record_submission(index)
         return True
@@ -392,7 +412,7 @@ def test_generate_preserves_supplied_plan_and_its_artifacts(config, monkeypatch,
         cli.cli, ["generate", config.url, "--data", str(target), "--browser", "chrome", "--halt"]
     )
     assert result.exit_code == 0, result.exception
-    assert calls == [("chrome", False, False)]
+    assert calls == [("chrome", False)]
     assert target.exists() and generated.exists()
 
 
@@ -431,7 +451,7 @@ def test_wizard_visible_default_and_completed_files_removed(config, monkeypatch,
     calls = []
 
     def confirmed_fill(c, **kwargs):
-        calls.append((c.browser, c.headless))
+        calls.append(c.browser)
         for index in range(1, len(kwargs["answers"]) + 1):
             c._record_submission(index)
         return True
@@ -439,5 +459,5 @@ def test_wizard_visible_default_and_completed_files_removed(config, monkeypatch,
     monkeypatch.setattr(cli, "_run_fill", confirmed_fill)
     cli._new_batch_wizard()
     assert defaults[-1] == "auto-background"
-    assert calls == [("chrome", False)]
+    assert calls == ["chrome"]
     assert not generated.exists() and not list(tmp_path.glob("gformbot-responses*.json"))

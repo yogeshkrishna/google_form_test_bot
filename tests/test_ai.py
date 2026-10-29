@@ -242,7 +242,7 @@ def test_plain_json_code_fence_is_accepted(config, monkeypatch):
 def test_unsupported_browser_stops_before_launch(config, monkeypatch):
     monkeypatch.setattr(ai, "_open_chat", lambda *args: pytest.fail("No browser should open"))
     with pytest.raises(ai.GenerationError, match="visible"):
-        ai.generate_responses(config, 1, browser="headless")
+        ai.generate_responses(config, 1, browser="unsupported")
 
 
 def test_late_failure_checkpoints_valid_rows_and_resumes_only_pending(config, monkeypatch, tmp_path):

@@ -53,7 +53,7 @@ def test_private_browser_classes_and_resources_import_without_async_dependencies
         assert pkgutil.get_data(prefix + ".webdriver.remote", name + ".js")
 
 
-def test_all_browser_options_keep_existing_private_and_headless_flags(monkeypatch):
+def test_all_browser_options_keep_existing_private_flags(monkeypatch):
     from gformbot.selenium_runtime import webdriver
 
     for name, private in (("chrome", "--incognito"), ("edge", "--inprivate"), ("firefox", "-private")):
@@ -63,9 +63,8 @@ def test_all_browser_options_keep_existing_private_and_headless_flags(monkeypatc
             {"chrome": "Chrome", "edge": "Edge", "firefox": "Firefox"}[name],
             lambda captured=captured, **kwargs: captured.append(kwargs["options"]),
         )
-        getattr(browser, "_" + name + "_driver")(True)
+        getattr(browser, "_" + name + "_driver")()
         assert private in captured[0].arguments
-        assert any("headless" in arg for arg in captured[0].arguments)
 
 
 def test_vendor_recipe_rejects_untrusted_bytes():

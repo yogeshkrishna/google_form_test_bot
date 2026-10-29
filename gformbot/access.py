@@ -22,6 +22,14 @@ class FormAccessError(ValueError):
         super().__init__(_MESSAGES[state])
 
 
+class SubmissionUncertainError(RuntimeError):
+    """A submission action started, but acceptance could not be confirmed."""
+
+
+class SubmissionRejectedError(RuntimeError):
+    """The form explicitly rejected an attempted submission."""
+
+
 def require_public_form(form) -> None:
     """Reject account-bound forms before opening a browser or exposing answers."""
     if form.requires_signin or form.one_response is True or form.email_collection == "verified":

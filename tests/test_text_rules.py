@@ -242,7 +242,7 @@ def test_supported_regex_semantics_match_google_javascript_wrappers(html_page):
             for value in values:
                 cases.append([rule.pattern, value])
                 compiled.append((rule.compiled, value))
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         driver.get(html_page("<!doctype html><html><body>Regex conformance fixture</body></html>"))
         expected = driver.execute_script(

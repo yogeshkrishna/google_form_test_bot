@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from gformbot import browser, cli, execution, filler, generator, inspector, logger
+from gformbot import browser, cli, execution, generator, inspector, logger, transport
 from gformbot.config import QuestionConfig, RunConfig
 
 
@@ -79,7 +79,7 @@ def test_instruction_only_form_change_stops_before_browser(tmp_path, monkeypatch
         lambda *a, **kw: pytest.fail("Changed instructions must stop before browser launch"),
     )
     with pytest.raises(ValueError, match="instructions have changed"):
-        cli._run_fill(config, answers=[{1: "Prepared for adults"}])
+        cli._run_fill(config, answers=[{1: "Prepared for adults"}], halt=True)
 
 
 def test_legacy_plan_without_instruction_metadata_still_loads_and_tests(tmp_path, monkeypatch):
@@ -100,13 +100,27 @@ def test_legacy_plan_without_instruction_metadata_still_loads_and_tests(tmp_path
     current.instructions = [
         {"page": 1, "before_question": 1, "title": "Existing form instructions", "description": ""}
     ]
-    launches, closed = [], []
-    driver = SimpleNamespace(quit=lambda: closed.append(True))
+    opened, closed = [], []
     monkeypatch.setattr(inspector, "inspect_form", lambda *a: current)
     monkeypatch.setattr(execution, "config_from_schema", lambda value: value)
-    monkeypatch.setattr(browser, "get_driver", lambda *a, **kw: launches.append(True) or driver)
-    monkeypatch.setattr(filler, "submit_response", lambda *a, **kw: (True, "filled"))
+    monkeypatch.setattr(browser, "get_driver", lambda *a, **kw: pytest.fail("HTTP check opened a browser"))
+
+    class Client:
+        def __init__(self, config):
+            assert config._instructions_known is False
+
+        def __enter__(self):
+            opened.append(True)
+            return self
+
+        def __exit__(self, *args):
+            closed.append(True)
+
+        def validate(self, answer, **kwargs):
+            return True, "checked"
+
+    monkeypatch.setattr(transport, "Client", Client)
     monkeypatch.setattr(logger, "log_result", lambda *a, **kw: None)
     assert cli._run_fill(restored, answers=rows) is False
-    assert launches == closed == [True]
+    assert opened == closed == [True]
     assert plan.exists()

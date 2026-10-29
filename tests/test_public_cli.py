@@ -57,12 +57,11 @@ def test_missing_config_points_to_available_command(tmp_path):
     assert "prepare" in cli.cli.commands
 
 
-def test_doctor_strict_check_fails_without_browser(monkeypatch):
+def test_doctor_http_check_succeeds_without_browser(monkeypatch):
     monkeypatch.setattr(browser, "available_browsers", lambda: [])
     result = CliRunner().invoke(cli.cli, ["doctor", "--check"])
-    assert result.exit_code == 1
-    assert "Setup incomplete" in result.output
-    assert "supported browser" in result.output
+    assert result.exit_code == 0, result.exception
+    assert "Direct HTTP" in result.output
     assert CliRunner().invoke(cli.cli, ["doctor"]).exit_code == 0
 
 

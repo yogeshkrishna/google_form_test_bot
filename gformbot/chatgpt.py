@@ -17,7 +17,7 @@ class ChatGPTError(ValueError):
 
 
 def open_chat(browser):
-    driver = get_driver(browser, headless=False)
+    driver = get_driver(browser)
     try:
         driver.get("https://chatgpt.com/")
     except BaseException:

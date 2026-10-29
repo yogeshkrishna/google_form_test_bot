@@ -182,7 +182,7 @@ def test_time_browser_readback(duration, value, google_labels, html_page):
     config.url = html_page(
         f'<div role="listitem"><div role="heading">{q.text}</div><input type="hidden" name="entry.{q.entry_id}_sentinel">{fields}</div><button>Submit</button>'
     )
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         execute_response(driver, config, {1: value}, submit=False, timeout=3)
         assert driver.execute_script(

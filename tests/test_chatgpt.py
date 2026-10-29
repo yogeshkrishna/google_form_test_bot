@@ -18,13 +18,13 @@ def test_open_chat_is_visible_and_navigates_only_to_chatgpt(monkeypatch):
         def quit(self):
             events.append("quit")
 
-    def get_driver(browser, headless):
-        events.append((browser, headless))
+    def get_driver(browser):
+        events.append(browser)
         return Driver()
 
     monkeypatch.setattr(chatgpt, "get_driver", get_driver)
     chatgpt.open_chat("chrome")
-    assert events == [("chrome", False), "https://chatgpt.com/"]
+    assert events == ["chrome", "https://chatgpt.com/"]
 
 
 def test_open_failure_closes_private_browser(monkeypatch):
@@ -153,7 +153,7 @@ def test_website_prompt_streaming_and_second_reply(editor):
 
     driver = None
     try:
-        driver = get_driver("chrome", headless=True)
+        driver = get_driver("chrome")
         driver.get(f"http://127.0.0.1:{server.server_port}/")
         messages = [{"content": "Generate JSON only.\nPreserve exact answers."}, {"content": '{"count":1}'}]
         for _ in range(2):

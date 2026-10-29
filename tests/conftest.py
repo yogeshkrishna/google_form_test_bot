@@ -40,7 +40,7 @@ def html_page():
 
 @pytest.fixture(autouse=True)
 def selected_fixture_browser(request, monkeypatch):
-    """Run the same interaction fixtures against each supported Windows browser in CI."""
+    """Allow an explicitly selected browser for optional visible interaction checks."""
     import os
 
     selected = os.environ.get("GFORMBOT_TEST_BROWSER")
@@ -51,7 +51,7 @@ def selected_fixture_browser(request, monkeypatch):
         monkeypatch.setattr(
             browser,
             "get_driver",
-            lambda name="auto", headless=False, **kw: factory(selected, headless=headless),
+            lambda name="auto", **kw: factory(selected),
         )
 
 

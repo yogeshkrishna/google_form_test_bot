@@ -21,7 +21,6 @@ def batch():
         "https://docs.google.com/forms/d/e/test/viewform",
         "Review form",
         browser="chrome",
-        headless=False,
         count=2,
         min_delay=0,
         max_delay=0,
@@ -261,13 +260,10 @@ def test_run_stopped_review_preserves_files(batch, monkeypatch, tmp_path):
     assert path.exists()
 
 
-def test_unattended_or_headless_runs_never_prompt_for_manual_submission(batch, monkeypatch):
+def test_unattended_runs_never_prompt_for_manual_submission(batch, monkeypatch):
     config, _ = batch
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
     monkeypatch.setattr(cli, "_ask_select", lambda *args, **kw: pytest.fail("No prompt"))
-    assert cli._runner(config, []).review_mode(False) == "check"
-    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
-    config.headless = True
     assert cli._runner(config, []).review_mode(False) == "check"
 
 
@@ -317,7 +313,7 @@ def test_background_preparation_never_launches_visible_browser_without_open(batc
     config.background = True
     driver, logs = execution(config, monkeypatch, "tabs")
     launches = []
-    monkeypatch.setattr(browser, "get_driver", lambda browser, headless: launches.append(headless) or driver)
+    monkeypatch.setattr(browser, "get_driver", lambda browser: launches.append(browser) or driver)
     selections = iter(["tabs", "stop"])
     monkeypatch.setattr(cli, "_ask_select", lambda *a, **kw: next(selections))
     assert cli._run_fill(config, answers=answers) is False
@@ -333,11 +329,11 @@ def test_background_open_requires_explicit_choice_and_preserves_edits_on_reopen(
     selections = iter(["open", 1, "open", 1, "stop"])
     monkeypatch.setattr(cli, "_ask_select", lambda *a, **kw: next(selections))
     launches, fills = [], []
-    monkeypatch.setattr(browser, "get_driver", lambda browser, headless: launches.append(headless) or viewer)
+    monkeypatch.setattr(browser, "get_driver", lambda browser: launches.append(browser) or viewer)
     monkeypatch.setattr(filler, "submit_response", lambda c, a, **kw: fills.append(a) or (True, "filled"))
     monkeypatch.setattr(filler, "_positive_confirmation", lambda *args: False)
     assert cli._runner(config, answers).background({1: 1, 2: 2}) is False
-    assert launches == [False] and fills == [answers[0]]
+    assert launches == ["chrome"] and fills == [answers[0]]
 
 
 def test_background_one_at_a_time_waits_for_manual_confirmation(batch, monkeypatch):
@@ -356,11 +352,9 @@ def test_background_one_at_a_time_waits_for_manual_confirmation(batch, monkeypat
     assert recorded == [2] and not pending
 
 
-def test_background_browser_alias_and_headless_override(batch):
+def test_background_browser_alias_and_visible_override(batch):
     config, _ = batch
     cli._apply_browser(config, "chrome-background")
-    assert (config.browser, config.headless, config.background) == ("chrome", False, True)
-    cli._apply_browser(config, headless=True)
-    assert config.headless and not config.background
+    assert (config.browser, config.background) == ("chrome", True)
     cli._apply_browser(config, "chrome")
-    assert not config.headless and not config.background
+    assert config.browser == "chrome" and not config.background

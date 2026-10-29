@@ -148,7 +148,7 @@ def test_shuffled_grid_fill_and_readback(checkbox, html_page):
         f'<div role="heading">{config.questions[0].grid_title}</div>{body}</div><button>Submit</button>'
     )
     answer = {q.index: q.options[:2] if checkbox else q.options[0] for q in config.questions}
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         execute_response(driver, config, answer, submit=False, timeout=3)
         for q in config.questions:

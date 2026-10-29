@@ -13,7 +13,7 @@ These instructions apply to this project. They override unrelated inherited chal
 
 ## Project direction
 
-- Support anonymous public forms. Google-account sign-in and file transfers are outside the product scope; detect restrictions and report them clearly. ChatGPT's separate interactive browser remains the generation backend.
+- Support anonymous public forms. Automatic submission uses direct HTTP; visible browsers are for manual review and the unchanged ChatGPT generation backend. Google-account sign-in and file transfers are outside the product scope; detect restrictions and report them clearly.
 - Implement and verify one agreed slice at a time. Reuse the existing parser, validation, browser factory, runner, and recovery journal. Preserve complete imported CSV profiles and exact saved-response identities.
 - Inspect status and diffs before editing; preserve unrelated work and private audit evidence.
 - The size goal is a barebones Windows Selenium distribution containing the features actually used by this program plus their necessary runtime/import dependencies. Measure before removing anything. Retain required upstream notices and make updates reproducible. Broader operating-system packages are a later goal; do not remove the existing cross-platform implementation incidentally.

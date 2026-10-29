@@ -24,7 +24,7 @@ pytestmark = [
 def route_browser():
     from gformbot.browser import get_driver
 
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     yield driver
     driver.quit()
 

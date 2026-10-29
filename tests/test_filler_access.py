@@ -200,7 +200,7 @@ def test_access_changes_in_local_browser(stage):
     thread.start()
     driver = None
     try:
-        driver = get_driver("chrome", headless=True)
+        driver = get_driver("chrome")
         config = RunConfig(
             f"http://127.0.0.1:{server.server_port}/viewform",
             questions=[QuestionConfig(1, "Answer", "text", entry_id="42")],
@@ -252,7 +252,7 @@ def test_public_collected_email_in_local_browser(html_page):
         email_collection="input",
         questions=[QuestionConfig(1, "Email", "text", entry_id="emailAddress")],
     )
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         assert filler.execute_response(driver, config, {1: "fictional@example.test"})["status"] == "filled"
         assert driver.find_element("name", "emailAddress").get_attribute("value") == "fictional@example.test"
@@ -270,7 +270,7 @@ def test_delayed_editable_field_waits_without_overriding_restrictions(html_page)
         '<script>setTimeout(()=>{const e=document.getElementById("answer");'
         "e.disabled=false;e.readOnly=false;},500)</script>"
     )
-    driver = get_driver("chrome", headless=True)
+    driver = get_driver("chrome")
     try:
         driver.get(page)
         field = driver.find_element("id", "answer")

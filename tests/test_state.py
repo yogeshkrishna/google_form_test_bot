@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from gformbot import browser, cli, execution, filler, inspector, logger
+from gformbot import browser, cli, execution, filler, inspector, logger, transport
 from gformbot.artifacts import digest
 from gformbot.config import QuestionConfig, RunConfig
 from gformbot.state import Journal, Session, UncertainSubmission, batch_id
@@ -41,6 +41,21 @@ def setup_runner(saved, monkeypatch):
     monkeypatch.setattr(inspector, "inspect_form", lambda *a: c)
     monkeypatch.setattr(execution, "config_from_schema", lambda value: value)
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
+
+    class Client:
+        def __init__(self, config):
+            self.config = config
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def submit(self, answer, **options):
+            return filler.submit_response(self.config, answer, **options)
+
+    monkeypatch.setattr(transport, "Client", Client)
     return c, answers, path
 
 

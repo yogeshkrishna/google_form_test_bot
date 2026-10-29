@@ -383,9 +383,7 @@ def parse_form_html(document: str, url: str) -> FormSchema:
     return form
 
 
-def inspect_form(
-    url: str, browser: str = "auto", headless: bool = True, status_cb=None, timeout: int = 30, *, driver=None
-) -> FormSchema:
+def inspect_form(url: str, status_cb=None, timeout: int = 30, *, driver=None) -> FormSchema:
     requested = clean_url(url)
     if status_cb:
         status_cb("Reading all form questions and constraints…")

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Submit public forms directly over HTTP by default, with verified confirmation and the existing recovery journal. Retain visible-browser review; remove the hidden-browser execution mode.
+
 - Remove a Windows sidecar-initialization race that could reject simultaneous config or log writers before acquiring their lock.
 - Redact known private URL parameters from AI requests and retries while preserving exact local answers, metadata and saved-work identities.
 - Handle Google's Next-labelled early submission actions without clicking during fill-only checks, and spread choice retries across their existing timeout.
@@ -46,7 +48,7 @@
 
 ## 0.3.0
 
-- Add offline saved-work recovery, generation checkpoints, quiet review, headless fill checks, and a durable submission journal with original response IDs and uncertain-outcome reconciliation.
+- Add offline saved-work recovery, generation checkpoints, quiet review, request checks, and a durable submission journal with original response IDs and uncertain-outcome reconciliation.
 - Preserve whole CSV profiles with explicit sampling modes, review column mappings, validate configuration values, and retain form instructions and section descriptions.
 - Improve long checkbox parsing, header lookup, serialization, literal text filling, date handling, choice verification, and browser cleanup.
 - Add distribution checks, wheel-install smoke tests, a Python/OS test matrix, and local Chrome fixtures. Preserve version-1 saved plans and legacy configuration migration.

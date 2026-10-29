@@ -85,14 +85,13 @@ def test_public_help_has_only_the_streamlined_commands():
     assert all(name in result.output for name in ("generate", "prepare", "preview", "doctor"))
 
 
-def test_doctor_strict_check_rejects_missing_browser(monkeypatch):
+def test_doctor_http_execution_needs_no_browser(monkeypatch):
     monkeypatch.setattr(browser, "available_browsers", lambda: [])
     informational = invoke("doctor")
     assert informational.exit_code == 0
     assert "None detected" in informational.output
     strict = invoke("doctor", "--check")
-    assert strict.exit_code == 1
-    assert "Setup incomplete" in strict.output and "a supported browser" in strict.output
+    assert strict.exit_code == 0, strict.exception
 
 
 def test_doctor_strict_check_accepts_available_browser(monkeypatch):
@@ -218,7 +217,7 @@ def test_prepare_output_survives_confirmed_wizard_execution(commands, tmp_path, 
     config, rows = cli._load_plan(path)
     identity = batch_id(json.loads(path.read_text()))
     monkeypatch.setattr(cli, "_next_action", lambda **kw: "submit")
-    monkeypatch.setattr(cli, "_choose_browser", lambda: "headless")
+    monkeypatch.setattr(cli, "_choose_browser", lambda: "auto")
     monkeypatch.setattr(cli, "_confirm_submit", lambda *a: None)
 
     def confirmed(config, **kwargs):
@@ -350,7 +349,6 @@ def test_invalid_count_is_rejected_before_work(commands, count):
         ["--reference", "reference.csv"],
         ["--instructions", "answer naturally"],
         ["--checkpoint", "checkpoint.json"],
-        ["--headless"],
     ],
 )
 def test_legacy_generation_flags_are_not_public(commands, flags):

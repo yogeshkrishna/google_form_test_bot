@@ -103,31 +103,3 @@ jobs:
           path: dist/*
           if-no-files-found: error
           retention-days: 14
-
-  browser:
-    name: Local ${{ matrix.browser }} / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {os: ubuntu-latest, browser: chrome}
-          - {os: windows-latest, browser: chrome}
-          - {os: windows-latest, browser: edge}
-          - {os: windows-latest, browser: firefox}
-    env:
-      PYTHONDONTWRITEBYTECODE: "1"
-      GFORMBOT_BROWSER_TESTS: "1"
-      GFORMBOT_TEST_BROWSER: ${{ matrix.browser }}
-      SE_AVOID_STATS: "true"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - run: python -m pip install ".[dev]"
-      - run: google-chrome --version
-        if: runner.os == 'Linux'
-      - run: python -m pytest -q -m browser

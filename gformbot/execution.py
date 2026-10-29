@@ -63,7 +63,7 @@ class Runner:
 
     def review_mode(self, submit):
         c, ui = self.config, self.ui
-        if submit or c.headless or c.browser == "headless" or not sys.stdin.isatty():
+        if submit or not sys.stdin.isatty():
             return "check"
         return ui._ask_select(
             "How would you like to review the responses?",
@@ -214,7 +214,7 @@ class Runner:
                     viewer.switch_to.window(existing)
                 else:
                     if viewer is None:
-                        viewer = get_driver(c.browser, headless=False)
+                        viewer = get_driver(c.browser)
                     elif opened:
                         viewer.switch_to.new_window("tab")
                     ui._info(
@@ -320,17 +320,75 @@ class Runner:
                 ui._info("The browser closed. Unconfirmed responses remain saved.")
                 return not pending and not unconfirmed_closed
 
-    def run(self, *, dry_run=False, submit=False, halt=False, compact=False):
+    def run(self, *, dry_run=False, submit=False, halt=False, compact=False, check_only=False):
         try:
-            return self._run(dry_run=dry_run, submit=submit, halt=halt, compact=compact)
+            return self._run(
+                dry_run=dry_run, submit=submit, halt=halt, compact=compact, check_only=check_only
+            )
         finally:
             self.followups.show(self.ui)
 
-    def _run(self, *, dry_run=False, submit=False, halt=False, compact=False):
+    def _http(self, *, submit, compact=False):
+        from .access import SubmissionRejectedError, SubmissionUncertainError
+        from .config import clean_path
+        from .transport import Client
+
+        c, ui = self.config, self.ui
+        mode = "submitted" if submit else "checked"
+        if not compact:
+            ui._section("Sending responses" if submit else "Checking prepared requests")
+        completed = 0
+        with Client(c) as client:
+            for index, answer in enumerate(self.answers, 1):
+                try:
+
+                    def observe(section, stage, blocks, i=index):
+                        self.followups.record(blocks, self.original(i), section, stage, c.url)
+
+                    try:
+                        options = {"observe": observe}
+                        if submit:
+                            if self.session:
+                                options["before_submit"] = lambda i=index: self.session.before_submit(i)
+                            ok, message = client.submit(answer, **options)
+                        else:
+                            ok, message = client.validate(answer, **options)
+                        if not ok:
+                            raise SubmissionRejectedError(message)
+                    except SubmissionUncertainError as exc:
+                        if self.session:
+                            self.session.failed(index, uncertain=True)
+                        self.log(index, False, str(exc))
+                        raise ValueError(
+                            f"Response {self.original(index)} is uncertain. Check the form before retrying: {exc}"
+                        ) from exc
+                    except SubmissionRejectedError as exc:
+                        if self.session and submit:
+                            self.session.failed(index, uncertain=False)
+                        self.log(index, False, str(exc))
+                        raise ValueError(f"Response {self.original(index)} was rejected: {exc}") from exc
+                    if submit and self.session:
+                        self.session.confirm(index)
+                        c._plan_digest = self.session.digest
+                    completed += 1
+                    self.log(index, True, message)
+                    ui._info(f"[{completed}/{len(self.answers)}] Response {self.original(index)} {mode}")
+                    if submit and index < len(self.answers) and c.max_delay:
+                        time.sleep(random.uniform(c.min_delay, c.max_delay))
+                except Exception as exc:
+                    raise ValueError(
+                        f"Response {self.original(index)} failed after {completed}/{len(self.answers)} {mode}: {exc}"
+                    ) from exc
+        ui._info(f"Finished: {completed}/{len(self.answers)} {mode}. Log: {clean_path(c.log_file).resolve()}")
+        if not submit:
+            ui._info(
+                "Requests validated locally against the current form. Nothing was sent; answers stay saved."
+            )
+        return submit
+
+    def _run(self, *, dry_run=False, submit=False, halt=False, compact=False, check_only=False):
         from .access import require_public_form
-        from .browser import get_driver
         from .config import clean_path, validate_config
-        from .filler import SubmissionRejectedError, SubmissionUncertainError, submit_response
         from .generator import validate_answer
         from .inspector import inspect_form, schema_fingerprint
         from .logger import validate_log_path
@@ -349,6 +407,11 @@ class Runner:
             return False
         validate_log_path(c.log_file)
         require_public_form(c)
+        if check_only or submit or (not halt and not sys.stdin.isatty()):
+            return self._http(submit=submit, compact=compact)
+        from .browser import get_driver
+        from .filler import SubmissionRejectedError, SubmissionUncertainError, submit_response
+
         current = config_from_schema(inspect_form(c.url))
         require_public_form(current)
         if schema_fingerprint(current) != schema_fingerprint(c):
@@ -361,7 +424,7 @@ class Runner:
         c.one_response = current.one_response
         c.email_collection = current.email_collection
         review = "halt" if halt else self.review_mode(submit)
-        # Quiet review needs no hidden browser pass. Open fills each requested profile once.
+        # Quiet review opens each requested profile once, only on demand.
         if not halt and not submit and c.background and review != "check":
             ui._info(f"Prepared {len(self.answers)} exact responses. No window opens until you choose Open.")
             if review == "tabs":
@@ -379,8 +442,7 @@ class Runner:
         mode = "submitted" if submit else "filled"
         if not compact:
             ui._section("Submitting responses" if submit else "Testing or reviewing form filling")
-        selected_browser = "auto" if halt and c.browser == "headless" else c.browser
-        driver = get_driver(selected_browser, headless=False if halt else c.headless or c.background)
+        driver = get_driver(c.browser)
         completed, pending = 0, {}
         try:
             for index, answer in enumerate(self.answers, 1):
@@ -388,19 +450,12 @@ class Runner:
                     if review in {"tabs", "halt"} and index > 1:
                         driver.switch_to.new_window("tab")
                     options = {"submit": submit, "driver": driver, "observe": self.observer(index)}
-                    if self.session and not submit and review != "check":
+                    if self.session and review != "check":
                         options["before_review"] = lambda i=index: self.session.review(i)
-                    if submit and self.session:
-                        options["before_submit"] = lambda i=index: self.session.before_submit(i)
                     ok, message = submit_response(c, answer, **options)
                     if not ok:
-                        if self.session and submit:
-                            self.session.failed(index, uncertain=False)
                         self.log(index, False, message)
                         raise ValueError(message)
-                    if submit and self.session:
-                        self.session.confirm(index)
-                        c._plan_digest = self.session.digest
                     completed += 1
                     self.log(index, True, message)
                     ui._info(f"[{completed}/{len(self.answers)}] Response {self.original(index)} {mode}")

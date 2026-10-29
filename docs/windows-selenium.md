@@ -1,5 +1,7 @@
 # Windows Selenium runtime
 
+This runtime is used only by ChatGPT generation and visible form review. Automatic form submission uses direct HTTP and does not start Selenium or a browser.
+
 Windows x64 wheels include a private, hash-locked subset of Selenium 4.51.0. Portable wheels retain official Selenium. The subset keeps Chrome, Edge, Firefox, waits, native controls, exceptions, scripts, certificates, proxies and the unmodified Windows Selenium Manager. It removes other OS binaries, unsupported browser adapters, generated DevTools code and the unused BiDi/CDP connection feature. Trio, WebSocket and their unused dependencies are not installed.
 
 This is GFormBot's internal runtime, not a replacement for Selenium's public API. It never installs into the `selenium` namespace. Small synchronous helpers required by upstream imports/initialization remain; further method-by-method rewriting would save little and increase maintenance risk. Upstream license headers, LICENSE, NOTICE and Manager third-party notices are retained.

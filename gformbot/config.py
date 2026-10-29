@@ -62,8 +62,7 @@ class RunConfig:
     csv_date_order: str | None = None
     questions: list[QuestionConfig] = field(default_factory=list)
     count: int = 1
-    browser: str = "headless"
-    headless: bool = True
+    browser: str = "auto"
     background: bool = False
     min_delay: float = 0.25
     max_delay: float = 0.75
@@ -115,14 +114,11 @@ def validate_config(config: RunConfig) -> None:
         raise ValueError(f"Response count must be between 1 and {config.max_runs}.")
     if not isinstance(config.browser, str) or config.browser not in {
         "auto",
-        "headless",
         "chrome",
         "firefox",
         "edge",
     }:
-        raise ValueError("Browser must be auto, headless, chrome, firefox or edge.")
-    if not isinstance(config.headless, bool):
-        raise ValueError("headless must be true or false.")
+        raise ValueError("Browser must be auto, chrome, firefox or edge.")
     if not isinstance(config.background, bool):
         raise ValueError("background must be true or false.")
     for name in ("form_title", "form_description", "confirmation_text"):
@@ -352,7 +348,6 @@ def config_to_dict(config: RunConfig) -> dict:
     setting_names = (
         "count",
         "browser",
-        "headless",
         "background",
         "min_delay",
         "max_delay",
@@ -375,6 +370,12 @@ def config_from_dict(value: dict) -> RunConfig:
     if not isinstance(settings, dict):
         raise ValueError("run_settings must be an object.")
     data.update(settings)
+    # Read old saved work without carrying the retired browser mode into new files.
+    if "headless" in data:
+        if type(data.pop("headless")) is not bool:
+            raise ValueError("The retired headless setting must be true or false.")
+    if data.get("browser") == "headless":
+        data["browser"] = "auto"
     questions = data.pop("questions", [])
     if not isinstance(questions, list):
         raise ValueError("questions must be a list.")
