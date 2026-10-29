@@ -1,16 +1,10 @@
 recursive-include tests *.py *.html
-include tests/fixtures/google-inputs.json
-include tests/fixtures/google-rules.json
-include tests/fixtures/google-grids.json
-include tests/fixtures/google-time.json
-include tests/fixtures/google-ratings.json
-include tests/fixtures/google-other.json
-include tests/fixtures/google-media.json
-include tests/fixtures/google-controls.json
+recursive-include tests/fixtures *.json
 exclude response_pool.csv gformbot_config.yaml gformbot_log.csv gformbot-runs.csv
 exclude gformbot-responses*.json gformbot-generated*.csv gformbot-additional*.csv
 exclude gformbot-export*.csv gformbot-partial*.csv gformbot-generation*.json gformbot-generation*.json.lock
 include CHANGELOG.md
+include SECURITY.md
 include docs/windows-selenium.md
 recursive-include tools *.py
 recursive-include gformbot/_vendor *.py *.js *.exe *.txt *.json LICENSE NOTICE

@@ -10,6 +10,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from gformbot import browser, cli, filler, inspector, logger, previews
+from gformbot import execution as execution_module
 from gformbot.artifacts import digest
 from gformbot.config import QuestionConfig, RunConfig
 
@@ -59,7 +60,7 @@ def execution(config, monkeypatch, mode):
     driver = ReviewDriver()
     monkeypatch.setattr(browser, "get_driver", lambda *args, **kwargs: driver)
     monkeypatch.setattr(inspector, "inspect_form", lambda *args: config)
-    monkeypatch.setattr(cli, "config_from_schema", lambda value: value)
+    monkeypatch.setattr(execution_module, "config_from_schema", lambda value: value)
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr(cli, "_ask_select", lambda *args, **kwargs: mode)
     monkeypatch.setattr(logger, "validate_log_path", lambda *args: None)
@@ -254,7 +255,8 @@ def test_run_stopped_review_preserves_files(batch, monkeypatch, tmp_path):
     config, answers = batch
     path = cli._save_plan(config, answers, tmp_path / "plan.json")
     monkeypatch.setattr(cli, "_run_fill", lambda *args, **kwargs: False)
-    result = CliRunner().invoke(cli.run, [str(path), "--browser", "chrome"])
+    monkeypatch.setattr(cli, "_run_inspect", lambda *args, **kwargs: config)
+    result = CliRunner().invoke(cli.cli, ["generate", config.url, "--data", str(path), "--halt"])
     assert result.exit_code == 0, result.exception
     assert path.exists()
 
@@ -263,10 +265,10 @@ def test_unattended_or_headless_runs_never_prompt_for_manual_submission(batch, m
     config, _ = batch
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
     monkeypatch.setattr(cli, "_ask_select", lambda *args, **kw: pytest.fail("No prompt"))
-    assert cli._review_mode(config, False) == "check"
+    assert cli._runner(config, []).review_mode(False) == "check"
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     config.headless = True
-    assert cli._review_mode(config, False) == "check"
+    assert cli._runner(config, []).review_mode(False) == "check"
 
 
 def test_broken_preview_index_does_not_hide_current_folder_plans(batch, monkeypatch, tmp_path):
@@ -277,11 +279,12 @@ def test_broken_preview_index_does_not_hide_current_folder_plans(batch, monkeypa
     assert path in previews.available()
 
 
-@pytest.mark.parametrize("args", [["fill", "--dry-run", "--submit"], ["fill", "--yes"]])
-def test_conflicting_execution_options_fail_before_form_access(args, monkeypatch):
-    monkeypatch.setattr(cli, "_resolve_config", lambda *args: pytest.fail("No form access"))
-    result = CliRunner().invoke(cli.fill, args[1:])
-    assert result.exit_code != 0 and isinstance(result.exception, ValueError)
+@pytest.mark.parametrize("flag", ["--dry-run", "--submit", "--yes"])
+def test_retired_execution_flags_fail_before_form_access(batch, monkeypatch, flag):
+    config, _ = batch
+    monkeypatch.setattr(cli, "_run_inspect", lambda *args, **kwargs: pytest.fail("No form access"))
+    result = CliRunner().invoke(cli.cli, ["generate", config.url, flag])
+    assert result.exit_code == 2 and "No such option" in result.output
 
 
 @pytest.mark.parametrize("progress", [[0], [3], [True], [1, 1], "bad"])
@@ -333,7 +336,7 @@ def test_background_open_requires_explicit_choice_and_preserves_edits_on_reopen(
     monkeypatch.setattr(browser, "get_driver", lambda browser, headless: launches.append(headless) or viewer)
     monkeypatch.setattr(filler, "submit_response", lambda c, a, **kw: fills.append(a) or (True, "filled"))
     monkeypatch.setattr(filler, "_positive_confirmation", lambda *args: False)
-    assert cli._background_review(config, {1: 1, 2: 2}, answers) is False
+    assert cli._runner(config, answers).background({1: 1, 2: 2}) is False
     assert launches == [False] and fills == [answers[0]]
 
 
@@ -349,7 +352,7 @@ def test_background_one_at_a_time_waits_for_manual_confirmation(batch, monkeypat
     recorded = []
     monkeypatch.setattr(logger, "log_result", lambda *a: recorded.append(a[1]))
     pending = {2: 2}
-    assert cli._background_review(config, pending, answers) is True
+    assert cli._runner(config, answers).background(pending) is True
     assert recorded == [2] and not pending
 
 

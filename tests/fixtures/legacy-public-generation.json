@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "kind": "gformbot-generation",
+  "job_key": "1999753ce5d9c4a3c7bf410e54d7e5e6ff30d43388c59717fb5215173d0d8779",
+  "context_date": "2026-10-29",
+  "responses": [
+    {
+      "1": "A",
+      "2": "Baseline accepted answer"
+    },
+    {
+      "1": "A",
+      "2": "Baseline accepted answer"
+    }
+  ],
+  "request": {
+    "config": {
+      "url": "https://docs.google.com/forms/d/e/test/viewform",
+      "form_title": "Google Form",
+      "pool_file": null,
+      "pool_column_map": {},
+      "csv_date_order": null,
+      "questions": [
+        {
+          "index": 1,
+          "text": "Choice",
+          "required": true,
+          "options": [
+            "A",
+            "B"
+          ],
+          "page": 1,
+          "fixed_value": null,
+          "weights": null,
+          "max_select": null,
+          "pool_column": null,
+          "text_pool": null,
+          "entry_id": "",
+          "item_id": "",
+          "description": "",
+          "min_select": 0,
+          "exclusive_options": [],
+          "validation": [],
+          "date_include_year": true,
+          "date_include_time": false,
+          "branches": {},
+          "grid_title": "",
+          "grid_row": "",
+          "grid_unique": false,
+          "unsupported": [],
+          "rating_icon": "",
+          "allow_other": false,
+          "other_branch": null,
+          "upload_types": [],
+          "upload_max_files": 1,
+          "upload_max_size": 0,
+          "type": "radio"
+        },
+        {
+          "index": 2,
+          "text": "Reason",
+          "required": true,
+          "options": [],
+          "page": 1,
+          "fixed_value": null,
+          "weights": null,
+          "max_select": null,
+          "pool_column": null,
+          "text_pool": null,
+          "entry_id": "",
+          "item_id": "",
+          "description": "",
+          "min_select": 0,
+          "exclusive_options": [],
+          "validation": [],
+          "date_include_year": true,
+          "date_include_time": false,
+          "branches": {},
+          "grid_title": "",
+          "grid_row": "",
+          "grid_unique": false,
+          "unsupported": [],
+          "rating_icon": "",
+          "allow_other": false,
+          "other_branch": null,
+          "upload_types": [],
+          "upload_max_files": 1,
+          "upload_max_size": 0,
+          "type": "text"
+        }
+      ],
+      "sections": [],
+      "unsupported": [],
+      "confirmation_text": "",
+      "form_description": "",
+      "instructions": [],
+      "requires_signin": false,
+      "one_response": null,
+      "email_collection": "unknown",
+      "section_ids": [],
+      "section_next": [],
+      "media": [],
+      "media_context": "",
+      "run_settings": {
+        "count": 1,
+        "browser": "headless",
+        "headless": true,
+        "background": false,
+        "min_delay": 0.25,
+        "max_delay": 0.75,
+        "max_runs": 500,
+        "log_file": "gformbot-runs.csv"
+      }
+    },
+    "count": 2,
+    "instructions": "Fictional profiles only",
+    "reference": [],
+    "partials": null
+  },
+  "provenance": {
+    "source_commit": "5fbbe507c969defb2c1305658964c7636887d635",
+    "method": "Generated with baseline ai.generate_responses, fake browser/model transport, two fictional public profiles; includes original inactive upload defaults. No live model or form calls."
+  }
+}

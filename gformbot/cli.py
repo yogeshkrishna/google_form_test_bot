@@ -11,6 +11,7 @@ import subprocess
 import sys
 import uuid
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -36,7 +37,6 @@ from .config import (
 
 console = Console(highlight=False, safe_box=True)
 _INQUIRER = sys.stdin.isatty() and sys.stdout.isatty()
-BROWSERS = ["headless", "chrome", "chrome-background", "firefox", "edge", "auto", "auto-background"]
 
 
 @dataclass
@@ -248,64 +248,17 @@ def _show_form(config):
         console.print(Text(issue, style="yellow"))
 
 
-def _form_browser(config=None):
-    ctx = click.get_current_context(silent=True)
-    resource = getattr(config, "_form_browser", None)
-    return resource or (ctx.meta.get("form_browser") if ctx else None)
-
-
-def _open_form_browser(browser):
-    if not sys.stdin.isatty():
-        raise ValueError("Google sign-in needs an interactive terminal. Run again with --sign-in.")
-    ctx = click.get_current_context(silent=True)
-    if ctx is None:
-        raise ValueError("Start sign-in through gformbot or gformbot generate/prepare --sign-in.")
-    resource = _form_browser()
-    if resource is None:
-        from .browser import FormBrowser
-
-        resource = FormBrowser(browser, _ask_text)
-        ctx.meta["form_browser"] = resource
-        ctx.call_on_close(resource.close)
-    return resource
-
-
-def _check_response_limit(config, count=None):
-    if config.one_response is True and (config.count if count is None else count) > 1:
-        raise ValueError(
-            "This form allows one response per Google account. Choose 1 response, "
-            "or ask the owner for a test copy without that limit."
-        )
-
-
-def _run_inspect(
-    url, browser="headless", save=False, output=DEFAULT_CONFIG_NAME, *, display=True, sign_in=False
-):
-    from .access import FormAccessError
+def _run_inspect(url, browser="headless", save=False, output=DEFAULT_CONFIG_NAME, *, display=True):
+    from .access import require_public_form
     from .inspector import inspect_form
 
-    resource = _open_form_browser(browser) if sign_in else _form_browser()
-    if resource:
-        schema = resource.inspect(url)
+    if display:
+        with console.status("Reading form..."):
+            schema = inspect_form(url, browser=browser, headless=True)
     else:
-        try:
-            if display:
-                with console.status("Reading form..."):
-                    schema = inspect_form(url, browser=browser, headless=True)
-            else:
-                schema = inspect_form(url, browser=browser, headless=True)
-            if schema.requires_signin:
-                raise FormAccessError("login_required")
-        except FormAccessError as exc:
-            if exc.state != "login_required" or not display or not sys.stdin.isatty():
-                raise
-            if not _ask_confirm("This form needs Google sign-in. Open a browser to sign in?"):
-                raise click.Abort() from None
-            resource = _open_form_browser(browser)
-            schema = resource.inspect(url)
+        schema = inspect_form(url, browser=browser, headless=True)
+    require_public_form(schema)
     config = config_from_schema(schema)
-    if resource:
-        config._form_browser = resource
     if display:
         _show_form(config)
     if save:
@@ -455,44 +408,10 @@ def _reference_prompt(config, required=False):
     return None
 
 
-def _select_uploads(question):
-    from .uploads import file_answer
-
-    _ask_text("Press Enter to choose attachment files (selection does not upload them)")
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-        try:
-            selected = filedialog.askopenfilenames(parent=root, title=question.text)
-        finally:
-            root.destroy()
-    except (ImportError, RuntimeError) as exc:
-        raise ValueError(
-            "The attachment picker needs a graphical desktop and Tk support; CSV/JSON can specify files."
-        ) from exc
-    except Exception as exc:
-        raise ValueError("Cannot open the attachment picker; CSV/JSON can specify files instead.") from exc
-    if not selected:
-        if question.required:
-            raise FileSelectionCancelled()
-        return ""
-    return file_answer(question, list(selected))
-
-
 def _generate(config, reference=None, instructions="", **options):
     from .ai import complete_responses, generate_responses
     from .previews import remember
 
-    if sys.stdin.isatty():
-        for question in config.questions:
-            if question.qtype == "upload" and question.fixed_value is None:
-                if _ask_confirm(
-                    f"Choose local files for {question.text}? They will not be uploaded during preparation."
-                ):
-                    question.fixed_value = _select_uploads(question)
     if config.media and not config.media_context.strip() and sys.stdin.isatty():
         choice = _ask_select(
             "This form contains images or videos",
@@ -615,9 +534,7 @@ def _save_plan(config, answers, path=None, source="prepared", *, cleanup_on_succ
     from .artifacts import describe
 
     payload = {
-        "schema_version": 2
-        if config.media or any(q.allow_other or q.qtype == "upload" for q in config.questions)
-        else 1,
+        "schema_version": 2 if config.media or any(q.allow_other for q in config.questions) else 1,
         "kind": "gformbot-run",
         "created_at": datetime.now().astimezone().isoformat(),
         "form_fingerprint": schema_fingerprint(config),
@@ -632,9 +549,18 @@ def _save_plan(config, answers, path=None, source="prepared", *, cleanup_on_succ
         ),
     }
     target.parent.mkdir(parents=True, exist_ok=True)
+    from .locking import file_lock
     from .state import atomic_json
 
-    atomic_json(target, payload)
+    while True:
+        with file_lock(target, timeout=5):
+            if target.exists():
+                if path is not None:
+                    raise ValueError(f"Output already exists: {target}. Choose a different filename.")
+                target = _available_path("gformbot-responses.json")
+                continue
+            atomic_json(target, payload)
+            break
     from .previews import remember
 
     try:
@@ -788,21 +714,6 @@ def _track_plan(config, answers, path, expected_digest, *, interactive=None):
         if choice == "cancel":
             raise click.Abort()
         session.reconcile(index, choice == "yes")
-    if any(q.qtype == "upload" for q in config.questions):
-        for index in session.ids:
-            for question, transfer in session.journal.upload_records(index).items():
-                if transfer["state"] == "prepared":
-                    continue
-                if interactive is False or not sys.stdin.isatty():
-                    raise UncertainSubmission(
-                        f"Response {index}, attachment Q{question} has a previous transfer. Reopen interactively to review it; uploads will not repeat automatically."
-                    )
-                if not _ask_confirm(
-                    f"Response {index}, Q{question}: files may already be uploaded. Have you checked/removed those attachments and explicitly authorize another transfer?",
-                    default=False,
-                ):
-                    raise click.Abort()
-                session.journal.reset_upload(index, question)
     if not session.ids:
         raise ValueError(
             "Every response in this preview was already confirmed submitted. Choose View or create a new batch."
@@ -886,13 +797,8 @@ def _edit_batch(config, answers, path):
     routes = Routing(config)
     previously_used = routes.active(answers[index - 1])
     default = json.dumps(current, ensure_ascii=False) if isinstance(current, (list, dict)) else current
-    selected_question = next(q for q in config.questions if q.index == question)
     while True:
-        value = (
-            _select_uploads(selected_question)
-            if selected_question.qtype == "upload"
-            else _ask_text("New answer (checkboxes: JSON array; type /blank for empty)", default)
-        )
+        value = _ask_text("New answer (checkboxes: JSON array; type /blank for empty)", default)
         value = "" if value == "/blank" else value
         candidate = {**answers[index - 1], question: value}
         try:
@@ -965,8 +871,6 @@ def _manage_batch(config, answers, path, *, saved=False, keep_files=False):
         remaining = _track_plan(config, answers, path, digest(path))
         if action == "test":
             _apply_browser(config, "headless")
-        elif _form_browser(config):
-            _info("Using the browser you signed in with.")
         else:
             _apply_browser(config, _choose_browser())
         _confirm_submit(config, action == "submit")
@@ -978,30 +882,31 @@ def _manage_batch(config, answers, path, *, saved=False, keep_files=False):
         return
 
 
+@dataclass(frozen=True)
+class RunUI:
+    _ask_confirm: Callable
+    _ask_select: Callable
+    _ask_text: Callable
+    _choice: Callable
+    _info: Callable
+    _section: Callable
+    console: Console
+
+
+def _run_ui():
+    return RunUI(_ask_confirm, _ask_select, _ask_text, _choice, _info, _section, console)
+
+
 def _runner(config, answers):
     from .execution import Runner
 
-    return Runner(config, answers, sys.modules[__name__], getattr(config, "_session", None))
-
-
-def _review_mode(config, submit):
-    return _runner(config, []).review_mode(submit)
-
-
-def _background_review(config, pending, answers):
-    return _runner(config, answers).background(pending)
-
-
-def _wait_for_manual_submissions(driver, config, pending, answers, *, tabs=False):
-    return _runner(config, answers).wait_manual(driver, pending, tabs=tabs)
+    return Runner(config, answers, _run_ui(), getattr(config, "_session", None))
 
 
 def _run_fill(config, dry_run=False, *, answers=None, submit=False, halt=False, compact=False):
-    resource = _form_browser(config)
-    if not dry_run and config.requires_signin and resource is None:
-        resource = _open_form_browser(config.browser)
-    if resource:
-        config._form_browser = resource
+    from .access import require_public_form
+
+    require_public_form(config)
     if answers is None:
         from .generator import prepare_responses
 
@@ -1014,26 +919,15 @@ def _run_fill(config, dry_run=False, *, answers=None, submit=False, halt=False, 
     return _runner(config, answers).run(**options)
 
 
-def _confirm_submit(config, submit, yes=False):
-    if not submit or yes:
+def _confirm_submit(config, submit):
+    if not submit:
         return
     if not sys.stdin.isatty():
         raise ValueError(
-            "Submission needs confirmation. Use --submit --yes only when you intend to submit this exact plan."
+            "Submission needs an interactive confirmation. Use gformbot generate URL for explicit scripted submission."
         )
     if not _ask_confirm(f"Submit these {config.count} responses to {config.form_title}?"):
         raise click.Abort()
-
-
-def _validate_execution_flags(dry_run, submit, yes):
-    if dry_run and submit:
-        raise ValueError(
-            "Choose --dry-run to save a preview, or --submit to submit; these cannot be combined."
-        )
-    if yes and not submit:
-        raise ValueError(
-            "--yes only confirms submission. Add --submit if you intend to submit, or remove --yes for review."
-        )
 
 
 @dataclass
@@ -1094,8 +988,9 @@ def _select_saved_preview(config=None):
 
 
 def _prepare_source(config, source):
-    if source != "own":
-        _check_response_limit(config)
+    from .access import require_public_form
+
+    require_public_form(config)
     if source in {"generate", "enlarge", "fresh", "reference"}:
         reference = (
             None
@@ -1152,8 +1047,6 @@ def _prepare_source(config, source):
         )
         if getattr(config, "_prompt_csv_count", False):
             limit = min(config.max_runs, len(profiles)) if mode in {"ordered", "shuffle"} else config.max_runs
-            if config.one_response:
-                limit = 1
             config.count = _ask_number("Number of responses", min(config.count, limit), max_val=limit)
         if mode in {"ordered", "shuffle"} and config.count > len(profiles):
             _info(f"The CSV has {len(profiles)} rows. Choose a count within that range.")
@@ -1162,7 +1055,6 @@ def _prepare_source(config, source):
                 min(config.count, len(profiles)),
                 max_val=min(config.max_runs, len(profiles)),
             )
-        _check_response_limit(config)
         return prepare_responses(config, profiles, sampling=mode)
     from .generator import CHOICE_TYPES, apply_reference_weights, make_answer
     from .routing import Routing
@@ -1266,7 +1158,7 @@ def _wizard():
                 + [_choice("back", "Back")],
             )
             if selected != "back":
-                return generation.callback(str(selected), resume=False, export=None)
+                return _resume_generation(str(selected))
         elif task == "inspect":
             _run_inspect(_url_prompt())
         else:
@@ -1306,7 +1198,7 @@ def _new_batch_wizard():
         if source != "own":
             config.count = _ask_number(
                 "Number of additional responses" if source == "enlarge" else "Number of responses",
-                max_val=1 if config.one_response else config.max_runs,
+                max_val=config.max_runs,
             )
         try:
             answers = _prepare_source(config, source)
@@ -1329,33 +1221,6 @@ def _new_batch_wizard():
     _manage_batch(config, answers, target, saved=reusing_preview)
 
 
-def _resolve_config(url, config_path=None, pool=None, browser=None, headless=None, count=None):
-    if url:
-        config = _run_inspect(url)
-        if config_path:
-            previous = load_config(config_path)
-            from .inspector import schema_fingerprint
-
-            if schema_fingerprint(previous) != schema_fingerprint(config):
-                raise ValueError("The supplied config describes a different or changed form.")
-            config = previous
-    elif config_path or Path(DEFAULT_CONFIG_NAME).exists():
-        config = load_config(config_path or DEFAULT_CONFIG_NAME)
-        if any(not q.entry_id or not q.item_id for q in config.questions):
-            raise ValueError(
-                "This config predates reliable form inspection. Run gformbot inspect URL to refresh it."
-            )
-    else:
-        raise ValueError("Provide a form URL or --config file.")
-    if pool is not None:
-        config.pool_file = str(clean_path(pool).resolve())
-    _apply_browser(config, browser, headless)
-    if count is not None:
-        config.count = count
-    validate_config(config)
-    return config
-
-
 @click.group(invoke_without_command=True)
 @click.version_option(__version__, prog_name="gformbot")
 @click.pass_context
@@ -1365,111 +1230,9 @@ def cli(ctx):
         _wizard()
 
 
-@click.command()
-@click.argument("url")
-@click.option("--save/--no-save", default=True)
-@click.option("-o", "--output", default=DEFAULT_CONFIG_NAME)
-@click.option("--browser", type=click.Choice(BROWSERS), default="headless", hidden=True)
-def inspect(url, save, output, browser):
-    """Display the whole form and optionally save its configuration."""
-    _run_inspect(url, browser=browser, save=save, output=output)
-
-
-@click.command()
-@click.argument("url", required=False)
-@click.option("-c", "--config", "config_path")
-@click.option("-n", "--count", type=click.IntRange(1, 500))
-@click.option("--pool", type=click.Path(exists=True, dir_okay=False))
-@click.option("--browser", type=click.Choice(BROWSERS))
-@click.option("--headless/--no-headless", default=None)
-@click.option("--ordered", is_flag=True, help="Use CSV rows in original order.")
-@click.option(
-    "--sampling",
-    type=click.Choice(["ordered", "shuffle", "sample"]),
-    help="CSV row selection; sample permits repetition.",
-)
-@click.option("--repair", is_flag=True, help="Explicitly repair and record supported checkbox issues.")
-@click.option("--dry-run", is_flag=True, help="Save and preview answers without opening a browser.")
-@click.option("--submit", is_flag=True, help="Submit after filling; otherwise stop before Submit.")
-@click.option("--yes", is_flag=True, help="Confirm --submit for scripts.")
-@click.option("--keep-files", is_flag=True, help="Keep the response plan after a successful run.")
-@click.option(
-    "--date-order", type=click.Choice(["mdy", "dmy"]), help="Resolve ambiguous numeric dates in CSV input."
-)
-def fill(
-    url,
-    config_path,
-    count,
-    pool,
-    browser,
-    headless,
-    ordered,
-    repair,
-    dry_run,
-    submit,
-    yes,
-    keep_files,
-    date_order,
-    sampling=None,
-):
-    """Prepare exact answers, then fill the form; submission is opt-in."""
-    _validate_execution_flags(dry_run, submit, yes)
-    if ordered and sampling not in (None, "ordered"):
-        raise ValueError("--ordered cannot be combined with a different --sampling mode.")
-    from .generator import load_reference, prepare_responses
-
-    config = _resolve_config(url, config_path, pool, browser, headless, count)
-    if date_order:
-        config.csv_date_order = date_order
-    if browser is None and headless is None and config.headless:
-        config.browser, config.headless = "chrome", False
-    changes = []
-    profiles = (
-        load_reference(config, config.pool_file, repair=repair, changes=changes) if config.pool_file else None
-    )
-    config._repairs = changes
-    answers = prepare_responses(config, profiles, ordered=ordered, sampling=sampling)
-    target = _save_plan(config, answers)
-    from .artifacts import digest
-
-    plan_digest = digest(target)
-    _show_preview(config, answers)
-    if not dry_run:
-        answers = _track_plan(config, answers, target, plan_digest)
-        _confirm_submit(config, submit, yes)
-    finished = _run_fill(config, dry_run=dry_run, answers=answers, submit=submit)
-    if not dry_run:
-        _finish_plan(target, config._plan_digest, keep_files or finished is False)
-    else:
-        _preview_instructions(target)
-
-
-@click.command("preview")
-@click.argument("url", required=False)
-@click.option("-c", "--config", "config_path")
-@click.option("-n", "--count", default=None, type=click.IntRange(1, 500))
-@click.option("--pool", type=click.Path(exists=True, dir_okay=False))
-@click.option("--plan", type=click.Path(exists=True, dir_okay=False))
-def _legacy_preview(url, config_path, count, pool, plan):
-    """Preview a saved plan, or prepare and save a fresh batch."""
-    from .generator import prepare_responses
-
-    if plan:
-        if url or config_path or pool or count is not None:
-            raise ValueError("--plan cannot be combined with a form URL, --config, --pool or --count.")
-        config, answers = _load_plan(plan)
-    else:
-        config = _resolve_config(url, config_path, pool=pool, count=count or 5)
-        answers = prepare_responses(config)
-        target = _save_plan(config, answers)
-    _show_preview(config, answers)
-    _preview_instructions(plan or target)
-
-
 def _response_options(function):
     """Keep the fast and prepare-only commands on the same input contract."""
     options = [
-        click.option("--sign-in", is_flag=True, help="Open a temporary browser for Google sign-in."),
         click.option(
             "--date-order",
             type=click.Choice(["mdy", "dmy"]),
@@ -1515,7 +1278,6 @@ def _command_answers(
     like,
     data,
     browser,
-    sign_in=False,
     date_order=None,
     *,
     cleanup_on_success=True,
@@ -1531,10 +1293,7 @@ def _command_answers(
         raise ValueError("--like needs a CSV file.")
     if data and clean_path(data).suffix.lower() not in {".csv", ".json"}:
         raise ValueError("--data needs a CSV file or saved response JSON.")
-    inspection = {"display": False}
-    if sign_in:
-        inspection.update(sign_in=True, browser=browser or "auto")
-    current = _run_inspect(url, **inspection)
+    current = _run_inspect(url, display=False)
     config = current
     if Path(DEFAULT_CONFIG_NAME).is_file():
         previous = load_config(DEFAULT_CONFIG_NAME)
@@ -1564,13 +1323,11 @@ def _command_answers(
         config.requires_signin = current.requires_signin
         config.one_response = current.one_response
         config.email_collection = current.email_collection
-        _check_response_limit(config, remaining)
         config.browser = browser or (config.browser if config.browser != "headless" else "auto")
         save_config(config, DEFAULT_CONFIG_NAME)
         return config, answers, clean_path(data), False
     if count is not None:
         config.count = count
-    _check_response_limit(config)
     source = data or like
     if source and (
         not config.pool_file or clean_path(config.pool_file).resolve() != clean_path(source).resolve()
@@ -1599,11 +1356,6 @@ def _command_answers(
 @cli.command()
 @_response_options
 @click.option("--halt", is_flag=True, help="Fill visible forms without submitting, and leave them open.")
-@click.option(
-    "--allow-uploads",
-    is_flag=True,
-    help="Explicitly allow prepared files to transfer before Submit. Does not clear uncertain transfers.",
-)
 def generate(
     url,
     count,
@@ -1612,10 +1364,8 @@ def generate(
     data,
     browser,
     halt,
-    sign_in=False,
     date_order=None,
     media_context=None,
-    allow_uploads=False,
 ):
     """Generate answers and submit them automatically. Use --halt to review instead."""
     from .artifacts import digest
@@ -1627,12 +1377,10 @@ def generate(
         like,
         data,
         browser,
-        sign_in,
         date_order,
         **({"media_context": media_context} if media_context is not None else {}),
     )
     remaining = _track_plan(config, answers, path, digest(path), interactive=False)
-    config._allow_uploads = allow_uploads
     _apply_browser(config, config.browser, headless=not halt)
     finished = _run_fill(config, answers=remaining, submit=not halt, halt=halt, compact=True)
     _finish_plan(path, config._plan_digest, keep_files=not owned or finished is False)
@@ -1640,7 +1388,7 @@ def generate(
 
 @cli.command()
 @_response_options
-def prepare(url, count, message, like, data, browser, sign_in=False, date_order=None, media_context=None):
+def prepare(url, count, message, like, data, browser, date_order=None, media_context=None):
     """Create and save response JSON without filling or submitting the form."""
     _, _, path, _ = _command_answers(
         url,
@@ -1649,7 +1397,6 @@ def prepare(url, count, message, like, data, browser, sign_in=False, date_order=
         like,
         data,
         browser,
-        sign_in,
         date_order,
         cleanup_on_success=False,
         **({"media_context": media_context} if media_context is not None else {}),
@@ -1702,76 +1449,7 @@ def preview(file):
         raise ValueError(f"Could not open {path}. Set a default application for JSON files.")
 
 
-@click.command()
-@click.argument("plan", type=click.Path(exists=True, dir_okay=False))
-@click.option("--browser", type=click.Choice(BROWSERS))
-@click.option("--headless/--no-headless", default=None)
-@click.option("--dry-run", is_flag=True)
-@click.option("--submit", is_flag=True)
-@click.option("--yes", is_flag=True)
-@click.option("--keep-files", is_flag=True, help="Keep generated response files after a successful run.")
-def run(plan, browser, headless, dry_run, submit, yes, keep_files):
-    """Replay the exact answers in a saved response plan."""
-    _validate_execution_flags(dry_run, submit, yes)
-    config, answers = _load_plan(plan)
-    from .artifacts import digest
-
-    plan_digest = digest(plan)
-    _pending_preview(config, answers)
-    interactive = sys.stdin.isatty() and not (
-        dry_run or submit or yes or browser is not None or headless is not None
-    )
-    if interactive:
-        _manage_batch(config, answers, clean_path(plan), saved=True, keep_files=keep_files)
-        return
-    if browser:
-        _apply_browser(config, browser)
-    elif headless is None and config.headless:
-        config.browser, config.headless = "chrome", False
-    _apply_browser(config, headless=headless)
-    if not dry_run:
-        answers = _track_plan(config, answers, plan, plan_digest)
-        _confirm_submit(config, submit, yes)
-    finished = _run_fill(config, dry_run=dry_run, answers=answers, submit=submit)
-    if not dry_run:
-        _finish_plan(plan, config._plan_digest, keep_files or finished is False)
-    else:
-        _preview_instructions(plan)
-
-
-@click.command()
-def batches():
-    """List saved response batches offline, newest first."""
-    from .previews import available
-
-    records = []
-    for path in available():
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8-sig"))
-            config, answers = _load_plan(path)
-            records.append((payload.get("created_at", ""), path, config, len(answers)))
-        except (OSError, ValueError):
-            continue
-    table = Table(title="Saved responses", header_style="bold cyan")
-    for label in ("Created", "Form", "Remaining / total", "File"):
-        table.add_column(label, overflow="fold")
-    for created, path, config, total in sorted(records, key=lambda item: item[0], reverse=True):
-        table.add_row(
-            Text(created),
-            Text(config.form_title),
-            str(total - len(config._submitted_indices)) + " / " + str(total),
-            Text(str(path)),
-        )
-    console.print(table)
-
-
-@click.command()
-@click.argument("checkpoint", type=click.Path(exists=True, dir_okay=False))
-@click.option("--resume", is_flag=True, help="Generate only the unfinished profiles.")
-@click.option(
-    "--export", type=click.Path(dir_okay=False), help="Export completed profiles without opening a browser."
-)
-def generation(checkpoint, resume, export):
+def _resume_generation(checkpoint, resume=False, export=None):
     """Resume a saved generation job, or export its valid partial results."""
     from .generator import validate_answer, write_csv
 
@@ -1794,7 +1472,7 @@ def generation(checkpoint, resume, export):
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise ValueError(f"Cannot open generation checkpoint: {exc}") from exc
     if resume and export:
-        raise ValueError("Choose --resume or --export, not both.")
+        raise ValueError("Choose either continuing generation or exporting completed responses.")
     _info(f"AI responses saved: {len(valid)}/{len(rows)}.")
     if not resume and not export:
         choice = _ask_select(
@@ -1825,6 +1503,10 @@ def generation(checkpoint, resume, export):
         return
     from .ai import complete_responses, generate_responses
 
+    if len(valid) < len(rows):
+        from .access import require_public_form
+
+        require_public_form(config)
     options = {
         "reference": request.get("reference"),
         "instructions": request.get("instructions", ""),
@@ -1854,7 +1536,8 @@ def generation(checkpoint, resume, export):
 
 
 @cli.command()
-def doctor():
+@click.option("--check", is_flag=True, help="Return an error if a required local prerequisite is missing.")
+def doctor(check=False):
     """Check local prerequisites without launching a browser or making requests."""
     import importlib.util
 
@@ -1869,8 +1552,11 @@ def doctor():
     table.add_row("Default browser", detect_default_browser() if installed else "Unavailable")
     from .selenium_runtime import PACKAGE
 
+    missing = [] if installed else ["a supported browser"]
     for module in ("selenium", "tkinter", "pyperclip"):
         present = importlib.util.find_spec(PACKAGE if module == "selenium" else module) is not None
+        if module == "selenium" and not present:
+            missing.append("Selenium")
         table.add_row(
             module,
             ("Available (included)" if module == "selenium" and PACKAGE != "selenium" else "Available")
@@ -1880,6 +1566,10 @@ def doctor():
     table.add_row("Output folder", "Writable" if os.access(Path.cwd(), os.W_OK) else "Not writable")
     table.add_row("Driver", "Selenium Manager resolves it on first browser use; internet may be needed")
     console.print(table)
+    if check and (missing or not os.access(Path.cwd(), os.W_OK)):
+        raise click.ClickException(
+            "Setup incomplete: " + ", ".join(missing or ["a writable output folder"]) + "."
+        )
 
 
 @cli.command("config")
@@ -1890,7 +1580,9 @@ def config_cmd(config_path, show, edit):
     """View or edit a saved form configuration."""
     path = clean_path(config_path)
     if not path.is_file():
-        raise ValueError(f"Config not found: {path}. Run gformbot inspect URL first.")
+        raise ValueError(
+            f"Config not found: {path}. Run gformbot prepare URL or create responses in the wizard first."
+        )
     if edit:
         editor = os.environ.get("EDITOR")
         if editor:
@@ -1915,7 +1607,7 @@ def log(log_path, last, followups):
         from .followups import display
         from .state import Journal
 
-        display(Journal("").followups(log_path=log_path, last=last), sys.modules[__name__], full=True)
+        display(Journal("").followups(log_path=log_path, last=last), _run_ui(), full=True)
         return
     path = clean_path(log_path)
     if not path.exists():
@@ -1940,14 +1632,13 @@ def main():
     try:
         cli(standalone_mode=False)
     except (KeyboardInterrupt, click.Abort):
-        console.print("Cancelled.")
+        click.echo("Cancelled.", err=True)
         raise SystemExit(130) from None
     except click.ClickException as exc:
         exc.show()
         raise SystemExit(exc.exit_code) from None
-    except (ValueError, OSError) as exc:
-        console.print(Text(f"Error: {exc}", style="red"))
-        raise SystemExit(1) from None
     except Exception as exc:
-        console.print(Text(f"Error: {exc}", style="red"))
+        if os.environ.get("GFORMBOT_DEBUG") == "1":
+            raise
+        click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1) from None

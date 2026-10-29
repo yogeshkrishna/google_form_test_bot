@@ -63,13 +63,13 @@ def halted(tmp_path, monkeypatch):
     ui = SimpleNamespace(
         _info=messages.append,
         _section=sections.append,
-        config_from_schema=lambda value: value,
         _ask_select=no_prompt,
         _ask_text=no_prompt,
         _ask_confirm=no_prompt,
     )
     monkeypatch.setattr("gformbot.execution.sys.stdin", SimpleNamespace(isatty=lambda: False))
     monkeypatch.setattr(inspector, "inspect_form", lambda *args: config)
+    monkeypatch.setattr("gformbot.execution.config_from_schema", lambda value: value)
     monkeypatch.setattr(
         browser, "get_driver", lambda name, headless: launches.append((name, headless)) or driver
     )
@@ -291,6 +291,7 @@ def test_halt_local_chrome_keeps_filled_tabs_open_without_submission(tmp_path, m
 
     monkeypatch.setattr(browser, "get_driver", launch)
     monkeypatch.setattr(inspector, "inspect_form", lambda *args: config)
+    monkeypatch.setattr("gformbot.execution.config_from_schema", lambda value: value)
 
     def no_prompt(*args, **kwargs):
         pytest.fail("Halt must not ask for input.")
@@ -298,7 +299,6 @@ def test_halt_local_chrome_keeps_filled_tabs_open_without_submission(tmp_path, m
     ui = SimpleNamespace(
         _info=lambda message: None,
         _section=no_prompt,
-        config_from_schema=lambda value: value,
         _ask_select=no_prompt,
         _ask_confirm=no_prompt,
         _ask_text=no_prompt,

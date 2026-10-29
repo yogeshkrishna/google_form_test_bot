@@ -32,6 +32,10 @@ gformbot-export*.csv
 gformbot-partial*.csv
 gformbot-generation*.json
 gformbot-generation*.json.lock
+gformbot-responses*.json.lock
+*.yaml.lock
+*.yml.lock
+*.csv.lock
 .work/
 response_pool.csv
 

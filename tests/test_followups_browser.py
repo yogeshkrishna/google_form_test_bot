@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from test_routing_browser import configuration, response
 
-from gformbot import browser, filler, inspector
+from gformbot import browser, execution, filler, inspector
 from gformbot.artifacts import digest
 from gformbot.cli import _save_plan
 from gformbot.execution import Runner
@@ -130,7 +130,6 @@ def test_directions_survive_every_run_mode(driver, form_server, tmp_path, monkey
         _section=lambda text: None,
         _choice=lambda *args: args,
         _ask_select=lambda *args, **kwargs: next(choices),
-        config_from_schema=lambda value: value,
     )
     runner = Runner(config, answers, ui, session)
     if fault == "capture":
@@ -155,6 +154,7 @@ def test_directions_survive_every_run_mode(driver, form_server, tmp_path, monkey
 
         ui._info = broken_display
     monkeypatch.setattr(inspector, "inspect_form", lambda *args: config)
+    monkeypatch.setattr(execution, "config_from_schema", lambda value: value)
     monkeypatch.setattr(browser, "get_driver", lambda *args, **kwargs: driver)
     monkeypatch.setattr(driver, "quit", lambda: None)
     monkeypatch.setattr("gformbot.execution.sys.stdin", SimpleNamespace(isatty=lambda: True))

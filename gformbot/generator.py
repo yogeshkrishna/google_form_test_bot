@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import random
+import tempfile
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -47,10 +48,6 @@ def read_pool(path: str | Path) -> tuple[list[str], list[dict[str, str]]]:
     if not rows:
         raise ValueError("The CSV contains no response rows.")
     return list(headers), rows
-
-
-def load_pool(path: str | Path) -> list[dict[str, str]]:
-    return read_pool(path)[1]
 
 
 def map_columns(config: RunConfig, headers: list[str], mapping: dict | None = None) -> dict[int, str | None]:
@@ -227,8 +224,7 @@ def validate_answer(
             and not (
                 q.qtype == "checkbox" and isinstance(value, list) and all(isinstance(v, str) for v in value)
             )
-            and not ((q.allow_other or q.qtype == "upload") and isinstance(value, dict))
-            and not (q.qtype == "upload" and isinstance(value, list))
+            and not (q.allow_other and isinstance(value, dict))
         ):
             raise ValueError(f"Q{q.index}: answer must be text or a checkbox list.")
         result[q.index] = copy_value(value)
@@ -239,11 +235,6 @@ def validate_answer(
     for q in questions:
         value = result[q.index]
         label = f"Q{q.index} ({q.text})"
-        if q.qtype == "upload":
-            from .uploads import file_answer
-
-            result[q.index] = file_answer(q, value)
-            continue
         if isinstance(value, dict):
             result[q.index] = other_answer(q, value)
             continue
@@ -344,18 +335,6 @@ def load_reference(
                     try:
                         profiles[i][question.index] = parse_time(
                             question, profiles[i][question.index], csv=True
-                        )
-                    except ValueError as exc:
-                        raise ValueError(f"CSV row {i + 2}: {exc}") from exc
-    from .uploads import file_answer
-
-    for question in config.questions:
-        if question.qtype == "upload" and columns[question.index]:
-            for i, reached in enumerate(active):
-                if question.index in reached:
-                    try:
-                        profiles[i][question.index] = file_answer(
-                            question, profiles[i][question.index], base=clean_path(path).resolve().parent
                         )
                     except ValueError as exc:
                         raise ValueError(f"CSV row {i + 2}: {exc}") from exc
@@ -502,28 +481,29 @@ def prepare_responses(
 
 
 def write_csv(config: RunConfig, answers: list[dict], path: str | Path) -> Path:
+    from .locking import file_lock
+
     target = clean_path(path)
     if config.pool_file and target.resolve() == clean_path(config.pool_file).resolve():
         raise ValueError("The output CSV cannot overwrite your source CSV.")
-    if target.exists():
-        raise ValueError(f"Output already exists: {target}. Choose a different filename.")
     target.parent.mkdir(parents=True, exist_ok=True)
     headers = [f"entry.{q.entry_id}" if q.entry_id else f"Q{q.index}" for q in config.questions]
-    temporary = target.with_name(target.name + ".tmp")
-    with temporary.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(headers)
-        for answer in answers:
-            row = validate_answer(config, answer)
-            writer.writerow([csv_value(row[q.index]) for q in config.questions])
-    temporary.replace(target)
+    temporary = None
+    try:
+        with file_lock(target, timeout=5):
+            if target.exists():
+                raise ValueError(f"Output already exists: {target}. Choose a different filename.")
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", newline="", dir=target.parent, suffix=".tmp", delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                writer = csv.writer(handle)
+                writer.writerow(headers)
+                for answer in answers:
+                    row = validate_answer(config, answer)
+                    writer.writerow([csv_value(row[q.index]) for q in config.questions])
+            temporary.replace(target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return target
-
-
-def answer_stream(config: RunConfig):
-    profiles = load_reference(config, config.pool_file) if config.pool_file else None
-    while True:
-        if profiles:
-            yield {key: copy_value(value) for key, value in random.choice(profiles).items()}
-        else:
-            yield make_answer(config)

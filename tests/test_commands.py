@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from click.testing import CliRunner
 
-from gformbot import cli, generator
+from gformbot import browser, cli, generator
 from gformbot.config import QuestionConfig, RunConfig, config_to_dict, save_config
 from gformbot.state import Journal, batch_id
 
@@ -83,6 +83,23 @@ def test_public_help_has_only_the_streamlined_commands():
     result = invoke("--help")
     assert result.exit_code == 0
     assert all(name in result.output for name in ("generate", "prepare", "preview", "doctor"))
+
+
+def test_doctor_strict_check_rejects_missing_browser(monkeypatch):
+    monkeypatch.setattr(browser, "available_browsers", lambda: [])
+    informational = invoke("doctor")
+    assert informational.exit_code == 0
+    assert "None detected" in informational.output
+    strict = invoke("doctor", "--check")
+    assert strict.exit_code == 1
+    assert "Setup incomplete" in strict.output and "a supported browser" in strict.output
+
+
+def test_doctor_strict_check_accepts_available_browser(monkeypatch):
+    monkeypatch.setattr(browser, "available_browsers", lambda: ["chrome"])
+    monkeypatch.setattr(browser, "detect_default_browser", lambda: "chrome")
+    result = invoke("doctor", "--check")
+    assert result.exit_code == 0, result.exception
 
 
 @pytest.mark.parametrize("name", ["inspect", "fill", "run", "batches", "generation"])

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from gformbot import browser, cli, filler, generator, inspector, logger
+from gformbot import browser, cli, execution, filler, generator, inspector, logger
 from gformbot.config import QuestionConfig, RunConfig
 
 
@@ -30,13 +30,13 @@ def test_completed_generation_checkpoint_remains_accessible_from_start_menu(tmp_
         return checkpoint
 
     monkeypatch.setattr(cli, "_ask_select", choose)
-    monkeypatch.setattr(cli.generation, "callback", lambda path, **kw: recovered.append(path))
+    monkeypatch.setattr(cli, "_resume_generation", lambda path, **kw: recovered.append(path))
     cli._wizard()
     assert recovered == [str(checkpoint)]
     assert any("1/1" in item.name and "ready" in item.name for item in selected)
 
 
-def test_keep_files_is_honored_when_run_enters_interactive_batch_manager(tmp_path, monkeypatch):
+def test_explicitly_saved_plan_survives_confirmed_interactive_execution(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config = RunConfig(
         "https://docs.google.com/forms/d/e/test/viewform",
@@ -45,7 +45,7 @@ def test_keep_files_is_honored_when_run_enters_interactive_batch_manager(tmp_pat
     )
     answers = [{1: "Keep this profile"}]
     exported = generator.write_csv(config, answers, tmp_path / "generated.csv")
-    plan = cli._save_plan(config, answers, artifacts=[exported])
+    plan = cli._save_plan(config, answers, artifacts=[exported], cleanup_on_success=False)
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr(cli, "_next_action", lambda **kw: "submit")
     monkeypatch.setattr(cli, "_choose_browser", lambda: "chrome")
@@ -57,9 +57,7 @@ def test_keep_files_is_honored_when_run_enters_interactive_batch_manager(tmp_pat
         return True
 
     monkeypatch.setattr(cli, "_run_fill", confirmed)
-    cli.run.callback(
-        str(plan), browser=None, headless=None, dry_run=False, submit=False, yes=False, keep_files=True
-    )
+    cli._manage_batch(config, answers, plan, saved=True)
     assert plan.exists() and exported.exists()
 
 
@@ -74,7 +72,7 @@ def test_instruction_only_form_change_stops_before_browser(tmp_path, monkeypatch
     changed = copy.deepcopy(config)
     changed.instructions[0]["title"] = "Students only"
     monkeypatch.setattr(inspector, "inspect_form", lambda *a: changed)
-    monkeypatch.setattr(cli, "config_from_schema", lambda value: value)
+    monkeypatch.setattr(execution, "config_from_schema", lambda value: value)
     monkeypatch.setattr(
         browser,
         "get_driver",
@@ -105,7 +103,7 @@ def test_legacy_plan_without_instruction_metadata_still_loads_and_tests(tmp_path
     launches, closed = [], []
     driver = SimpleNamespace(quit=lambda: closed.append(True))
     monkeypatch.setattr(inspector, "inspect_form", lambda *a: current)
-    monkeypatch.setattr(cli, "config_from_schema", lambda value: value)
+    monkeypatch.setattr(execution, "config_from_schema", lambda value: value)
     monkeypatch.setattr(browser, "get_driver", lambda *a, **kw: launches.append(True) or driver)
     monkeypatch.setattr(filler, "submit_response", lambda *a, **kw: (True, "filled"))
     monkeypatch.setattr(logger, "log_result", lambda *a, **kw: None)

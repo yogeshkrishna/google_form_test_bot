@@ -67,14 +67,16 @@ def test_unknown_rating_icon_is_not_guessed():
 
 @pytest.mark.browser
 @pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Enable browser fixtures")
-def test_rating_fill_readback_and_clear(html_page):
+@pytest.mark.parametrize("icon", [1, 2, 3])
+def test_rating_fill_readback_change_and_clear(html_page, icon):
     from gformbot.browser import get_driver
     from gformbot.filler import _fill_question, _page_questions
 
-    config = rating(required=False)
+    config = rating(icon=icon, required=False)
     q = config.questions[0]
     choices = "".join(
-        f'<div role="radio" aria-checked="false" data-value="{v}" onclick="document.querySelectorAll(\'[role=radio]\').forEach(e=>e.setAttribute(\'aria-checked\',String(e===this)))">★</div>'
+        # Captured Google behavior: selecting 2 checks icons 1 and 2, not only 2.
+        f'<div role="radio" aria-checked="false" data-value="{v}" onclick="document.querySelectorAll(\'[role=radio]\').forEach(e=>e.setAttribute(\'aria-checked\',String(Number(e.dataset.value)<=Number(this.dataset.value))))">★</div>'
         for v in q.options
     )
     url = html_page(
@@ -84,15 +86,12 @@ def test_rating_fill_readback_and_clear(html_page):
     try:
         driver.get(url)
         question, box = _page_questions(driver, config)[0]
-        _fill_question(driver, question, box, "4", 3)
-        assert (
-            driver.execute_script("return document.querySelectorAll('[aria-checked=\"true\"]').length") == 1
-        )
-        assert (
-            driver.execute_script("return document.querySelector('[aria-checked=\"true\"]').dataset.value")
-            == "4"
-        )
-        _fill_question(driver, question, box, "", 3)
-        assert not driver.execute_script("return document.querySelectorAll('[aria-checked=\"true\"]').length")
+        # Lowering a rating must click even when that icon is already painted checked.
+        for value in ("4", "2", "5", "", "1"):
+            _fill_question(driver, question, box, value, 2)
+            checked = driver.execute_script(
+                "return [...document.querySelectorAll('[aria-checked=true]')].map(e=>e.dataset.value)"
+            )
+            assert checked == [str(i) for i in range(1, int(value or 0) + 1)]
     finally:
         driver.quit()

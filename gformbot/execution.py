@@ -6,6 +6,8 @@ import random
 import sys
 import time
 
+from .config import config_from_schema
+
 
 class Runner:
     def __init__(self, config, answers, ui, session=None):
@@ -28,13 +30,6 @@ class Runner:
 
     def original(self, index):
         return self.session.ids[index - 1] if self.session else index
-
-    def upload_guard(self, index):
-        if not getattr(self, "_uploads_allowed", False) or self.session is None:
-            return None
-        from .uploads import UploadGuard
-
-        return UploadGuard(self.session.journal, self.original(index), allowed=True)
 
     def log(self, index, ok, message):
         from .logger import log_result
@@ -149,8 +144,7 @@ class Runner:
         from .selenium_runtime import WebDriverException
 
         ui, c = self.ui, self.config
-        resource = getattr(c, "_form_browser", None)
-        viewer, opened = resource.driver if resource else None, {}
+        viewer, opened = None, {}
 
         def check():
             if viewer is None:
@@ -227,12 +221,8 @@ class Runner:
                         f"Opening response {self.original(index)}. Saved answers remain unchanged unless you edit the batch."
                     )
                     options = {"submit": False, "driver": viewer, "observe": self.observer(index)}
-                    if guard := self.upload_guard(index):
-                        options["uploads"] = guard
                     if self.session:
                         options["before_review"] = lambda i=index: self.session.review(i)
-                    if resource:
-                        options["confirm_email"] = resource.confirm_email
                     ok, message = submit_response(c, self.answers[index - 1], **options)
                     if not ok:
                         raise ValueError(message)
@@ -252,7 +242,7 @@ class Runner:
             )
             return False
         finally:
-            if viewer is not None and resource is None:
+            if viewer is not None:
                 try:
                     viewer.quit()
                 except Exception as exc:
@@ -337,7 +327,7 @@ class Runner:
             self.followups.show(self.ui)
 
     def _run(self, *, dry_run=False, submit=False, halt=False, compact=False):
-        from .access import FormAccessError
+        from .access import require_public_form
         from .browser import get_driver
         from .config import clean_path, validate_config
         from .filler import SubmissionRejectedError, SubmissionUncertainError, submit_response
@@ -357,37 +347,10 @@ class Runner:
         if dry_run:
             ui._info("Preview only; no browser was opened.")
             return False
-        if any(q.qtype == "upload" for q in c.questions):
-            has_files = any(
-                q.qtype == "upload" and q.index in c._routing.active(row) and row[q.index]
-                for row in self.answers
-                for q in c.questions
-            )
-            if has_files:
-                if self.session is None:
-                    raise ValueError("Save and reopen the response plan before transferring attachments.")
-                if not submit and not halt and (c.headless or c.browser == "headless"):
-                    raise ValueError(
-                        "A background filling test does not upload files. Use visible review and explicitly allow uploads."
-                    )
-                self._uploads_allowed = bool(getattr(c, "_allow_uploads", False))
-                if not self._uploads_allowed:
-                    if not sys.stdin.isatty():
-                        raise ValueError(
-                            "Attachment transfer requires --allow-uploads. Files can transfer before Submit."
-                        )
-                    self._uploads_allowed = ui._ask_confirm(
-                        "Transfer the prepared files to this form? Uploads happen before Submit, even during review."
-                    )
-                if not self._uploads_allowed:
-                    raise ValueError("File transfer cancelled; the response plan was kept.")
         validate_log_path(c.log_file)
-        resource = getattr(c, "_form_browser", None)
-        current = ui.config_from_schema(resource.inspect(c.url) if resource else inspect_form(c.url))
-        if current.requires_signin and resource is None:
-            raise FormAccessError("login_required")
-        if current.one_response is True and len(self.answers) > 1:
-            raise ValueError("This form allows one response per Google account. Choose 1 response.")
+        require_public_form(c)
+        current = config_from_schema(inspect_form(c.url))
+        require_public_form(current)
         if schema_fingerprint(current) != schema_fingerprint(c):
             raise ValueError("The form has changed since inspection. Prepare a new response plan.")
         if getattr(c, "_instructions_known", True) and current.instructions != c.instructions:
@@ -397,10 +360,6 @@ class Runner:
         c.requires_signin = current.requires_signin
         c.one_response = current.one_response
         c.email_collection = current.email_collection
-        if resource:
-            c.headless, c.background = False, False
-            if c.browser == "headless":
-                c.browser = "auto"
         review = "halt" if halt else self.review_mode(submit)
         # Quiet review needs no hidden browser pass. Open fills each requested profile once.
         if not halt and not submit and c.background and review != "check":
@@ -421,11 +380,7 @@ class Runner:
         if not compact:
             ui._section("Submitting responses" if submit else "Testing or reviewing form filling")
         selected_browser = "auto" if halt and c.browser == "headless" else c.browser
-        driver = (
-            resource.driver
-            if resource
-            else get_driver(selected_browser, headless=False if halt else c.headless or c.background)
-        )
+        driver = get_driver(selected_browser, headless=False if halt else c.headless or c.background)
         completed, pending = 0, {}
         try:
             for index, answer in enumerate(self.answers, 1):
@@ -433,16 +388,10 @@ class Runner:
                     if review in {"tabs", "halt"} and index > 1:
                         driver.switch_to.new_window("tab")
                     options = {"submit": submit, "driver": driver, "observe": self.observer(index)}
-                    if guard := self.upload_guard(index):
-                        options["uploads"] = guard
-                    if self.session and (
-                        (not submit and review != "check") or (resource and c.email_collection == "verified")
-                    ):
+                    if self.session and not submit and review != "check":
                         options["before_review"] = lambda i=index: self.session.review(i)
                     if submit and self.session:
                         options["before_submit"] = lambda i=index: self.session.before_submit(i)
-                    if resource:
-                        options["confirm_email"] = resource.confirm_email
                     ok, message = submit_response(c, answer, **options)
                     if not ok:
                         if self.session and submit:
@@ -484,11 +433,10 @@ class Runner:
             if halt:
                 return self.wait_halt(driver, pending)
         finally:
-            if resource is None:
-                try:
-                    driver.quit()
-                except Exception as exc:
-                    ui._info(f"Could not close the private browser: {exc}")
+            try:
+                driver.quit()
+            except Exception as exc:
+                ui._info(f"Could not close the private browser: {exc}")
         ui._info(f"Finished: {completed}/{len(self.answers)} {mode}. Log: {clean_path(c.log_file).resolve()}")
         if not submit:
             ui._info("No responses were submitted by the tool. The batch is kept for later use.")

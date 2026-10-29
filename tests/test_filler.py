@@ -539,7 +539,7 @@ def test_review_batch_with_real_private_tabs_and_manual_confirmation(local_form,
     driver = factory.get_driver("chrome", headless=True)
     monkeypatch.setattr(factory, "get_driver", lambda *args, **kwargs: driver)
     monkeypatch.setattr(inspector, "inspect_form", lambda *args: form)
-    monkeypatch.setattr(cli, "config_from_schema", lambda value: value)
+    monkeypatch.setattr("gformbot.execution.config_from_schema", lambda value: value)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli, "_ask_select", lambda *args, **kwargs: mode)
     original_confirmation = browser._positive_confirmation
@@ -607,7 +607,7 @@ def test_background_batch_opens_only_requested_profiles_in_review_browser(local_
 
     monkeypatch.setattr(factory, "get_driver", launch)
     monkeypatch.setattr(inspector, "inspect_form", lambda *args: form)
-    monkeypatch.setattr(cli, "config_from_schema", lambda value: value)
+    monkeypatch.setattr("gformbot.execution.config_from_schema", lambda value: value)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     selections = iter(["tabs", "open", 1, "check", "open", 2])
 

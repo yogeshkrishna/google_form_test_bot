@@ -2,12 +2,16 @@
 
 Generate synthetic Google Forms responses, reuse complete answer profiles, and fill forms from your terminal.
 
+Supports public forms that accept anonymous responses. Google-account sign-in and file-upload questions are not supported.
+
 ## Install
 
 ```bash
-python -m pip install gformbot
+python -m pip install "git+https://github.com/yogeshkrishna/google_form_test_bot.git"
 gformbot
 ```
+
+This checkout is `0.4.0.dev0`, an unpublished development build. The commands and features below describe GitHub master. `python -m pip install gformbot` installs the older published release instead.
 
 Requires Python 3.10 or newer and an installed Chrome, Firefox, or Edge browser for generation and filling. Selenium manages the driver. Use `python -m gformbot` if the command is not on your PATH.
 
@@ -28,7 +32,7 @@ The wizard's file picker opens after you press Enter. It needs a graphical deskt
 
 Public respondent URLs and `forms.gle` short links work. The wizard displays sections, instructions, descriptions, questions, choices, required fields, and supported constraints before preparing answers.
 
-For a form that requires Google login, use `gformbot generate "FORM_URL" --sign-in` (or `prepare --sign-in`). Sign in directly in the temporary form browser; the tool reuses that session and stores no credentials in response files. This requires an interactive terminal and a visible browser. Review and check verified-email consent yourself when prompted. Google may refuse automated-browser login; access and per-account response limits still apply.
+Account-restricted forms, verified-account email collection and one-response-per-account forms stop before preparation or filling. Complete those forms manually or ask their owner for an anonymous test copy. Ordinary typed-email questions remain supported.
 
 ```bash
 # Prepare answers for later.
@@ -93,7 +97,7 @@ Student,"[""Roads, footpaths or crossings"", ""Bus stops""]"
 
 Short text occupies one line; paragraphs may contain newlines. Number comparisons/ranges, whole numbers, text contains/does-not-contain, character limits, email and checkbox constraints share the same checks across CSV import, AI output, editing, and execution. Number answers retain their original text. Character limits count UTF-16 units as Google's client does, so an emoji can count as two characters. Checkbox repairs are explicit and recorded.
 
-Pattern validation supports verified JavaScript-compatible syntax and all four Forms pattern operations. Checks run in one lazy background process with bounded waits and caches; no regex dependency is installed. Unverified syntax (including backreferences, named groups, lookbehind, inline flags, and `\S` inside character classes) stops explicitly. Patterns are limited to 4,096 characters including operation wrappers, and answers to one million UTF-16 units for pattern checks. URL/phone rules and other unknown validation families remain unsupported. The browser's own validation and positive submission confirmation still apply.
+Pattern validation supports verified JavaScript-compatible syntax and all four Forms pattern operations. Checks run in one lazy background process with bounded waits and caches; no regex dependency is installed. Unverified syntax (including backreferences, named groups, lookbehind, inline flags, and `\S` inside character classes) stops explicitly. Patterns are limited to 4,096 characters including operation wrappers, and answers to one million UTF-16 units for pattern checks. URL-format rules are checked locally; Google's own validation remains authoritative. Unknown validation families stop explicitly. A valid filled page is not proof of submission.
 
 Dates use `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`; yearless questions use `MM-DD` with optional time. Google Forms CSV dates are normalized without changing the source. For ambiguous dates, `generate` and `prepare` accept `--date-order mdy` or `--date-order dmy`; the wizard asks you to choose. An explicit option overrides matching saved settings. Impossible dates and nonzero seconds are rejected.
 
@@ -107,9 +111,9 @@ Media items and question/option attachments stay in form order. AI generation ne
 
 Next, Submit and per-question clearing prefer verified Google control identities over English labels. Unknown or conflicting controls stop explicitly. This does not claim universal language support: unrecognized translated account-consent prompts still require manual handling.
 
-Attachment support is provisional pending live Google picker verification in Phase 6. Choose actual files in the wizard or supply paths through CSV/JSON; relative CSV paths resolve beside that CSV. Preparation records file sizes and hashes without transferring anything. Transfer requires separate permission (`generate --allow-uploads` or an explicit wizard confirmation), rechecks hashes, and records upload outcomes independently of submission. Interrupted or uncertain transfers require manual review before another transfer. Dry runs do not upload. Only an identifiable question-scoped file input with accepted-file readback is currently handled; other picker layouts stop before transfer. File extensions provide a preflight check; Google's server still decides acceptance. AI never invents attachments or receives their paths or bytes. Attachment source files are preserved.
+File-upload questions are unsupported and never transfer files. Older plans containing prepared uploads cannot execute; their files and journal records are preserved. CSV/JSON import and export still work normally.
 
-Supported questions include short text, paragraphs, multiple choice, checkboxes, dropdowns, numeric scales, icon ratings, explicit Other answers, dates with optional year/time, clock time, duration, and both grid types. Grid rows use their entry IDs or Google CSV headers (`Question [Row]`); required rows and one-response-per-column rules are checked together. Section routing follows each response's choices, including skipped sections and early Submit. Only reached questions require answers; repeated sections stop with an error. Instruction blocks and section descriptions are retained as text. Unknown question types, upload settings, and custom validation block their sections. A response can avoid those sections only when its complete route is understood; unclear routing and legacy unscoped compatibility findings still block the form. Generated routes respect fixed choices and positive weights while avoiding unsupported sections and loops. Known one-response limits stop incompatible batches; closed, restricted, or already-answered forms retain unfinished work.
+Supported questions include short text, paragraphs, multiple choice, checkboxes, dropdowns, numeric scales, icon ratings, explicit Other answers, dates with optional year/time, clock time, duration, and both grid types. Grid rows use their entry IDs or Google CSV headers (`Question [Row]`); required rows and one-response-per-column rules are checked together. Section routing follows each response's choices, including skipped sections and early Submit. Only reached questions require answers; repeated sections stop with an error. Instruction blocks and section descriptions are retained as text. Unsupported controls and validation block their sections. A response can avoid those sections only when its complete route is understood; unclear routing and legacy unscoped compatibility findings still block the form. Generated routes respect fixed choices and positive weights while avoiding unsupported sections and loops. Closed or restricted forms retain unfinished work.
 
 ## Other commands
 
@@ -119,9 +123,12 @@ gformbot config --edit
 gformbot log --last 20
 gformbot log --followups
 gformbot doctor
+gformbot doctor --check
 gformbot --help
 gformbot --version
 ```
+
+`doctor --check` exits unsuccessfully when a required local prerequisite is missing. Runtime errors go to stderr. Set `GFORMBOT_DEBUG=1` to retain a traceback when diagnosing a failure; avoid sharing logs containing private responses.
 
 ## Development
 

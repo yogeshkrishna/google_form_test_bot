@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
+from urllib.parse import urlsplit
 
 # HTML email input syntax; unlike a delivery check, this needs no network.
 EMAIL_PATTERN = r"[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*"
@@ -150,13 +151,15 @@ def _text_rules(kind, encoded):
                 if operation == 10
                 else "Finite number"
             )
-        elif family == 2 and operation in (100, 101, 102):
-            arity = 0 if operation == 102 else 1
+        elif family == 2 and operation in (100, 101, 102, 103):
+            arity = 0 if operation in (102, 103) else 1
             if len(args) != arity or any(not isinstance(v, str) for v in args):
                 raise ValueError("Invalid text constraint arguments.")
             description = (
                 "Valid email address"
                 if operation == 102
+                else "Valid absolute URL (http, https, or ftp)"
+                if operation == 103
                 else f"{'Contains' if operation == 100 else 'Does not contain'} {args[0]!r}"
             )
         elif family == 6 and operation in (202, 203):
@@ -194,6 +197,29 @@ def _text_rules(kind, encoded):
     return tuple(normalized)
 
 
+def _valid_url(value):
+    """Check absolute network URL syntax without fetching or rewriting it."""
+    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value):
+        return False
+    try:
+        parts = urlsplit(value)
+        host = parts.hostname
+        if parts.scheme not in ("http", "https", "ftp") or not host:
+            return False
+        _ = parts.port  # Validate bracket/port syntax and the permitted port range.
+        if ":" in host or re.fullmatch(r"[0-9.]+", host):
+            from ipaddress import ip_address
+
+            ip_address(host)
+            return True
+        host = host.encode("idna").decode("ascii").rstrip(".")
+        return len(host) <= 253 and all(
+            re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?", label) for label in host.split(".")
+        )
+    except (ValueError, UnicodeError):
+        return False
+
+
 def validate_text(question, value):
     for rule in text_rules(question):
         op, args = rule.operation, rule.args
@@ -215,7 +241,11 @@ def validate_text(question, value):
                 accepted = op == 9 or number == number.to_integral_value()
         elif rule.family == 2:
             accepted = (
-                bool(re.fullmatch(EMAIL_PATTERN, value)) if op == 102 else ((args[0] in value) == (op == 100))
+                bool(re.fullmatch(EMAIL_PATTERN, value))
+                if op == 102
+                else _valid_url(value)
+                if op == 103
+                else ((args[0] in value) == (op == 100))
             )
         elif rule.family == 6:
             length = len(value.encode("utf-16-le", errors="surrogatepass")) // 2

@@ -2,7 +2,6 @@
 
 import json
 import os
-import tempfile
 from pathlib import Path
 
 
@@ -20,21 +19,15 @@ def _remembered():
 
 
 def remember(path):
+    from .locking import file_lock
+    from .state import atomic_json
+
     target = index_path()
-    paths = {str(p.resolve()) for p in _remembered() if p.is_file()}
-    paths.add(str(Path(path).resolve()))
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=target.parent, delete=False
-        ) as stream:
-            temporary = Path(stream.name)
-            json.dump(sorted(paths), stream)
-        temporary.replace(target)
-    finally:
-        if temporary and temporary.exists():
-            temporary.unlink()
+    with file_lock(target, timeout=5):
+        paths = {str(p.resolve()) for p in _remembered() if p.is_file()}
+        paths.add(str(Path(path).resolve()))
+        atomic_json(target, sorted(paths))
 
 
 def available():

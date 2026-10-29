@@ -16,6 +16,7 @@ from .selenium_runtime import (
     ElementNotInteractableException,
     StaleElementReferenceException,
     TimeoutException,
+    WebDriverException,
     WebDriverWait,
 )
 from .validation import parse_date, parse_time
@@ -99,18 +100,7 @@ def _page_questions(driver, form: RunConfig):
         by_title.setdefault(_normalized(question.text), []).append(question)
     matches, matched_indices = [], set()
     boxes = _question_boxes(driver)
-    upload_questions = [q for q in form.questions if q.qtype == "upload"]
-    if upload_questions:
-        for box in _visible(driver.find_elements(By.CSS_SELECTOR, '[role="listitem"]')):
-            if box not in boxes and any(_heading(box) == _normalized(q.text) for q in upload_questions):
-                boxes.append(box)
     for box in boxes:
-        if getattr(form, "email_collection", "unknown") == "verified":
-            consent = _verified_email_control(box)
-            if consent is not None:
-                if not _checked(consent):
-                    raise ValueError("In the browser, check the email consent box before continuing.")
-                continue
         names = [
             el.get_attribute("name") or ""
             for el in box.find_elements(By.CSS_SELECTOR, '[name^="entry."], [name="emailAddress"]')
@@ -195,62 +185,6 @@ def _checked(element) -> bool:
     return element.get_attribute("aria-checked") == "true" or bool(element.is_selected())
 
 
-def _verified_email_control(box):
-    """Recognize account consent without confusing a normal checkbox question."""
-    if box.find_elements(By.CSS_SELECTOR, '[name^="entry."]'):
-        return None
-    controls = _visible(box.find_elements(By.CSS_SELECTOR, "[role='checkbox'], input[type='checkbox']"))
-    if len(controls) != 1:
-        return None
-    control = controls[0]
-
-    def matches(labels):
-        return any(
-            re.fullmatch(
-                r"Record\s+\S+@\S+\s+as the email to be included with my response\.?", _normalized(label)
-            )
-            for label in labels
-        )
-
-    if matches((control.get_attribute("aria-label") or "", control.text)):
-        return control
-    labels = []
-    references = (control.get_attribute("aria-labelledby") or "").split()
-    if references:
-        targets = [box.find_elements(By.ID, identity) for identity in references]
-        if all(len(elements) == 1 for elements in targets):
-            labels.append(" ".join(elements[0].text for elements in targets))
-    identity = control.get_attribute("id")
-    for label in box.find_elements(By.TAG_NAME, "label"):
-        if (identity and label.get_attribute("for") == identity) or control in label.find_elements(
-            By.CSS_SELECTOR, "input[type='checkbox']"
-        ):
-            labels.append(label.text)
-    if matches(labels):
-        return control
-    return None
-
-
-def _verify_email_consent(driver, form, confirm_email=None, before_review=None):
-    if getattr(form, "email_collection", "unknown") != "verified":
-        return False
-    controls = [
-        control for box in _question_boxes(driver) if (control := _verified_email_control(box)) is not None
-    ]
-    if len(controls) != 1:
-        raise ValueError(
-            "The verified email consent control was not recognized. Check the form in the browser."
-        )
-    if before_review is not None:
-        before_review()
-    if not _checked(controls[0]) and confirm_email is not None:
-        confirm_email()
-        _check_interstitial(driver)
-    if not _checked(controls[0]):
-        raise ValueError("In the browser, check the email consent box before continuing.")
-    return True
-
-
 def _click(driver, element):
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
     element.click()
@@ -263,12 +197,14 @@ def _wait(driver, timeout, condition, message):
         raise RuntimeError(message) from exc
 
 
-def _set_value(driver, field, text, timeout, message):
+def _set_value(driver, field, text, timeout, message, *, numeric=False):
     """Set literal form data without interpreting newlines or WebDriver keys."""
-    retained = driver.execute_script(
-        """
+
+    def write(_):
+        retained = driver.execute_script(
+            """
         const input = arguments[0], value = arguments[1];
-        if (input.disabled || input.readOnly) throw new Error('The field is not editable.');
+        if (input.disabled || input.readOnly) return null;
         const prototype = input.tagName === 'TEXTAREA'
             ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
         Object.getOwnPropertyDescriptor(prototype, 'value').set.call(input, value);
@@ -276,11 +212,24 @@ def _set_value(driver, field, text, timeout, message):
         input.dispatchEvent(new Event('change', {bubbles: true}));
         return input.value;
     """,
-        field,
-        text,
-    )
-    if retained != text:
-        _wait(driver, timeout, lambda _: field.get_attribute("value") == text, message)
+            field,
+            text,
+        )
+        return (retained,) if retained is not None else None
+
+    retained = _wait(driver, timeout, write, "The answer field did not become editable. " + message)[0]
+
+    def matches(value):
+        return value == text or (
+            numeric
+            and re.fullmatch(r"[0-9]+", text) is not None
+            and isinstance(value, str)
+            and re.fullmatch(r"[0-9]+", value) is not None
+            and int(value) == int(text)
+        )
+
+    if not matches(retained):
+        _wait(driver, timeout, lambda _: matches(field.get_attribute("value")), message)
 
 
 def _rebind_box(driver, question, current):
@@ -370,7 +319,7 @@ def _fill_date(driver, question, box, value, timeout):
         label = (field.get_attribute("aria-label") or "").lower()
         name = field.get_attribute("name") or ""
         for part in ("year", "month", "day", "hour", "minute"):
-            if label == part or name.endswith("_" + part):
+            if label in (part, part + "s") or name.endswith("_" + part):
                 if part in parts:
                     raise RuntimeError(f"Ambiguous date controls for {question.text!r}.")
                 parts[part] = field
@@ -390,7 +339,12 @@ def _fill_date(driver, question, box, value, timeout):
     targets.extend((parts[part], str(getattr(parsed, part)) if parsed else "") for part in sorted(required))
     for field, text in targets:
         _set_value(
-            driver, field, text, timeout, f"The browser did not retain the date for {question.text!r}."
+            driver,
+            field,
+            text,
+            timeout,
+            f"The browser did not retain the date for {question.text!r}.",
+            numeric=field not in native,
         )
         if text and not driver.execute_script("return arguments[0].validity.valid;", field):
             raise RuntimeError(f"The date is outside the form's allowed range for {question.text!r}.")
@@ -408,7 +362,7 @@ def _fill_time(driver, question, box, value, timeout):
         for field in fields:
             label, name = (field.get_attribute("aria-label") or "").lower(), field.get_attribute("name") or ""
             for part in required:
-                if label == part or name.endswith("_" + part):
+                if label in (part, part + "s") or name.endswith("_" + part):
                     if part in parts:
                         raise RuntimeError(f"Ambiguous time controls for {question.text!r}.")
                     parts[part] = field
@@ -420,17 +374,18 @@ def _fill_time(driver, question, box, value, timeout):
         ]
     for field, text in targets:
         _set_value(
-            driver, field, text, timeout, f"The browser did not retain the time for {question.text!r}."
+            driver,
+            field,
+            text,
+            timeout,
+            f"The browser did not retain the time for {question.text!r}.",
+            numeric=field not in native,
         )
         if text and not driver.execute_script("return arguments[0].validity.valid;", field):
             raise RuntimeError(f"The time is outside the form's allowed range for {question.text!r}.")
 
 
-def _fill_question(driver, question: QuestionConfig, box, value, timeout, *, uploads=None):
-    if question.qtype == "upload":
-        from .uploads import fill_upload
-
-        return fill_upload(driver, question, box, value, timeout, uploads)
+def _fill_question(driver, question: QuestionConfig, box, value, timeout):
     for attempt in range(3):
         try:
             return _fill_question_once(driver, question, box, value, timeout)
@@ -618,6 +573,16 @@ def _fill_question_once(driver, question: QuestionConfig, box, value, timeout):
         _clear_choice(driver, box, question, controls, timeout)
         return
     attempts, last_attempt = 0, 0.0
+    # Google icon ratings paint every icon through the selected value checked.
+    # They share radio controls, but not ordinary radio readback semantics.
+    expected = (
+        set(question.options[: question.options.index(str(value)) + 1])
+        if question.qtype == "rating"
+        else selected
+    )
+
+    def retained():
+        return all(_checked(control) == (label in expected) for label, control in by_value.items())
 
     def retain(_):
         nonlocal attempts, last_attempt, by_value, box
@@ -632,7 +597,7 @@ def _fill_question_once(driver, question: QuestionConfig, box, value, timeout):
             if not selected.issubset(labels):
                 return False
             by_value = identify(elements)
-            if all(_checked(control) == (label in selected) for label, control in by_value.items()):
+            if retained():
                 return True
             now = time.monotonic()
             if attempts < 3 and now - last_attempt >= 0.5:
@@ -643,10 +608,10 @@ def _fill_question_once(driver, question: QuestionConfig, box, value, timeout):
                     # A page may paint controls before its event handlers are ready.
                     # Retry only unretained choices, checking checkbox state first.
                     if (role == "checkbox" and _checked(control) != wanted) or (
-                        role == "radio" and wanted and not _checked(control)
+                        role == "radio" and wanted and (question.qtype == "rating" or not _checked(control))
                     ):
                         _click(driver, control)
-            return all(_checked(control) == (label in selected) for label, control in by_value.items())
+            return retained()
         except StaleElementReferenceException:
             replacement = _rebind_box(driver, question, box)
             if replacement is not None:
@@ -774,11 +739,12 @@ def execute_response(
     *,
     before_submit: Callable[[], None] | None = None,
     before_review: Callable[[], None] | None = None,
-    confirm_email: Callable[[], None] | None = None,
     observe: Callable | None = None,
-    uploads=None,
 ) -> dict:
     """Fill and verify the frozen response's route; submit only at its end."""
+    from .access import require_public_form
+
+    require_public_form(form)
     routes = getattr(form, "_routing", None) or Routing(form)
     from .generator import validate_answer
 
@@ -786,10 +752,6 @@ def execute_response(
     path = list(routes.walk(answers))
     planned = {q.index for section in path for q in routes.questions[section]}
     _require_supported(form, planned, routes)
-    if uploads is None and any(
-        q.qtype == "upload" and q.index in planned and answers[q.index] for q in form.questions
-    ):
-        raise ValueError("Attachment transfer requires a saved plan and explicit upload permission.")
     driver._gformbot_submission_clicked = False
     driver.get(form.url)
     _wait(driver, timeout, lambda d: d.find_elements(By.TAG_NAME, "body"), "The form page did not load.")
@@ -800,9 +762,6 @@ def execute_response(
         page_index = section - 1
         next_section = path[step + 1] if step + 1 < len(path) else None
         _check_interstitial(driver)
-        if step == 0:
-            if _verify_email_consent(driver, form, confirm_email, before_review):
-                before_review = None
         page = _page_questions(driver, form)
         signature = tuple(question.index for question, _box in page)
         if {q.index for q, _box in page} != {q.index for q in routes.questions[section]}:
@@ -835,7 +794,6 @@ def execute_response(
                 box,
                 answers[question.index],
                 timeout,
-                **({"uploads": uploads} if question.qtype == "upload" else {}),
             )
             filled.append(question.index)
             seen.add(question.index)
@@ -950,13 +908,13 @@ def submit_response(
     *,
     before_submit: Callable[[], None] | None = None,
     before_review: Callable[[], None] | None = None,
-    confirm_email: Callable[[], None] | None = None,
     observe: Callable | None = None,
-    uploads=None,
 ) -> tuple[bool, str]:
     """Run one response; a supplied private driver can be reused for a batch."""
+    from .access import require_public_form
     from .browser import get_driver
 
+    require_public_form(config)
     owns_driver = driver is None
     if owns_driver:
         driver = get_driver(browser=config.browser, headless=config.headless)
@@ -968,11 +926,14 @@ def submit_response(
             submit=submit,
             before_submit=before_submit,
             before_review=before_review,
-            confirm_email=confirm_email,
             observe=observe,
-            **({"uploads": uploads} if uploads is not None else {}),
         )
         return True, "submitted" if result["status"] == "confirmed" else "filled"
+    except WebDriverException as exc:
+        raise RuntimeError(
+            "The browser could not finish loading or interacting with the form. "
+            "Check the connection and browser, then resume the saved responses."
+        ) from exc
     finally:
         if owns_driver:
             try:

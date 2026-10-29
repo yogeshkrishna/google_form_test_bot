@@ -1,5 +1,6 @@
 import io
 import sqlite3
+from contextlib import closing
 from types import SimpleNamespace
 
 import pytest
@@ -43,7 +44,7 @@ def test_secret_parameters_are_redacted_without_destroying_public_path():
 def test_existing_journal_upgrade_and_retry_deduplication(tmp_path):
     journal = Journal("batch")
     journal.path.parent.mkdir(parents=True)
-    with sqlite3.connect(journal.path) as connection:
+    with closing(sqlite3.connect(journal.path)) as connection, connection:
         connection.execute(
             "CREATE TABLE responses(batch TEXT,response INTEGER,state TEXT,PRIMARY KEY(batch,response))"
         )
