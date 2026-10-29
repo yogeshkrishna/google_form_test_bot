@@ -21,7 +21,7 @@ class Wheel(bdist_wheel):
 
 setup(
     packages=find_packages(include=["gformbot*"], exclude=[] if SUBSET else ["gformbot._vendor*"]),
-    install_requires=["click>=8.1,<9", "pyyaml>=6.0,<7", "rich>=13.0,<15", "InquirerPy>=0.3.4,<0.4"]
+    install_requires=["click>=8.1,<9", "pyyaml>=6.0,<7", "rich>=13.0,<16", "InquirerPy>=0.3.4,<0.4"]
     + (
         [
             "certifi>=2026.2.25",
