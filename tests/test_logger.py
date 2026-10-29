@@ -1,6 +1,10 @@
 import csv
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from pathlib import Path
+from threading import Barrier, BrokenBarrierError, Event
 
 import pytest
 
@@ -60,3 +64,86 @@ def test_invalid_json_answer_does_not_create_partial_log(tmp_path):
     with pytest.raises(ValueError):
         log_result(path, 1, {1: float("nan")}, True, "ok")
     assert not path.parent.exists()
+
+
+def test_concurrent_first_writes_preserve_one_header_and_complete_answers(tmp_path, monkeypatch):
+    path = tmp_path / "shared.csv"
+    append_window = Barrier(2, timeout=1)
+    original = Path.open
+
+    def overlapping_append(target, mode="r", *args, **kwargs):
+        if target == path and mode == "a":
+            try:
+                append_window.wait()
+            except BrokenBarrierError:
+                pass  # A serialized writer waits here alone, then lets the next writer proceed.
+        return original(target, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", overlapping_append)
+    answers = {index: {1: f"Profile {index}: café 😛\n" * 2000} for index in (1, 2)}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(
+            pool.map(
+                lambda index: log_result(path, index, answers[index], True, "confirmed", batch_id=str(index)),
+                answers,
+            )
+        )
+    with path.open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.reader(stream))
+    assert sum(row[0] == "timestamp" for row in rows) == 1
+    assert len(rows) == 3
+    assert {int(row[1]): json.loads(row[4]) for row in rows[1:]} == {
+        index: {"1": answer[1]} for index, answer in answers.items()
+    }
+
+
+def test_preflight_waits_for_locked_partial_header(tmp_path):
+    from gformbot.locking import file_lock
+
+    path = tmp_path / "shared.csv"
+    started = Event()
+
+    def preflight():
+        started.set()
+        validate_log_path(path)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with file_lock(path):
+            path.write_text("timestamp,ru", encoding="utf-8")
+            result = pool.submit(preflight)
+            assert started.wait(timeout=2)
+            time.sleep(0.1)
+            path.write_text("timestamp,run,status,message,answers\n", encoding="utf-8")
+        result.result(timeout=3)
+
+
+def test_identified_batch_appends_to_legacy_five_column_log(tmp_path):
+    path = tmp_path / "legacy-compatible.csv"
+    path.write_text("timestamp,run,status,message,answers\n", encoding="utf-8")
+    log_result(path, 2, {1: "A"}, True, "confirmed", batch_id="batch-2", form_url="https://example.test")
+    with path.open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.reader(stream))
+    assert len(rows) == 2 and all(len(row) == 5 for row in rows)
+    assert rows[1][3] == "[batch=batch-2; form=https://example.test] confirmed"
+    assert json.loads(rows[1][4]) == {"1": "A"}
+
+
+def test_append_permission_failure_preserves_existing_bytes_and_releases_lock(tmp_path, monkeypatch):
+    path = tmp_path / "results.csv"
+    log_result(path, 1, {1: "First"}, True, "confirmed")
+    original_bytes = path.read_bytes()
+    original = Path.open
+
+    def denied_append(target, mode="r", *args, **kwargs):
+        if target == path and mode == "a":
+            raise PermissionError("Read-only log")
+        return original(target, mode, *args, **kwargs)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(Path, "open", denied_append)
+        with pytest.raises(PermissionError, match="Read-only log"):
+            log_result(path, 2, {1: "Second"}, True, "confirmed")
+    assert path.read_bytes() == original_bytes
+    log_result(path, 3, {1: "Third"}, True, "confirmed")
+    with path.open(encoding="utf-8", newline="") as stream:
+        assert [row["run"] for row in csv.DictReader(stream)] == ["1", "3"]

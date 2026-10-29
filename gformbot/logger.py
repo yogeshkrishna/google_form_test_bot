@@ -8,15 +8,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .locking import file_lock
+
 _HEADER = ["timestamp", "run", "status", "message", "answers"]
 _IDENTIFIED_HEADER = _HEADER + ["batch_id", "form_url"]
 
 
-def validate_log_path(log_path: str | Path) -> None:
-    """Reject incompatible existing logs before a browser run starts."""
-    p = Path(log_path)
+def _log_header(p: Path) -> list[str] | None:
+    """Read and validate under the caller's log lock."""
     if not p.exists():
-        return
+        return None
     if not p.is_file():
         raise ValueError(f"Log path is not a file: {p}")
     if p.stat().st_size:
@@ -27,6 +28,19 @@ def validate_log_path(log_path: str | Path) -> None:
                 f"Log {p} uses a different format. Choose another log_file "
                 "in your config; the existing log was left unchanged."
             )
+        return header
+    return None
+
+
+def validate_log_path(log_path: str | Path) -> None:
+    """Reject incompatible existing logs without racing a writer's header."""
+    p = Path(log_path)
+    if not p.exists():
+        return
+    if not p.is_file():
+        raise ValueError(f"Log path is not a file: {p}")
+    with file_lock(p, timeout=5):
+        _log_header(p)
 
 
 def log_result(
@@ -42,28 +56,25 @@ def log_result(
     """Write one result, preserving every answer and any existing log."""
     p = Path(log_path)
     serialized = json.dumps(answer, ensure_ascii=False, allow_nan=False)
-    validate_log_path(p)
     p.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not p.exists() or p.stat().st_size == 0
-    if write_header:
-        header = _IDENTIFIED_HEADER if batch_id else _HEADER
-    else:
-        with p.open(encoding="utf-8-sig", newline="") as handle:
-            header = next(csv.reader(handle))
-    if batch_id and header == _HEADER:
-        message = f"[batch={batch_id}; form={form_url}] {message}"
+    with file_lock(p, timeout=5):
+        header = _log_header(p)
+        write_header = header is None
+        header = header or (_IDENTIFIED_HEADER if batch_id else _HEADER)
+        if batch_id and header == _HEADER:
+            message = f"[batch={batch_id}; form={form_url}] {message}"
 
-    with p.open("a", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        if write_header:
-            writer.writerow(header)
-        row = [
-            datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            run_index,
-            "OK" if success else "ERROR",
-            message,
-            serialized,
-        ]
-        if header == _IDENTIFIED_HEADER:
-            row.extend([batch_id, form_url])
-        writer.writerow(row)
+        with p.open("a", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            if write_header:
+                writer.writerow(header)
+            row = [
+                datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                run_index,
+                "OK" if success else "ERROR",
+                message,
+                serialized,
+            ]
+            if header == _IDENTIFIED_HEADER:
+                row.extend([batch_id, form_url])
+            writer.writerow(row)
