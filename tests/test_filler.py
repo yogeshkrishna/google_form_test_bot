@@ -134,6 +134,32 @@ def test_selection_retry_is_bounded_when_a_control_never_retains(monkeypatch):
     assert ignored.clicks == 3
 
 
+def test_choice_retry_budget_is_not_spent_before_delayed_handlers_are_ready(monkeypatch):
+    clock = [100.0]
+
+    class LateControl(Control):
+        def click(self):
+            self.clicks += 1
+            if clock[0] >= 101.7:
+                self.checked = True
+
+    control = LateControl("A")
+    monkeypatch.setattr(browser.time, "monotonic", lambda: clock[0])
+
+    def wait(driver, timeout, condition, message):
+        deadline = clock[0] + timeout
+        while clock[0] < deadline:
+            if condition(driver):
+                return True
+            clock[0] = round(clock[0] + 0.1, 1)
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(browser, "_wait", wait)
+    browser._fill_question(Driver(), question(kind="radio"), Box([control]), "A", 3)
+    assert control.checked and control.clicks == 3
+    assert 101.7 <= clock[0] < 103.0
+
+
 def test_transiently_empty_choice_query_waits_for_controls(monkeypatch):
     control = Control("A")
 

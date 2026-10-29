@@ -95,3 +95,34 @@ def test_rating_fill_readback_change_and_clear(html_page, icon):
             assert checked == [str(i) for i in range(1, int(value or 0) + 1)]
     finally:
         driver.quit()
+
+
+@pytest.mark.browser
+@pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Enable browser fixtures")
+def test_late_rating_handler_uses_existing_timeout_without_extra_clicks(html_page):
+    from gformbot.browser import get_driver
+    from gformbot.filler import _fill_question, _page_questions
+
+    config = rating()
+    q = config.questions[0]
+    choices = "".join(
+        f'<div role="radio" aria-checked="false" data-value="{v}" onclick="choose(this)">★</div>'
+        for v in q.options
+    )
+    config.url = html_page(
+        f'<div role="listitem"><div role="heading">{q.text}</div><input type="hidden" name="entry.{q.entry_id}_sentinel">{choices}</div>'
+        "<script>window.clicks=0;let ready=null;function choose(target){"
+        "window.clicks++;if(ready===null)ready=performance.now()+1700;if(performance.now()<ready)return;"
+        'document.querySelectorAll("[role=radio]").forEach(e=>e.setAttribute("aria-checked",String(Number(e.dataset.value)<=Number(target.dataset.value))));}</script>'
+    )
+    driver = get_driver("chrome", headless=True)
+    try:
+        driver.get(config.url)
+        question, box = _page_questions(driver, config)[0]
+        _fill_question(driver, question, box, "1", 3)
+        assert driver.execute_script("return window.clicks") <= 3
+        assert driver.execute_script(
+            'return [...document.querySelectorAll("[aria-checked=true]")].map(e=>e.dataset.value)'
+        ) == ["1"]
+    finally:
+        driver.quit()

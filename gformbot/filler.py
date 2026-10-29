@@ -579,6 +579,8 @@ def _fill_question_once(driver, question: QuestionConfig, box, value, timeout):
         _clear_choice(driver, box, question, controls, timeout)
         return
     attempts, last_attempt = 0, 0.0
+    # Keep retries available for handlers that mount after the initial paint.
+    retry_interval = max(0.5, timeout / 3)
     # Google icon ratings paint every icon through the selected value checked.
     # They share radio controls, but not ordinary radio readback semantics.
     expected = (
@@ -606,7 +608,7 @@ def _fill_question_once(driver, question: QuestionConfig, box, value, timeout):
             if retained():
                 return True
             now = time.monotonic()
-            if attempts < 3 and now - last_attempt >= 0.5:
+            if attempts < 3 and (attempts == 0 or now - last_attempt >= retry_interval):
                 attempts += 1
                 last_attempt = now
                 for label, control in by_value.items():
@@ -821,9 +823,21 @@ def execute_response(
             raise RuntimeError("Form validation failed: " + "; ".join(errors))
         label = "Next" if next_section is not None else "Submit"
 
-        def navigation_ready(d, label=label):
+        def navigation_ready(d, label=label, section=section):
             _check_interstitial(d)
-            return _button(d, label)
+            button = _button(d, label)
+            if (
+                button is None
+                and label == "Submit"
+                and section < len(routes.questions)
+                and routes.next(section, answers) == 0
+            ):
+                # On a non-final physical page Google can keep the Next label
+                # for a selected Submit route. It is still a submission action.
+                candidate = _button(d, "Next")
+                if candidate is not None and candidate.get_attribute("jsname") == "OCpkoe":
+                    return candidate
+            return button
 
         navigation = _wait(
             driver,
