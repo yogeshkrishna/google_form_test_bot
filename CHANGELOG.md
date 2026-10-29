@@ -4,6 +4,7 @@
 
 - Limit execution to anonymous public forms. Remove Google sign-in, file transfers and their retired options without deleting existing files or submission records.
 - Fix cumulative icon-rating readback, URL validation and scoped rejection of malformed choices on unused routes.
+- Handle normalized split time fields, wait for editable controls and recover replaced dropdowns using their Google model identity.
 - Serialize config saves, use unique atomic writes, keep AI correction messages free of local preset values, and remove retired command handlers.
 - Send runtime errors to stderr, add `doctor --check`, and distinguish the unpublished source build from PyPI.
 

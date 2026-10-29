@@ -73,6 +73,18 @@ def _heading(box) -> str:
     return ""
 
 
+def _item_id(box):
+    """Read Google's item identity from either the outer box or its model."""
+    identity = box.get_attribute("data-item-id")
+    if identity:
+        return identity
+    for element in [box] + box.find_elements(By.CSS_SELECTOR, "[data-params]"):
+        match = re.match(r"\s*%\.@\.\[\s*(\d+)", element.get_attribute("data-params") or "")
+        if match:
+            return match.group(1)
+    return None
+
+
 def _question_boxes(driver):
     boxes = _visible(driver.find_elements(By.CSS_SELECTOR, "[role='listitem']"))
     # Checkbox options are themselves listitems in Google's current DOM.
@@ -111,13 +123,7 @@ def _page_questions(driver, form: RunConfig):
             for name in names:
                 candidates.extend(by_entry.get(name, []))
         else:
-            item_id = box.get_attribute("data-item-id")
-            if not item_id:
-                for element in [box] + box.find_elements(By.CSS_SELECTOR, "[data-params]"):
-                    match = re.match(r"\s*%\.@\.\[\s*(\d+)", element.get_attribute("data-params") or "")
-                    if match:
-                        item_id = match.group(1)
-                        break
+            item_id = _item_id(box)
             if item_id and by_item:
                 candidates = by_item.get(str(item_id), [])
             else:
@@ -247,7 +253,7 @@ def _rebind_box(driver, question, current):
         )
         if question.entry_id and expected_name in names:
             candidates.append(candidate)
-        elif question.item_id and candidate.get_attribute("data-item-id") == question.item_id:
+        elif question.item_id and _item_id(candidate) == question.item_id:
             candidates.append(candidate)
         elif (
             not question.entry_id

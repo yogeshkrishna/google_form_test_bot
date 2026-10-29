@@ -478,6 +478,48 @@ def test_blank_dropdown_without_empty_option_does_not_silently_keep_value(html_p
 
 
 @pytest.mark.browser
+@pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Enable browser fixtures")
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_replaced_dropdown_rebinds_nested_google_item_identity(html_page, duplicate):
+    from gformbot.browser import get_driver
+
+    page = html_page(
+        """<div id="q" role="listitem"><div data-params="%.@.[42]">
+        <div role="heading">Payload encoding</div><select onchange="replaceQuestion(this)">
+        <option value="">Choose</option><option value="Plain text">Plain text</option></select></div></div>
+        <script>
+        window.replaced = false;
+        function replaceQuestion(field) {
+            if (window.replaced) return;
+            window.replaced = true;
+            const old = document.getElementById('q'), replacement = old.cloneNode(true);
+            replacement.querySelector('select').value = field.value;
+            old.replaceWith(replacement);
+            if (DUPLICATE) document.body.appendChild(replacement.cloneNode(true));
+        }
+        </script>""".replace("DUPLICATE", str(duplicate).lower())
+    )
+    config = RunConfig(
+        page,
+        questions=[QuestionConfig(1, "Payload encoding", "dropdown", True, ["Plain text"], item_id="42")],
+    )
+    driver = get_driver("chrome", headless=True)
+    try:
+        driver.get(page)
+        q, box = browser._page_questions(driver, config)[0]
+        if duplicate:
+            with pytest.raises(RuntimeError, match="Ambiguous replacement"):
+                browser._fill_question(driver, q, box, "Plain text", 2)
+        else:
+            browser._fill_question(driver, q, box, "Plain text", 2)
+            assert driver.execute_script("return window.replaced") is True
+            assert driver.find_element("tag name", "select").get_attribute("value") == "Plain text"
+            assert len(browser._page_questions(driver, config)) == 1
+    finally:
+        driver.quit()
+
+
+@pytest.mark.browser
 @pytest.mark.skipif(
     os.environ.get("GFORMBOT_BROWSER_TESTS") != "1",
     reason="Set GFORMBOT_BROWSER_TESTS=1 to run local Chrome integration tests.",
