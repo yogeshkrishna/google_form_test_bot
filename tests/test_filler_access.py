@@ -168,62 +168,6 @@ def test_collected_email_maps_to_its_special_control(monkeypatch):
     assert filler._page_questions(object(), RunConfig("url", questions=[email])) == [(email, box)]
 
 
-def test_verified_email_requires_manual_acknowledgement(monkeypatch):
-    consent = Control("Record student@example.test as the email to be included with my response")
-    box = Box([consent])
-    config = RunConfig("url")
-    config.email_collection = "verified"
-    monkeypatch.setattr(filler, "_question_boxes", lambda d: [box])
-    monkeypatch.setattr(filler, "_check_interstitial", lambda d: None)
-    with pytest.raises(ValueError, match="check.*email"):
-        filler._verify_email_consent(object(), config)
-    assert not consent.checked
-    filler._verify_email_consent(object(), config, lambda: setattr(consent, "checked", True))
-    assert filler._page_questions(object(), config) == []
-
-
-def test_ordinary_checkbox_is_not_mistaken_for_account_consent(monkeypatch):
-    consent = Control("Record student@example.test as the email to be included with my response", True)
-    box = Box([consent], names=["entry.5"])
-    assert filler._verified_email_control(box) is None
-
-
-@pytest.mark.parametrize("association", ["aria-labelledby", "label"])
-def test_verified_consent_uses_only_its_associated_label(association):
-    class Label(Control):
-        text = "Record student@example.test as the email to be included with my response"
-
-        def get_attribute(self, name):
-            return "account" if name == "for" else None
-
-        def find_elements(self, *args):
-            return []
-
-    class Checkbox(Control):
-        def get_attribute(self, name):
-            if name == "aria-labelledby":
-                return "consent" if association == "aria-labelledby" else None
-            return "account" if name == "id" else super().get_attribute(name)
-
-    checkbox, label = Checkbox(), Label()
-
-    class LabelledBox:
-        def find_elements(self, by, selector):
-            if selector == '[name^="entry."]':
-                return []
-            if selector == "[role='checkbox'], input[type='checkbox']":
-                return [checkbox]
-            if selector == ("consent" if association == "aria-labelledby" else "label"):
-                return [label]
-            return []
-
-    box = LabelledBox()
-    assert filler._verified_email_control(box) is checkbox
-    label.get_attribute = lambda name: "unrelated" if name == "for" else None
-    checkbox.get_attribute = lambda name: None
-    assert filler._verified_email_control(box) is None
-
-
 @pytest.mark.browser
 @pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Local Chrome tests are opt-in.")
 @pytest.mark.parametrize("stage", ["initial", "next", "submit"])
@@ -274,47 +218,79 @@ def test_access_changes_in_local_browser(stage):
         thread.join(timeout=2)
 
 
+@pytest.mark.parametrize("restriction", ["requires_signin", "one_response", "email_collection"])
+def test_account_bound_forms_never_navigate_or_fill(response, restriction):
+    from gformbot.access import FormAccessError
+
+    driver, config, events = response
+    setattr(config, restriction, "verified" if restriction == "email_collection" else True)
+    with pytest.raises(FormAccessError, match="without an account"):
+        filler.execute_response(driver, config, {1: "Fictional answer"}, submit=True)
+    assert events == []
+
+
+def test_restricted_submit_does_not_even_start_a_browser(monkeypatch):
+    from gformbot import browser
+    from gformbot.access import FormAccessError
+
+    config = RunConfig("https://docs.google.com/forms/d/e/restricted/viewform", requires_signin=True)
+    monkeypatch.setattr(browser, "get_driver", lambda *a, **kw: pytest.fail("Restricted browser opened"))
+    with pytest.raises(FormAccessError, match="without an account"):
+        filler.submit_response(config, {})
+
+
 @pytest.mark.browser
-@pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Local Chrome tests are opt-in.")
-@pytest.mark.parametrize("policy", ["input", "verified", "verified-label", "verified-labelledby"])
-def test_collected_email_and_account_consent_in_local_browser(policy, html_page):
+@pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Enable browser fixtures")
+def test_public_collected_email_in_local_browser(html_page):
     from gformbot.browser import get_driver
 
-    email = '<input type="email" name="emailAddress">'
-    label = "Record student@example.test as the email to be included with my response"
-    if policy.startswith("verified"):
-        attrs = f'aria-label="{label}"'
-        extra = ""
-        if policy == "verified-label":
-            attrs, extra = 'id="consent"', f'<label for="consent">{label}</label>'
-        elif policy == "verified-labelledby":
-            attrs, extra = 'aria-labelledby="consent"', f'<span id="consent">{label}</span>'
-        email = f'<input type="checkbox" name="emailAddress" {attrs}>{extra}'
-    document = f"""<html><body><div role="listitem"><div role="heading">Email</div>{email}</div>
-    <div role="listitem"><div role="heading">Answer</div><input name="entry.42"></div>
-    <button>Submit</button></body></html>"""
-    questions = [QuestionConfig(1, "Answer", "text", entry_id="42")]
-    answers = {1: "Exact answer"}
-    if policy == "input":
-        questions.insert(0, QuestionConfig(2, "Email", "text", entry_id="emailAddress"))
-        answers[2] = "student@example.test"
-    config = RunConfig(html_page(document), questions=questions)
-    config.email_collection = "verified" if policy.startswith("verified") else policy
+    page = html_page(
+        '<div role="listitem"><div role="heading">Email</div><input type="email" name="emailAddress"></div><button>Submit</button>'
+    )
+    config = RunConfig(
+        page,
+        email_collection="input",
+        questions=[QuestionConfig(1, "Email", "text", entry_id="emailAddress")],
+    )
     driver = get_driver("chrome", headless=True)
-    consent_calls = []
-
-    def human_checks_consent():
-        consent_calls.append(True)
-        driver.find_element("name", "emailAddress").click()
-
     try:
-        result = filler.execute_response(driver, config, answers, confirm_email=human_checks_consent)
-        assert result["status"] == "filled"
-        assert driver.find_element("name", "entry.42").get_attribute("value") == "Exact answer"
-        field = driver.find_element("name", "emailAddress")
-        if policy.startswith("verified"):
-            assert field.is_selected() and consent_calls == [True]
-        else:
-            assert field.get_attribute("value") == "student@example.test" and not consent_calls
+        assert filler.execute_response(driver, config, {1: "fictional@example.test"})["status"] == "filled"
+        assert driver.find_element("name", "emailAddress").get_attribute("value") == "fictional@example.test"
     finally:
         driver.quit()
+
+
+@pytest.mark.browser
+@pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Enable browser fixtures")
+def test_delayed_editable_field_waits_without_overriding_restrictions(html_page):
+    from gformbot.browser import get_driver
+
+    page = html_page(
+        '<input id="answer" type="email" disabled readonly>'
+        '<script>setTimeout(()=>{const e=document.getElementById("answer");'
+        "e.disabled=false;e.readOnly=false;},500)</script>"
+    )
+    driver = get_driver("chrome", headless=True)
+    try:
+        driver.get(page)
+        field = driver.find_element("id", "answer")
+        filler._set_value(driver, field, "fictional@example.test", 3, "Email was not retained")
+        assert field.get_attribute("value") == "fictional@example.test"
+        driver.execute_script("arguments[0].readOnly=true;", field)
+        with pytest.raises(RuntimeError, match="did not become editable"):
+            filler._set_value(driver, field, "changed@example.test", 0.1, "Email was not retained")
+        assert field.get_attribute("value") == "fictional@example.test"
+    finally:
+        driver.quit()
+
+
+def test_driver_failure_has_actionable_message_and_preserves_diagnostic_cause(monkeypatch):
+    from gformbot.selenium_runtime import TimeoutException
+
+    original = TimeoutException("Timed out receiving message from renderer", stacktrace=["private stack"])
+    monkeypatch.setattr(filler, "execute_response", lambda *a, **kw: (_ for _ in ()).throw(original))
+    config = RunConfig("https://docs.google.com/forms/d/e/public/viewform")
+    with pytest.raises(RuntimeError, match="resume the saved responses") as failure:
+        filler.submit_response(config, {}, driver=object())
+    assert failure.value.__cause__ is original
+    assert "Stacktrace" not in str(failure.value) and "private stack" not in str(failure.value)

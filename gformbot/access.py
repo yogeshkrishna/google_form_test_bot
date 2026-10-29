@@ -5,8 +5,8 @@ from html.parser import HTMLParser
 from urllib.parse import urlparse
 
 _MESSAGES = {
-    "login_required": "This form requires sign-in or access permission. Use --sign-in to sign in directly in the browser.",
-    "permission_denied": "This account does not have permission to answer the form. Ask the owner for access or use an allowed account.",
+    "login_required": "This form requires Google sign-in. Only public forms that accept responses without an account are supported. Complete this form manually or ask its owner to allow anonymous responses.",
+    "permission_denied": "This form is restricted. Ask its owner to allow public responses or complete it manually.",
     "already_answered": "This account has already answered the form. This does not confirm that the current saved response was submitted.",
     "closed": "This form is closed, unpublished, or unavailable. Ask the owner to enable responses.",
     "temporary_failure": "Google Forms is temporarily unavailable. Check the connection and try again later.",
@@ -20,6 +20,12 @@ class FormAccessError(ValueError):
     def __init__(self, state: str):
         self.state = state
         super().__init__(_MESSAGES[state])
+
+
+def require_public_form(form) -> None:
+    """Reject account-bound forms before opening a browser or exposing answers."""
+    if form.requires_signin or form.one_response is True or form.email_collection == "verified":
+        raise FormAccessError("login_required")
 
 
 class _AccessPage(HTMLParser):

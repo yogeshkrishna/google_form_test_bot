@@ -153,8 +153,8 @@ def test_unavailable_or_changed_schema_is_not_an_empty_success():
 def test_unsupported_questions_are_still_available_for_display():
     form = parse_form_html(document([item(1, "Upload a document", 13)]), URL)
     assert form.questions[0].text == "Upload a document"
-    assert form.questions[0].qtype == "upload"
-    assert form.questions[0].unsupported  # Missing upload settings still block execution.
+    assert form.questions[0].qtype == "file upload"
+    assert form.questions[0].unsupported
     with pytest.raises(ValueError, match="file upload"):
         form.require_supported()
 
@@ -223,7 +223,7 @@ def test_sign_in_redirect_is_reported_as_access_requirement(monkeypatch):
             pass
 
     monkeypatch.setattr(inspector, "urlopen", lambda *args, **kwargs: Response())
-    with pytest.raises(ValueError, match="sign-in or access permission"):
+    with pytest.raises(ValueError, match="requires Google sign-in"):
         inspector.inspect_form(URL)
 
 
@@ -330,3 +330,21 @@ def test_http_error_is_classified_without_printing_the_response(monkeypatch):
         inspector.inspect_form(URL)
     assert failure.value.state == "permission_denied"
     assert "secret" not in str(failure.value)
+
+
+@pytest.mark.parametrize("status", [401, 403, 418, 503])
+def test_http_error_response_is_closed_for_known_and_unknown_status(monkeypatch, status):
+    from io import BytesIO
+    from urllib.error import HTTPError
+
+    from gformbot import inspector
+
+    body = BytesIO(b"private response body")
+
+    def fail(*args, **kwargs):
+        raise HTTPError(URL, status, "Error", {}, body)
+
+    monkeypatch.setattr(inspector, "urlopen", fail)
+    with pytest.raises(FormAccessError):
+        inspector.inspect_form(URL)
+    assert body.closed

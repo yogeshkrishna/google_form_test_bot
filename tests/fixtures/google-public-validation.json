@@ -1,0 +1,120 @@
+{
+  "source_url": "https://docs.google.com/forms/d/e/1FAIpQLSckZCuYb5DaJOn4a0DRhtZ_hdGrvhVMmUnJwkIh-rCQEYjTsA/viewform",
+  "captured_at": "2026-10-27T08:27:30.163978+00:00",
+  "sanitization": "Only public question definitions selected; preserved IDs, validation and choice flags. No cookies or hidden request tokens.",
+  "items": [
+    [
+      1339364125,
+      "S05-Q01 — Safe endpoint URL",
+      "Use https://example.com/api/test.\n[QA-META qid=S05-Q01;kind=TEXT;route=COMMON;rule=url;example=https://example.com/api/test;suite=ULTIMATE-V1]",
+      0,
+      [
+        [
+          1429985505,
+          null,
+          1,
+          null,
+          [
+            [
+              2,
+              103,
+              null,
+              "Valid URL, no private hostname"
+            ]
+          ]
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S05-Q01 — Safe endpoint URL"
+      ],
+      [
+        null,
+        "Use <a href=\"https://example.com/api/test\">https://example.com/api/test</a>.<br>[QA-META qid=S05-Q01;kind=TEXT;route=COMMON;rule=url;example=<a href=\"https://example.com/api/test;suite=ULTIMATE-V1\">https://example.com/api/test;suite=ULTIMATE-V1</a>]"
+      ]
+    ],
+    [
+      713458718,
+      "S12-Q02 — Absolute URL-format probe",
+      "Use a public non-personal test URL.\n[QA-META qid=S12-Q02;kind=TEXT;route=COMMON;rule=url;example=https://example.com;suite=ULTIMATE-V1]",
+      0,
+      [
+        [
+          270196440,
+          null,
+          1,
+          null,
+          [
+            [
+              2,
+              103,
+              null,
+              "Must be URL formatted"
+            ]
+          ]
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S12-Q02 — Absolute URL-format probe"
+      ],
+      [
+        null,
+        "Use a public non-personal test URL.<br>[QA-META qid=S12-Q02;kind=TEXT;route=COMMON;rule=url;example=<a href=\"https://example.com\">https://example.com</a>;suite=ULTIMATE-V1]"
+      ]
+    ],
+    [
+      2029806503,
+      "S15-Q03 — Choose response to versioned JSON endpoint",
+      "Choose a standard action or type an alternative in Other.\n[QA-META qid=S15-Q03;kind=MULTIPLE_CHOICE;route=B1;rule=other-option;example=one outcome;suite=ULTIMATE-V1]",
+      2,
+      [
+        [
+          1177213394,
+          [
+            [
+              "",
+              null,
+              null,
+              null,
+              0
+            ]
+          ],
+          0,
+          null,
+          null,
+          null,
+          null,
+          null,
+          0
+        ]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        null,
+        "S15-Q03 — Choose response to versioned JSON endpoint"
+      ],
+      [
+        null,
+        "Choose a standard action or type an alternative in Other.<br>[QA-META qid=S15-Q03;kind=MULTIPLE_CHOICE;route=B1;rule=other-option;example=one outcome;suite=ULTIMATE-V1]"
+      ]
+    ]
+  ]
+}

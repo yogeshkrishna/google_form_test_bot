@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-- Prepare explicit attachments with file hashes, separate transfer permission, and durable upload recovery. Local file-input filling is verified; live Google picker compatibility remains pending Phase 6. Unrecognized pickers stop before transfer.
+- Limit execution to anonymous public forms. Remove Google sign-in, file transfers and their retired options without deleting existing files or submission records.
+- Fix cumulative icon-rating readback, URL validation and scoped rejection of malformed choices on unused routes.
+- Handle normalized split time fields, wait for editable controls and recover replaced dropdowns using their Google model identity.
+- Serialize config saves, use unique atomic writes, keep AI correction messages free of local preset values, and remove retired command handlers.
+- Send runtime errors to stderr, add `doctor --check`, and distinguish the unpublished source build from PyPI.
 
 - Recognize verified navigation and clear-selection identities across translated labels; reject conflicting controls and batch navigation metadata reads.
 
@@ -23,7 +27,7 @@
 - Bundle a private Windows x64 Selenium runtime with only supported browser adapters, their synchronous dependencies and the unchanged Windows Manager. Remove unused OS binaries, generated protocols and asynchronous dependencies; retain official Selenium on other platforms.
 - Keep directions and links from visited form pages and confirmed completion screens. Show a short next-steps summary and add `log --followups` for saved instructions across automatic and manual review modes, without affecting submission recovery.
 - Follow answer-based section routes across CSV import, generation, previews, and filling, including skipped required questions and early Submit. Stop before submission if the browser deviates from the planned route.
-- Add explicit Google sign-in with a shared temporary browser session, email collection support, and checks for known response limits.
+- Support typed email questions and detect Google-account restrictions before execution.
 - Report blocked forms clearly and keep manual or automatic submission outcomes conservative when access changes.
 
 ## 0.3.1

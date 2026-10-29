@@ -13,9 +13,9 @@ These instructions apply to this project. They override unrelated inherited chal
 
 ## Project direction
 
-- Fix form compatibility before changing the Selenium distribution: access/sign-in and response limits, answer-based section routing, and follow-up instructions are tracked in GitHub issues #2, #3, and #4.
+- Support anonymous public forms. Google-account sign-in and file transfers are outside the product scope; detect restrictions and report them clearly. ChatGPT's separate interactive browser remains the generation backend.
 - Implement and verify one agreed slice at a time. Reuse the existing parser, validation, browser factory, runner, and recovery journal. Preserve complete imported CSV profiles and exact saved-response identities.
-- Keep working changes, including the local 0.3.1 command update, intact. Inspect status and diffs before editing; do not discard unrelated work.
+- Inspect status and diffs before editing; preserve unrelated work and private audit evidence.
 - The size goal is a barebones Windows Selenium distribution containing the features actually used by this program plus their necessary runtime/import dependencies. Measure before removing anything. Retain required upstream notices and make updates reproducible. Broader operating-system packages are a later goal; do not remove the existing cross-platform implementation incidentally.
 - Use ordinary, specific language for issues, PRs, and documentation. Do not rename existing issues unless the user requests it.
 - Propose new runtime dependencies or departures from the agreed approach before implementing them.
@@ -26,7 +26,7 @@ The active source is this repository. The sibling `google_form_test_bot_init` an
 
 - Follow `CONTRIBUTING.md`: one issue, one short branch, a failing regression case, a focused fix, local checks, a linked PR, CI/review, merge, and a separately authorized publication.
 - Use the existing default branch (`master`) as the integration target. Do not introduce a permanent develop branch or rewrite history for appearance.
-- Preserve the uncommitted 0.3.1 update before starting compatibility work. Do not combine it with a new issue fix.
+- Preserve saved-plan fingerprints and batch identities. Confirmed and uncertain outcomes must never become automatically retryable after migration or cleanup.
 - Use the standing Git authorization above within agreed project scope. It does not authorize package or release publication.
 - Write short, human titles and descriptions. Include the actual failure, resulting behavior, relevant verification, and remaining limits. Use truthful metadata and useful CI; do not manufacture activity or add badges implying unverified support.
-- Implement issues in order: #2 access/sign-in/limits, #3 conditional sections, #4 follow-up instructions, then #5 Windows Selenium size. For #2, read `docs/form-access-plan.md` before editing and complete one reviewable slice at a time.
+- Unknown routing must fail closed. Never silently skip an unsupported question on the active route or invent an answer.

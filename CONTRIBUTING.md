@@ -6,7 +6,7 @@ Keep changes small enough to explain, test, and review.
 
 Check existing issues and `git status`. Describe the failure, expected behavior, and a small reproduction. Agree on the scope before adding a feature or changing the architecture. Preserve any existing working changes.
 
-Use one short branch per fix, for example `fix/form-access`, based on the current default branch (`master`). Keep the existing 0.3.1 command update separate from new compatibility work. Creating a branch does not require discarding unfinished work.
+Use one short branch per fix, based on the current default branch (`master`). Preserve unfinished work when branching.
 
 ## Build the fix
 
@@ -45,4 +45,4 @@ Use repository metadata that accurately describes the tool. Add automation becau
 
 Prepare the version, changelog, tested source, and exact distribution files for review. Publishing is a separate user decision, including TestPyPI and GitHub releases. Never upload because a token exists or tests passed. Follow `AGENTS.md` for release and credential rules.
 
-Current compatibility order: #2, #3, #4, then #5. The first implementation plan is in `docs/form-access-plan.md`.
+Current scope is anonymous public forms. Detect and reject account restrictions and file uploads; do not add authentication or transfer workflows.

@@ -166,27 +166,57 @@ def test_unsupported_route_blocks_before_opening_browser():
 @pytest.mark.browser
 @pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Enable browser fixtures.")
 @pytest.mark.parametrize("duration,value", [(False, "00:05"), (True, "27:15:03")])
-def test_time_browser_readback(duration, value, html_page):
+@pytest.mark.parametrize("google_labels", [False, True])
+def test_time_browser_readback(duration, value, google_labels, html_page):
     from gformbot.browser import get_driver
     from gformbot.filler import execute_response
 
     config = time_config(duration)
     q = config.questions[0]
     fields = "".join(
-        f'<input name="entry.{q.entry_id}_{part}" aria-label="{part.title()}" type="number">'
+        f'<input aria-label="{part.title()}s" type="text" role="combobox" onchange="if(this.value)this.value=this.value.padStart(2,\'0\')">'
+        if google_labels
+        else f'<input name="entry.{q.entry_id}_{part}" aria-label="{part.title()}" type="number">'
         for part in (["hour", "minute", "second"] if duration else ["hour", "minute"])
     )
     config.url = html_page(
-        f'<div role="listitem"><div role="heading">{q.text}</div>{fields}</div><button>Submit</button>'
+        f'<div role="listitem"><div role="heading">{q.text}</div><input type="hidden" name="entry.{q.entry_id}_sentinel">{fields}</div><button>Submit</button>'
     )
     driver = get_driver("chrome", headless=True)
     try:
         execute_response(driver, config, {1: value}, submit=False, timeout=3)
         assert driver.execute_script(
-            'return [...document.querySelectorAll("input")].map(e=>Number(e.value))'
+            'return [...document.querySelectorAll("input:not([type=hidden])")].map(e=>Number(e.value))'
         ) == list(map(int, value.split(":")))
         q.required = False
         execute_response(driver, config, {1: ""}, submit=False, timeout=3)
-        assert driver.execute_script('return [...document.querySelectorAll("input")].every(e=>e.value==="")')
+        assert driver.execute_script(
+            'return [...document.querySelectorAll("input:not([type=hidden])")].every(e=>e.value==="")'
+        )
     finally:
         driver.quit()
+
+
+@pytest.mark.parametrize(
+    "requested,retained,numeric,accepted",
+    [
+        ("02", "2", True, True),
+        ("2", "02", True, True),
+        ("02", "2", False, False),
+        ("0", "", True, False),
+        ("2", "2x", True, False),
+        ("2", "3", True, False),
+    ],
+)
+def test_numeric_time_readback_accepts_only_equal_components(requested, retained, numeric, accepted):
+    from types import SimpleNamespace
+
+    from gformbot.filler import _set_value
+
+    driver = SimpleNamespace(execute_script=lambda *args: retained)
+    field = SimpleNamespace(get_attribute=lambda *args: retained)
+    if accepted:
+        _set_value(driver, field, requested, 0.01, "Changed answer", numeric=numeric)
+    else:
+        with pytest.raises(RuntimeError, match="Changed answer"):
+            _set_value(driver, field, requested, 0.01, "Changed answer", numeric=numeric)

@@ -88,7 +88,7 @@ def test_browser_check_uses_the_current_document():
         current_url="https://docs.google.com/forms/d/e/id/viewform",
         page_source="<h1>You need permission</h1>",
     )
-    with pytest.raises(FormAccessError, match="permission"):
+    with pytest.raises(FormAccessError, match="restricted"):
         check_browser_access(driver)
 
 

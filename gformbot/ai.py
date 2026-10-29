@@ -21,6 +21,7 @@ from gformbot.inspector import schema_fingerprint
 from gformbot.routing import Routing
 from gformbot.validation import date_format, date_pattern, needs_email, text_schema, time_format, time_pattern
 
+from .access import require_public_form
 from .chatgpt import ChatGPTError
 from .chatgpt import ask as _chat
 from .chatgpt import open_chat as _open_chat
@@ -45,31 +46,15 @@ def _checkpoint_lock(path):
         yield
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.with_name(path.name + ".lock").open("a+b") as handle:
-        if handle.tell() == 0:
-            handle.write(b"\0")
-            handle.flush()
-        handle.seek(0)
-        try:
-            if os.name == "nt":
-                import msvcrt
+    from .locking import FileLockError, file_lock
 
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            raise GenerationError(
-                f"Cannot lock generation checkpoint {path}; another process may be using it."
-            ) from exc
-        try:
+    try:
+        with file_lock(path):
             yield
-        finally:
-            if os.name == "nt":
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(handle, fcntl.LOCK_UN)
+    except FileLockError as exc:
+        raise GenerationError(
+            f"Cannot lock generation checkpoint {path}; another process may be using it."
+        ) from exc
 
 
 def _save_checkpoint(path, payload):
@@ -142,10 +127,24 @@ def _preserve_presets(answer, fixed, partial=None):
     for key, preset in presets.items():
         matches = set(answer[key]) == set(preset) if isinstance(preset, list) else answer[key] == preset
         if not matches:
-            raise ValueError(
-                f"Q{key}: preserve the preselected answer {preset!r}; generate only missing answers."
-            )
+            raise ValueError(f"Q{key}: preserve the preselected answer; generate only missing answers.")
         answer[key] = copy_value(preset)
+
+
+def _safe_correction(message):
+    """Send validation categories, never arbitrary local diagnostic contents."""
+    profile = re.match(r"Profile [0-9]+:", message)
+    question = re.search(r"\bQ[0-9]+\b", message)
+    prefix = " ".join(match.group() for match in (profile, question) if match)
+    if "preselected" in message:
+        instruction = "preserve the preselected answers and generate only missing answers."
+    elif "option ID" in message:
+        instruction = "use only valid integer option IDs from the supplied schema."
+    elif "JSON" in message:
+        instruction = "return one valid JSON object matching the supplied schema."
+    else:
+        instruction = "follow the supplied schema, required fields, choices, and validation constraints."
+    return f"{prefix} {instruction}".strip()
 
 
 def _encode_profile(config: RunConfig, row: dict) -> dict:
@@ -156,9 +155,7 @@ def _encode_profile(config: RunConfig, row: dict) -> dict:
         if key not in row and str(key) not in row:
             continue
         value = row.get(key, row.get(str(key)))
-        if question.qtype == "upload":
-            value = 0
-        elif isinstance(value, dict) and question.allow_other:
+        if isinstance(value, dict) and question.allow_other:
             value = {
                 "choices": [question.options.index(option) + 1 for option in value["choices"]],
                 "other": value["other"],
@@ -177,16 +174,6 @@ def _decode_profile(config: RunConfig, row: dict, *, routing=None) -> dict:
     for question in config.questions:
         key = str(question.index)
         value = result.get(key)
-        if question.qtype == "upload":
-            if question.unsupported and value == "":
-                result[key] = ""
-                continue
-            if type(value) is not int or value != 0:
-                raise ValueError(f"Q{key}: AI cannot select or invent attachment paths.")
-            from .answers import copy_value
-
-            result[key] = copy_value(question.fixed_value) if question.fixed_value is not None else ""
-            continue
         structured = question.allow_other and isinstance(value, dict)
         if structured and (set(value) != {"choices", "other"} or not isinstance(value["choices"], list)):
             raise ValueError(f"Q{key}: Other needs choices and other text.")
@@ -240,12 +227,6 @@ def _response_schema(config: RunConfig, count: int, *, routing=None) -> dict:
                 "type": "string",
                 "const": "",
                 "description": "Unsupported: avoid this question's section.",
-            }
-        elif question.qtype == "upload":
-            schema = {
-                "type": "integer",
-                "const": 0,
-                "description": "Files are supplied locally; never generate file paths.",
             }
         elif question.qtype == "checkbox":
             maximum = question.max_select if question.max_select is not None else len(question.options)
@@ -436,16 +417,12 @@ def _generate_responses(
     ):
         raise GenerationError("ChatGPT response timeout must be a finite positive number.")
     validate_config(config)
+    require_public_form(config)
     if config.media and not config.media_context.strip():
         raise GenerationError(
             "This form contains media. Supply --media-context with a description or an explicit decorative declaration, or use supplied answers."
         )
     routes = Routing(config)
-    for question in config.questions:
-        if question.qtype == "upload" and question.required and not question.fixed_value:
-            routes.blockers[question.index] = [
-                f"Q{question.index}: supply attachment files before generating this route."
-            ]
     try:
         routes.choose_route({q.index: q.fixed_value for q in config.questions if q.fixed_value is not None})
     except ValueError as exc:
@@ -492,11 +469,6 @@ def _generate_responses(
                 "description": question.description,
                 "page": question.page,
                 "type": question.qtype,
-                **(
-                    {"files_supplied_locally": bool(question.fixed_value)}
-                    if question.qtype == "upload"
-                    else {}
-                ),
                 "required": question.required,
                 "options": {str(index): option for index, option in enumerate(question.options, 1)},
                 "exclusive_options": getattr(question, "exclusive_options", []),
@@ -673,7 +645,7 @@ def _generate_responses(
                     pending = [value for index, value in enumerate(pending) if index not in valid]
                     if not pending:
                         break
-                    corrections = [message[:1000] for message in errors[:10]]
+                    corrections = [_safe_correction(message) for message in errors[:10]]
                     if attempt == max_retries:
                         raise GenerationError(
                             f"ChatGPT could not produce valid responses after {max_retries + 1} attempts. "

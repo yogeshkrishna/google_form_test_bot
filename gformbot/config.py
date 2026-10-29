@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 import os
+import tempfile
+import time
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
@@ -49,9 +51,6 @@ class QuestionConfig:
     rating_icon: str = ""
     allow_other: bool = False
     other_branch: int | None = None
-    upload_types: list[int] = field(default_factory=list)
-    upload_max_files: int = 1
-    upload_max_size: int = 0
 
 
 @dataclass
@@ -196,7 +195,6 @@ def validate_config(config: RunConfig) -> None:
                 "dropdown",
                 "scale",
                 "rating",
-                "upload",
             }
             and not config.unsupported
         ):
@@ -234,10 +232,6 @@ def validate_config(config: RunConfig) -> None:
             )
         ):
             raise ValueError(f"{label}: invalid rating values or icon.")
-        if q.qtype == "upload" and not q.unsupported:
-            from .uploads import upload_settings
-
-            upload_settings(q, ["", q.upload_types, q.upload_max_files, q.upload_max_size])
         if (
             not isinstance(q.exclusive_options, list)
             or any(not isinstance(option, str) or option not in q.options for option in q.exclusive_options)
@@ -326,9 +320,6 @@ def config_from_schema(schema) -> RunConfig:
                 "rating_icon",
                 "allow_other",
                 "other_branch",
-                "upload_types",
-                "upload_max_files",
-                "upload_max_size",
             )
         }
         questions.append(QuestionConfig(**values))
@@ -394,6 +385,13 @@ def config_from_dict(value: dict) -> RunConfig:
             raise ValueError("Each question must be an object.")
         q = dict(question)
         q["qtype"] = q.pop("type", q.get("qtype", "unknown"))
+        if q["qtype"] == "upload":
+            raise ValueError("File uploads are not supported. Complete this form manually.")
+        # Older public-form plans serialized these inactive defaults on every
+        # question. Accept only those defaults; never discard actual file data.
+        for key, default in (("upload_types", []), ("upload_max_files", 1), ("upload_max_size", 0)):
+            if key in q and q.pop(key) != default:
+                raise ValueError("File uploads are not supported. Complete this form manually.")
         unknown = set(q) - allowed_q
         if unknown:
             raise ValueError(f"Unknown question settings: {sorted(unknown)}")
@@ -413,14 +411,40 @@ def config_from_dict(value: dict) -> RunConfig:
 
 
 def save_config(config: RunConfig, path: str | Path) -> None:
+    from .locking import file_lock
+
     validate_config(config)
     target = clean_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(target.name + ".tmp")
-    temporary.write_text(
-        yaml.safe_dump(config_to_dict(config), allow_unicode=True, sort_keys=False), encoding="utf-8"
-    )
-    temporary.replace(target)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=target.parent, suffix=".tmp", delete=False
+        ) as stream:
+            temporary = Path(stream.name)
+            yaml.safe_dump(config_to_dict(config), stream, allow_unicode=True, sort_keys=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Each writer owns its temporary file. Concurrent saves are atomic,
+        # last-writer-wins; a failed replacement preserves the previous config.
+        with file_lock(target, timeout=5):
+            deadline = time.monotonic() + 1
+            while True:
+                try:
+                    temporary.replace(target)
+                    break
+                except PermissionError as exc:
+                    # Windows readers and scanners can briefly deny replacement.
+                    if (
+                        os.name != "nt"
+                        or getattr(exc, "winerror", None) not in (5, 32, 33)
+                        or time.monotonic() >= deadline
+                    ):
+                        raise
+                    time.sleep(0.01)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def load_config(path: str | Path) -> RunConfig:

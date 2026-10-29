@@ -46,9 +46,6 @@ class QuestionSchema:
     rating_icon: str = ""
     allow_other: bool = False
     other_branch: int | None = None
-    upload_types: list[int] = field(default_factory=list)
-    upload_max_files: int = 1
-    upload_max_size: int = 0
 
 
 @dataclass
@@ -90,9 +87,8 @@ KINDS = {
     9: "date",
     10: "time",
     18: "rating",
-    13: "upload",
 }
-UNSUPPORTED = {7: "grid", 10: "time", 13: "file upload", 18: "rating"}
+UNSUPPORTED = {13: "file upload"}
 
 
 class _PlainText(HTMLParser):
@@ -191,7 +187,7 @@ def parse_form_html(document: str, url: str) -> FormSchema:
         email_collection=email_collection,
     )
     # Google renders responder-input email outside its embedded item list.
-    # Verified collection instead belongs to the signed-in account and consent.
+    # Account-verified collection remains restriction metadata, not an answer.
     if email_collection == "input":
         form.questions.append(
             QuestionSchema(
@@ -286,6 +282,10 @@ def parse_form_html(document: str, url: str) -> FormSchema:
             raise ValueError(f"Unrecognized Other option metadata for {title!r}.")
         options = [str(opt[0]) for opt in option_data if _get(opt, 4) != 1]
         issue_start = len(form.unsupported)
+        if any(not option.strip() for option in options):
+            if any(_get(opt, 2) is not None for opt in option_data):
+                raise ValueError(f"Ambiguous routing choices for {title!r}; inspection stopped.")
+            form.unsupported.append(f"empty option labels: {title}")
         if len(options) != len(set(options)):
             if any(_get(opt, 2) is not None for opt in option_data):
                 raise ValueError(f"Ambiguous routing choices for {title!r}; inspection stopped.")
@@ -339,14 +339,6 @@ def parse_form_html(document: str, url: str) -> FormSchema:
                 q.rating_icon = {1: "star", 2: "heart", 3: "thumb_up"}[
                     flags[0] if flags and flags[0] is not None else 1
                 ]
-        if q.qtype == "upload":
-            from .uploads import upload_settings
-
-            form.requires_signin = True
-            try:
-                upload_settings(q, _get(entry, 10))
-            except ValueError as exc:
-                form.unsupported.append(f"file upload on {title!r}: {exc}")
         if q.qtype == "checkbox":
             _checkbox_rules(q)
             for rule in validation:
@@ -420,8 +412,11 @@ def inspect_form(
             status_cb(f"Read {len(schema.questions)} questions across {schema.pages} section(s).")
         return schema
     except HTTPError as exc:
-        raise_for_access(url=exc.url, status=exc.code)
-        raise FormAccessError("unknown") from exc
+        try:
+            raise_for_access(url=exc.url, status=exc.code)
+            raise FormAccessError("unknown") from exc
+        finally:
+            exc.close()
     except ValueError:
         raise
     except (URLError, TimeoutError, OSError, UnicodeError) as exc:
@@ -469,15 +464,6 @@ def schema_fingerprint(schema_or_config) -> str:
                 **({"unsupported": q.unsupported} if q.unsupported else {}),
                 **({"rating_icon": q.rating_icon} if q.qtype == "rating" else {}),
                 **({"allow_other": True, "other_branch": q.other_branch} if q.allow_other else {}),
-                **(
-                    {
-                        "upload_types": q.upload_types,
-                        "upload_max_files": q.upload_max_files,
-                        "upload_max_size": q.upload_max_size,
-                    }
-                    if q.qtype == "upload"
-                    else {}
-                ),
             }
             for q in source.questions
         ],

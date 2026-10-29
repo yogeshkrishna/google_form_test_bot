@@ -1,10 +1,12 @@
 import io
 import json
+import sqlite3
+from contextlib import closing
 from types import SimpleNamespace
 
 import pytest
 
-from gformbot import browser, cli, filler, inspector, logger
+from gformbot import browser, cli, execution, filler, inspector, logger
 from gformbot.artifacts import digest
 from gformbot.config import QuestionConfig, RunConfig
 from gformbot.state import Journal, Session, UncertainSubmission, batch_id
@@ -37,7 +39,7 @@ def setup_runner(saved, monkeypatch):
     driver = SimpleNamespace(quit=lambda: None)
     monkeypatch.setattr(browser, "get_driver", lambda *a, **kw: driver)
     monkeypatch.setattr(inspector, "inspect_form", lambda *a: c)
-    monkeypatch.setattr(cli, "config_from_schema", lambda value: value)
+    monkeypatch.setattr(execution, "config_from_schema", lambda value: value)
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
     return c, answers, path
 
@@ -259,7 +261,7 @@ def test_only_session_that_opened_review_can_continue_to_submit(saved):
         first.before_submit(1)
 
 
-def test_interrupted_email_consent_remains_uncertain_on_reopen(saved):
+def test_interrupted_review_remains_uncertain_on_reopen(saved):
     current = session(saved)
     current.review(1)
     reopened = session(saved)
@@ -284,15 +286,13 @@ def test_reconciliation_revokes_stale_review_ownership(saved, review_again):
 
 
 def test_legacy_journal_reviews_still_require_reconciliation(saved):
-    import sqlite3
-
     from gformbot.state import batch_id
 
     path = saved[2]
     payload = json.loads(path.read_text())
     journal = Journal(batch_id(payload))
     journal.path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(journal.path) as connection:
+    with closing(sqlite3.connect(journal.path)) as connection, connection:
         connection.execute(
             "CREATE TABLE responses (batch TEXT NOT NULL, response INTEGER NOT NULL, state TEXT NOT NULL, PRIMARY KEY(batch,response))"
         )
@@ -306,3 +306,32 @@ def test_legacy_journal_reviews_still_require_reconciliation(saved):
     current.review(1)
     current.before_submit(1)
     assert current.journal.states() == {1: "attempted"}
+
+
+def test_retired_upload_data_does_not_change_submission_recovery(saved):
+    journal = Journal(batch_id(json.loads(saved[2].read_text())))
+    journal.path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(journal.path)) as connection, connection:
+        connection.execute(
+            "CREATE TABLE responses(batch TEXT,response INTEGER,state TEXT,PRIMARY KEY(batch,response))"
+        )
+        connection.executemany(
+            "INSERT INTO responses VALUES(?,?,?)",
+            [(journal.identity, 1, "confirmed"), (journal.identity, 2, "attempted")],
+        )
+        connection.execute(
+            "CREATE TABLE uploads(batch TEXT,response INTEGER,question INTEGER,manifest TEXT,state TEXT,ids TEXT)"
+        )
+        upload = (journal.identity, 2, 3, "legacy-manifest", "uploading", '["legacy-file-id"]')
+        connection.execute("INSERT INTO uploads VALUES(?,?,?,?,?,?)", upload)
+    for _ in range(2):
+        current = session(saved)
+        assert current.confirmed == {1}
+        assert current.ids == [2]
+        assert current.uncertain() == [2]
+        with pytest.raises(UncertainSubmission):
+            current.before_submit(1)
+        assert current.journal.states() == {1: "confirmed", 2: "attempted"}
+    with closing(sqlite3.connect(journal.path)) as connection:
+        assert connection.execute("SELECT * FROM uploads").fetchall() == [upload]
+    assert not hasattr(Journal, "begin_upload")

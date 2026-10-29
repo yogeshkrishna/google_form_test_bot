@@ -9,7 +9,7 @@ import pytest
 from click.testing import CliRunner
 from rich.console import Console
 
-from gformbot import ai, browser, cli, filler, generator, inspector, logger
+from gformbot import ai, browser, cli, execution, filler, generator, inspector, logger
 from gformbot.config import QuestionConfig, RunConfig, save_config
 
 
@@ -192,7 +192,7 @@ def setup_execution(config, monkeypatch):
 
     monkeypatch.setattr(browser, "get_driver", launch)
     monkeypatch.setattr(inspector, "inspect_form", lambda url: config)
-    monkeypatch.setattr(cli, "config_from_schema", lambda value: value)
+    monkeypatch.setattr(execution, "config_from_schema", lambda value: value)
     monkeypatch.setattr(logger, "validate_log_path", lambda *args: None)
     monkeypatch.setattr(logger, "log_result", lambda *args: state.logs.append(args))
     return state
@@ -262,12 +262,17 @@ def test_log_preflight_happens_before_browser(config, monkeypatch):
     assert state.launches == 0
 
 
-def test_noninteractive_submission_requires_explicit_yes(config, monkeypatch):
+def test_guided_submission_requires_interactive_confirmation(config, monkeypatch):
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
     with pytest.raises(ValueError, match="confirmation"):
         cli._confirm_submit(config, True)
-    cli._confirm_submit(config, True, yes=True)
     cli._confirm_submit(config, False)
+    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(cli, "_ask_confirm", lambda *args: True)
+    cli._confirm_submit(config, True)
+    monkeypatch.setattr(cli, "_ask_confirm", lambda *args: False)
+    with pytest.raises(click.Abort):
+        cli._confirm_submit(config, True)
 
 
 def test_form_table_shows_full_contents_and_literal_markup(config, monkeypatch):
@@ -290,8 +295,12 @@ def test_explicit_new_url_does_not_reuse_default_config(config, monkeypatch, tmp
     monkeypatch.chdir(tmp_path)
     save_config(config, Path("gformbot_config.yaml"))
     new = RunConfig(url=config.url.replace("test", "other"), questions=config.questions)
-    monkeypatch.setattr(cli, "_run_inspect", lambda url: new)
-    assert cli._resolve_config(new.url).url == new.url
+    monkeypatch.setattr(cli, "_run_inspect", lambda url, **kwargs: new)
+    csv = generator.write_csv(new, profiles(), tmp_path / "input.csv")
+    result = CliRunner().invoke(cli.cli, ["prepare", new.url, "--data", str(csv)])
+    assert result.exit_code == 0, result.exception
+    restored, _ = cli._load_plan(next(tmp_path.glob("gformbot-responses*.json")))
+    assert restored.url == new.url
 
 
 @pytest.mark.parametrize("count", ["0", "501", "-1"])
@@ -360,18 +369,12 @@ def test_saved_plan_interactive_next_choices(config, monkeypatch, tmp_path, acti
         return True
 
     monkeypatch.setattr(cli, "_run_fill", confirmed_fill)
-    cli.run.callback(
-        str(target), browser=None, headless=None, dry_run=False, submit=False, yes=False, keep_files=False
-    )
-    if action == "preview":
-        assert target.exists() and not calls
-    else:
-        assert calls == [("chrome", False, action == "submit")]
-        assert not target.exists()
+    cli._manage_batch(config, profiles(), target, saved=True)
+    assert calls == [("chrome", False, action == "submit")]
+    assert not target.exists()
 
 
-@pytest.mark.parametrize("keep", [True, False])
-def test_run_success_cleanup_and_keep_files(config, monkeypatch, tmp_path, keep):
+def test_generate_preserves_supplied_plan_and_its_artifacts(config, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     generated = generator.write_csv(config, profiles(), tmp_path / "generated.csv")
     target = cli._save_plan(config, profiles(), artifacts=[generated])
@@ -384,11 +387,13 @@ def test_run_success_cleanup_and_keep_files(config, monkeypatch, tmp_path, keep)
         return True
 
     monkeypatch.setattr(cli, "_run_fill", confirmed_fill)
-    args = [str(target), "--browser", "chrome"] + (["--keep-files"] if keep else [])
-    result = CliRunner().invoke(cli.run, args)
+    monkeypatch.setattr(cli, "_run_inspect", lambda *args, **kwargs: config)
+    result = CliRunner().invoke(
+        cli.cli, ["generate", config.url, "--data", str(target), "--browser", "chrome", "--halt"]
+    )
     assert result.exit_code == 0, result.exception
     assert calls == [("chrome", False, False)]
-    assert target.exists() == generated.exists() == keep
+    assert target.exists() and generated.exists()
 
 
 @pytest.mark.parametrize("abort", [ValueError("Browser failed"), click.Abort()])
@@ -401,7 +406,8 @@ def test_run_failures_preserve_batch(config, monkeypatch, tmp_path, abort):
         raise abort
 
     monkeypatch.setattr(cli, "_run_fill", fail)
-    result = CliRunner().invoke(cli.run, [str(target), "--headless"])
+    monkeypatch.setattr(cli, "_run_inspect", lambda *args, **kwargs: config)
+    result = CliRunner().invoke(cli.cli, ["generate", config.url, "--data", str(target), "--halt"])
     assert result.exit_code != 0
     assert target.exists() and generated.exists()
 
