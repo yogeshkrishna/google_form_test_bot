@@ -8,8 +8,8 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from test_routing import branch_items, schema
 
-from gformbot.config import config_from_schema
-from gformbot.filler import execute_response
+from gformbot.config import QuestionConfig, RunConfig, config_from_schema
+from gformbot.filler import SubmissionUncertainError, execute_response
 from gformbot.generator import validate_answer
 
 pytestmark = [
@@ -124,3 +124,60 @@ def test_branching_review_fills_without_submitting(route_browser, branching_serv
     result = execute_response(route_browser, config, response(config, "Worker"), submit=False)
     assert result["status"] == "filled" and result["filled_questions"] == [1, 3, 4]
     assert accepted == [] and route_browser.find_element("id", "submit").is_displayed()
+
+
+@pytest.mark.parametrize("submit", [False, True])
+@pytest.mark.parametrize("google_identity", [False, True])
+@pytest.mark.parametrize("outcome", ["confirmation", "another_page"])
+def test_early_terminal_google_next_has_a_submission_boundary(
+    route_browser, html_page, submit, google_identity, outcome
+):
+    identity = 'jsname="OCpkoe"' if google_identity else ""
+    url = html_page(
+        '<div role="listitem"><h2 role="heading">Exit</h2>'
+        '<input type="radio" name="entry.1" value="Finish" aria-label="Finish"></div>'
+        f'<button type="button" {identity} onclick="finish()">Next</button>'
+        "<script>window.finalClicks=0;function finish(){window.finalClicks++;"
+        "history.pushState({},'', 'formResponse');"
+        "document.body.innerHTML=NEXT_DOCUMENT;}</script>".replace(
+            "NEXT_DOCUMENT",
+            json.dumps(
+                "<div data-gformbot-confirmation>Recorded</div>"
+                if outcome == "confirmation"
+                else '<div role="listitem"><h2 role="heading">Unexpected page</h2><input></div>'
+            ),
+        )
+    )
+    config = RunConfig(
+        url,
+        sections=["Exit", "Unvisited"],
+        section_next=[2, 0],
+        questions=[
+            QuestionConfig(1, "Exit", "radio", True, ["Finish"], entry_id="1", branches={"Finish": 0})
+        ],
+    )
+    intents = []
+
+    def before_submit():
+        assert route_browser.execute_script("return window.finalClicks") == 0
+        intents.append("intent")
+
+    if not google_identity:
+        with pytest.raises(RuntimeError, match="Submit"):
+            execute_response(
+                route_browser, config, {1: "Finish"}, submit=submit, timeout=0.5, before_submit=before_submit
+            )
+        assert intents == [] and route_browser.execute_script("return window.finalClicks") == 0
+    elif submit and outcome == "another_page":
+        with pytest.raises(SubmissionUncertainError, match="acceptance"):
+            execute_response(
+                route_browser, config, {1: "Finish"}, submit=True, timeout=0.5, before_submit=before_submit
+            )
+        assert intents == ["intent"] and route_browser.execute_script("return window.finalClicks") == 1
+    else:
+        result = execute_response(
+            route_browser, config, {1: "Finish"}, submit=submit, timeout=2, before_submit=before_submit
+        )
+        assert result["status"] == ("confirmed" if submit else "filled")
+        assert intents == (["intent"] if submit else [])
+        assert route_browser.execute_script("return window.finalClicks") == int(submit)

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Remove a Windows sidecar-initialization race that could reject simultaneous config or log writers before acquiring their lock.
+- Redact known private URL parameters from AI requests and retries while preserving exact local answers, metadata and saved-work identities.
+- Handle Google's Next-labelled early submission actions without clicking during fill-only checks, and spread choice retries across their existing timeout.
+- Serialize shared CSV run logs so concurrent writers cannot duplicate headers or read incomplete headers.
+
 - Limit execution to anonymous public forms. Remove Google sign-in, file transfers and their retired options without deleting existing files or submission records.
 - Fix cumulative icon-rating readback, URL validation and scoped rejection of malformed choices on unused routes.
 - Handle normalized split time fields, wait for editable controls and recover replaced dropdowns using their Google model identity.

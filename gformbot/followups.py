@@ -103,15 +103,20 @@ def safe_url(value: str, base: str, _depth: int = 0) -> str:
         return ""
 
 
-def _sanitize(block, base):
-    text = _CONTROL.sub("", block.get("text", "")).strip()
-    candidates = [*block.get("links", []), *(value.rstrip(".,;") for value in _URL.findall(text))]
+def redact_urls(text, base=""):
+    """Apply the known URL-secret policy to text without changing other content."""
 
     def replace_url(match):
         raw = match[0].rstrip(".,;")
         return (safe_url(raw, base) or "[link omitted]") + match[0][len(raw) :]
 
-    text = _URL.sub(replace_url, text)
+    return _URL.sub(replace_url, text)
+
+
+def _sanitize(block, base):
+    text = _CONTROL.sub("", block.get("text", "")).strip()
+    candidates = [*block.get("links", []), *(value.rstrip(".,;") for value in _URL.findall(text))]
+    text = redact_urls(text, base)
     links = list(dict.fromkeys(url for raw in candidates if (url := safe_url(raw, base))))
     return {"text": text, "links": links}
 

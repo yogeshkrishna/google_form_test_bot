@@ -25,6 +25,7 @@ from .access import require_public_form
 from .chatgpt import ChatGPTError
 from .chatgpt import ask as _chat
 from .chatgpt import open_chat as _open_chat
+from .followups import redact_urls
 from .selenium_runtime import WebDriverException
 
 
@@ -145,6 +146,17 @@ def _safe_correction(message):
     else:
         instruction = "follow the supplied schema, required fields, choices, and validation constraints."
     return f"{prefix} {instruction}".strip()
+
+
+def _outbound_value(value, base):
+    """Copy model context, leaving original metadata, presets and job identity intact."""
+    if isinstance(value, str):
+        return redact_urls(value, base)
+    if isinstance(value, dict):
+        return {key: _outbound_value(item, base) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_outbound_value(item, base) for item in value]
+    return value
 
 
 def _encode_profile(config: RunConfig, row: dict) -> dict:
@@ -372,6 +384,13 @@ def _validate_batch(
             )
             continue
         try:
+            presets = {**partials[index - 1], **fixed} if partials else fixed
+            for key, preset in _encode_profile(config, presets).items():
+                redacted = _outbound_value(preset, config.url)
+                if redacted != preset and row[key] == redacted:
+                    # The model sees only this redacted echo; retain the exact
+                    # supplied value locally before normal answer validation.
+                    row = {**row, key: preset}
             decoded = _decode_profile(config, row, routing=routes)
             answer = validate_answer(
                 config, {int(key): value for key, value in decoded.items()}, routing=routes
@@ -618,6 +637,7 @@ def _generate_responses(
                         task["partial_profiles"] = [_encode_profile(config, row) for row in batch_partials]
                     if corrections:
                         task["corrections"] = corrections
+                    task = _outbound_value(task, config.url)
                     messages = [
                         {"role": "system", "content": system},
                         {
@@ -628,7 +648,7 @@ def _generate_responses(
                     try:
                         if driver is None:
                             driver = _open_chat(browser)
-                        content = _chat(driver, messages, schema, timeout, attention=attention)
+                        content = _chat(driver, messages, task["output_schema"], timeout, attention=attention)
                     except (ChatGPTError, WebDriverException, RuntimeError) as exc:
                         raise GenerationError(str(exc)) from exc
                     valid, errors = _validate_batch(

@@ -15,9 +15,7 @@ def file_lock(path, *, timeout=0):
     # Keep the sidecar: unlinking a lock while another process waits can create
     # two unrelated locks for the same target. No answer data is written here.
     with path.with_name(path.name + ".lock").open("a+b") as handle:
-        if handle.tell() == 0:
-            handle.write(b"\0")
-            handle.flush()
+        # Windows can lock beyond EOF; initializing byte zero races its owner.
         handle.seek(0)
         if os.name == "nt":
             import msvcrt
