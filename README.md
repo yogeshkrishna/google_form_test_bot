@@ -7,7 +7,7 @@ Supports public forms that accept anonymous responses. Google-account sign-in an
 ## Install
 
 ```powershell
-python -m pip install "git+https://github.com/yogeshkrishna/google_form_test_bot.git"
+python -m pip install "git+https://github.com/yogeshkrishna/google_form_test_bot.git@fix/guided-submission"
 python -m gformbot
 ```
 
