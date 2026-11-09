@@ -9,7 +9,8 @@ import pytest
 from click.testing import CliRunner
 from rich.console import Console
 
-from gformbot import ai, browser, cli, execution, filler, generator, inspector, logger, transport
+from gformbot import ai, cli, generator, inspector, logger, transport
+from gformbot.access import SubmissionUncertainError
 from gformbot.config import QuestionConfig, RunConfig, save_config
 
 
@@ -67,12 +68,25 @@ def test_file_picker_opens_only_after_enter_and_closes_hidden_root(monkeypatch, 
     assert events == ["enter", "withdraw", "dialog", "destroy"]
 
 
+@pytest.mark.parametrize("error", [RuntimeError("Tk unavailable"), ValueError("display unavailable")])
+def test_picker_failure_recommends_public_flags(monkeypatch, error):
+    def unavailable():
+        raise error
+
+    monkeypatch.setitem(sys.modules, "tkinter", SimpleNamespace(Tk=unavailable, filedialog=None))
+    monkeypatch.setattr(cli, "_ask_text", lambda *args: "")
+    with pytest.raises(ValueError) as caught:
+        cli._select_csv()
+    assert "--data" in str(caught.value) and "--like" in str(caught.value)
+    assert "--pool" not in str(caught.value) and "--reference" not in str(caught.value)
+
+
 def test_picker_cancel_returns_to_source_selection(config, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    choices = iter(["own", "generate", "fresh", "preview"])
+    choices = iter(["own", "generate", "fresh", "back"])
     monkeypatch.setattr(cli, "_ask_select", lambda *args, **kwargs: next(choices))
     monkeypatch.setattr(cli, "_url_prompt", lambda: config.url)
-    monkeypatch.setattr(cli, "_run_inspect", lambda _: config)
+    monkeypatch.setattr(cli, "_run_inspect", lambda *a, **kw: config)
     monkeypatch.setattr(cli, "_ask_number", lambda *args, **kwargs: 2)
     calls = []
 
@@ -89,9 +103,9 @@ def test_picker_cancel_returns_to_source_selection(config, monkeypatch, tmp_path
 
 
 @pytest.mark.parametrize(
-    "source, filename", [("generate", "gformbot-generated.csv"), ("enlarge", "gformbot-additional.csv")]
+    "source, filename", [("fresh", "gformbot-generated.csv"), ("reference", "gformbot-generated.csv")]
 )
-def test_generation_and_enlarge_write_csv_without_changing_reference(
+def test_generation_sources_write_new_csv_without_changing_reference(
     config, monkeypatch, tmp_path, source, filename
 ):
     monkeypatch.chdir(tmp_path)
@@ -102,16 +116,14 @@ def test_generation_and_enlarge_write_csv_without_changing_reference(
     monkeypatch.setattr(cli, "_ask_text", lambda *args: "Match the style")
 
     def generate(c, reference, instructions):
-        assert reference == profiles()
+        assert reference == (None if source == "fresh" else profiles())
         assert "Match the style" in instructions
-        if source == "enlarge":
-            assert "additional" in instructions
         return profiles()
 
     monkeypatch.setattr(cli, "_generate", generate)
     assert cli._prepare_source(config, source) == profiles()
     assert generator.load_reference(config, tmp_path / filename) == profiles()
-    assert seen == [source == "enlarge"]
+    assert seen == ([] if source == "fresh" else [True])
 
 
 def test_own_data_keeps_original_profiles(config, monkeypatch, tmp_path):
@@ -175,32 +187,14 @@ def test_existing_artifacts_are_not_overwritten(config, tmp_path):
 
 
 def setup_execution(config, monkeypatch):
-    state = SimpleNamespace(launches=0, calls=[], logs=[], quit_count=0, clients=0, closed_clients=0)
+    state = SimpleNamespace(calls=[], logs=[], clients=0, closed_clients=0)
 
-    class Driver:
-        current_url = config.url
-
-        def quit(self):
-            state.quit_count += 1
-
-        def execute_script(self, *args):
-            pass
-
-    def launch(*args, **kwargs):
-        state.launches += 1
-        return Driver()
-
-    monkeypatch.setattr(browser, "get_driver", launch)
     monkeypatch.setattr(inspector, "inspect_form", lambda url: config)
-    monkeypatch.setattr(execution, "config_from_schema", lambda value: value)
     monkeypatch.setattr(logger, "validate_log_path", lambda *args: None)
     monkeypatch.setattr(logger, "log_result", lambda *args: state.logs.append(args))
 
     class Client:
         def __init__(self, config):
-            current = inspector.inspect_form(config.url)
-            if inspector.schema_fingerprint(current) != inspector.schema_fingerprint(config):
-                raise ValueError("The form has changed since inspection.")
             state.clients += 1
 
         def __enter__(self):
@@ -224,11 +218,10 @@ def setup_execution(config, monkeypatch):
     return state
 
 
-def test_batch_checks_exact_answers_with_one_http_client(config, monkeypatch):
+def test_batch_submits_exact_answers_with_one_http_client(config, monkeypatch):
     state = setup_execution(config, monkeypatch)
 
-    cli._run_fill(config, answers=profiles())
-    assert state.launches == state.quit_count == 0
+    cli._run_submit(config, answers=profiles())
     assert state.clients == state.closed_clients == 1
     assert state.calls == profiles()
 
@@ -236,10 +229,10 @@ def test_batch_checks_exact_answers_with_one_http_client(config, monkeypatch):
 def test_false_result_stops_with_honest_count(config, monkeypatch):
     state = setup_execution(config, monkeypatch)
     results = iter([(True, "checked"), (False, "Validation failed")])
-    monkeypatch.setattr(state.client, "validate", lambda *args, **kwargs: next(results))
+    monkeypatch.setattr(state.client, "submit", lambda *args, **kwargs: next(results))
     with pytest.raises(ValueError, match="rejected"):
-        cli._run_fill(config, answers=profiles())
-    assert state.closed_clients == 1 and state.launches == 0
+        cli._run_submit(config, answers=profiles())
+    assert state.closed_clients == 1
     assert [row[3] for row in state.logs] == [True, False]
 
 
@@ -248,51 +241,23 @@ def test_uncertain_submit_is_logged_once_and_never_retried(config, monkeypatch):
 
     def execute(*args, **kwargs):
         state.calls.append(1)
-        raise filler.SubmissionUncertainError("Check the form before retrying")
+        raise SubmissionUncertainError("Check the form before retrying")
 
     monkeypatch.setattr(state.client, "submit", execute)
     with pytest.raises(ValueError, match="Check the form"):
-        cli._run_fill(config, answers=profiles(), submit=True)
+        cli._run_submit(config, answers=profiles())
     assert len(state.calls) == len(state.logs) == 1
     assert state.logs[0][3] is False
 
 
-def test_dry_run_needs_no_browser_or_live_inspection(config, monkeypatch):
-    monkeypatch.setattr(browser, "get_driver", lambda *args, **kwargs: pytest.fail("No browser"))
-    monkeypatch.setattr(inspector, "inspect_form", lambda *args: pytest.fail("No live inspection"))
-    cli._run_fill(config, answers=profiles(), dry_run=True)
-
-
-def test_changed_live_form_stops_before_browser(config, monkeypatch):
-    state = setup_execution(config, monkeypatch)
-    different = RunConfig(url=config.url, questions=[], sections=["Different"])
-    monkeypatch.setattr(inspector, "inspect_form", lambda url: different)
-    with pytest.raises(ValueError, match="has changed"):
-        cli._run_fill(config, answers=profiles())
-    assert state.launches == 0
-
-
-def test_log_preflight_happens_before_browser(config, monkeypatch):
+def test_log_preflight_happens_before_http_client(config, monkeypatch):
     state = setup_execution(config, monkeypatch)
     monkeypatch.setattr(
         logger, "validate_log_path", lambda path: (_ for _ in ()).throw(ValueError("Old log"))
     )
     with pytest.raises(ValueError, match="Old log"):
-        cli._run_fill(config, answers=profiles())
-    assert state.launches == 0
-
-
-def test_guided_submission_requires_interactive_confirmation(config, monkeypatch):
-    monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
-    with pytest.raises(ValueError, match="confirmation"):
-        cli._confirm_submit(config, True)
-    cli._confirm_submit(config, False)
-    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
-    monkeypatch.setattr(cli, "_ask_confirm", lambda *args: True)
-    cli._confirm_submit(config, True)
-    monkeypatch.setattr(cli, "_ask_confirm", lambda *args: False)
-    with pytest.raises(click.Abort):
-        cli._confirm_submit(config, True)
+        cli._run_submit(config, answers=profiles())
+    assert state.clients == 0
 
 
 def test_form_table_shows_full_contents_and_literal_markup(config, monkeypatch):
@@ -341,56 +306,22 @@ def test_main_error_exit_is_nonzero(monkeypatch):
     assert error.value.code == 1
 
 
-def test_visible_rehearsal_waits_for_each_manual_submission(config, monkeypatch):
-    state = setup_execution(config, monkeypatch)
-    config.browser = "chrome"
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(filler, "submit_response", lambda *args, **kwargs: (True, "filled"))
-    monkeypatch.setattr(cli, "_ask_select", lambda *args, **kwargs: "wait")
-    state.driver = None
-
-    def execute(c, answer, **kwargs):
-        state.driver = kwargs["driver"]
-        state.driver.current_window_handle = "first"
-        state.driver.window_handles = ["first"]
-        state.calls.append(dict(answer))
-        return True, "filled"
-
-    monkeypatch.setattr(filler, "submit_response", execute)
-    checked = []
-
-    def confirmed(*args):
-        checked.append(len(state.calls))
-        return True
-
-    monkeypatch.setattr(filler, "_positive_confirmation", confirmed)
-    output = io.StringIO()
-    monkeypatch.setattr(cli, "console", Console(file=output))
-    cli._run_fill(config, answers=profiles())
-    assert checked == [1, 2]
-    assert state.quit_count == 1
-    assert "manual submission confirmed" in output.getvalue()
-
-
-@pytest.mark.parametrize("action", ["fill", "submit"])
-def test_saved_plan_interactive_next_choices(config, monkeypatch, tmp_path, action):
+def test_saved_plan_interactive_next_choices(config, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     target = cli._save_plan(config, profiles())
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "_next_action", lambda **kwargs: action)
-    monkeypatch.setattr(cli, "_choose_browser", lambda: "chrome")
-    monkeypatch.setattr(cli, "_confirm_submit", lambda *args: None)
+    monkeypatch.setattr(cli, "interactive_input", lambda: True)
+    monkeypatch.setattr(cli, "_next_action", lambda count: "submit")
     calls = []
 
     def confirmed_fill(c, **kwargs):
-        calls.append((c.browser, kwargs["submit"]))
+        calls.append(kwargs["answers"])
         for index in range(1, len(kwargs["answers"]) + 1):
             c._record_submission(index)
         return True
 
-    monkeypatch.setattr(cli, "_run_fill", confirmed_fill)
-    cli._manage_batch(config, profiles(), target, saved=True)
-    assert calls == [("chrome" if action == "fill" else "auto", action == "submit")]
+    monkeypatch.setattr(cli, "_run_submit", confirmed_fill)
+    cli._manage_batch(config, profiles(), target)
+    assert calls == [profiles()]
     assert not target.exists()
 
 
@@ -401,22 +332,20 @@ def test_generate_preserves_supplied_plan_and_its_artifacts(config, monkeypatch,
     calls = []
 
     def confirmed_fill(c, **kwargs):
-        calls.append((c.browser, kwargs["submit"]))
+        calls.append(kwargs["answers"])
         for index in range(1, len(kwargs["answers"]) + 1):
             c._record_submission(index)
         return True
 
-    monkeypatch.setattr(cli, "_run_fill", confirmed_fill)
+    monkeypatch.setattr(cli, "_run_submit", confirmed_fill)
     monkeypatch.setattr(cli, "_run_inspect", lambda *args, **kwargs: config)
-    result = CliRunner().invoke(
-        cli.cli, ["generate", config.url, "--data", str(target), "--browser", "chrome", "--halt"]
-    )
+    result = CliRunner().invoke(cli.cli, ["generate", config.url, "--data", str(target)])
     assert result.exit_code == 0, result.exception
-    assert calls == [("chrome", False)]
+    assert calls == [profiles()]
     assert target.exists() and generated.exists()
 
 
-@pytest.mark.parametrize("abort", [ValueError("Browser failed"), click.Abort()])
+@pytest.mark.parametrize("abort", [ValueError("HTTP failed"), click.Abort()])
 def test_run_failures_preserve_batch(config, monkeypatch, tmp_path, abort):
     monkeypatch.chdir(tmp_path)
     generated = generator.write_csv(config, profiles(), tmp_path / "generated.csv")
@@ -425,19 +354,19 @@ def test_run_failures_preserve_batch(config, monkeypatch, tmp_path, abort):
     def fail(*args, **kwargs):
         raise abort
 
-    monkeypatch.setattr(cli, "_run_fill", fail)
+    monkeypatch.setattr(cli, "_run_submit", fail)
     monkeypatch.setattr(cli, "_run_inspect", lambda *args, **kwargs: config)
-    result = CliRunner().invoke(cli.cli, ["generate", config.url, "--data", str(target), "--halt"])
+    result = CliRunner().invoke(cli.cli, ["generate", config.url, "--data", str(target)])
     assert result.exit_code != 0
     assert target.exists() and generated.exists()
 
 
-def test_wizard_visible_default_and_completed_files_removed(config, monkeypatch, tmp_path):
+def test_wizard_submits_and_removes_completed_owned_files(config, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "_url_prompt", lambda: config.url)
-    monkeypatch.setattr(cli, "_run_inspect", lambda _: config)
+    monkeypatch.setattr(cli, "_run_inspect", lambda *a, **kw: config)
     monkeypatch.setattr(cli, "_ask_number", lambda *args, **kwargs: 2)
-    choices = iter(["generate", "fresh", "fill", "chrome"])
+    choices = iter(["generate", "fresh", "submit"])
     defaults = []
 
     def select(*args, **kwargs):
@@ -451,13 +380,12 @@ def test_wizard_visible_default_and_completed_files_removed(config, monkeypatch,
     calls = []
 
     def confirmed_fill(c, **kwargs):
-        calls.append(c.browser)
+        calls.append(kwargs["answers"])
         for index in range(1, len(kwargs["answers"]) + 1):
             c._record_submission(index)
         return True
 
-    monkeypatch.setattr(cli, "_run_fill", confirmed_fill)
+    monkeypatch.setattr(cli, "_run_submit", confirmed_fill)
     cli._new_batch_wizard()
-    assert defaults[-1] == "auto-background"
-    assert calls == ["chrome"]
+    assert calls == [profiles()]
     assert not generated.exists() and not list(tmp_path.glob("gformbot-responses*.json"))

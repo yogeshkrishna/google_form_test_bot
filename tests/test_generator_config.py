@@ -341,7 +341,7 @@ def test_legacy_inert_page_delays_load_but_are_not_reserialized():
     raw = config_to_dict(config())
     raw["run_settings"].update(page_delay_min=1, page_delay_max=2)
     restored = config_from_dict(raw)
-    assert restored.page_delay_min == 1
+    assert not hasattr(restored, "page_delay_min") and not hasattr(restored, "page_delay_max")
     updated = config_to_dict(restored)
     assert "page_delay_min" not in updated and "page_delay_min" not in updated["run_settings"]
     assert "page_delay_max" not in updated["run_settings"]

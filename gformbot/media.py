@@ -1,4 +1,4 @@
-"""Keep ordered visual context without downloading or pretending to interpret it."""
+"""Keep media metadata in form order for inspection and change detection."""
 
 from urllib.parse import urlsplit
 
@@ -57,12 +57,8 @@ def inspect_media(item, before_question, page):
 
 
 def validate_media(config):
-    if (
-        not isinstance(config.media, list)
-        or not isinstance(config.media_context, str)
-        or len(config.media_context) > 10_000
-    ):
-        raise ValueError("Media must be an ordered list and its context text at most 10,000 characters.")
+    if not isinstance(config.media, list):
+        raise ValueError("Media must be an ordered list.")
     keys = set()
     fields = {
         "key",
@@ -92,5 +88,5 @@ def validate_media(config):
             or item["option_index"] is not None
             and (type(item["option_index"]) is not int or item["option_index"] < 0)
         ):
-            raise ValueError("Invalid or duplicate media context item.")
+            raise ValueError("Invalid or duplicate media item.")
         keys.add(item["key"])

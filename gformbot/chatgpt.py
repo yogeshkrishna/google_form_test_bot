@@ -1,6 +1,7 @@
 """Use the visible ChatGPT website in one fresh private browser session."""
 
 import math
+import time
 
 from .browser import get_driver
 from .selenium_runtime import (
@@ -15,6 +16,10 @@ from .selenium_runtime import (
 class ChatGPTError(ValueError):
     """The website could not accept a prompt or finish its response."""
 
+    def __init__(self, message, *, partial_content=""):
+        super().__init__(message)
+        self.partial_content = partial_content
+
 
 def open_chat(browser):
     driver = get_driver(browser)
@@ -27,6 +32,15 @@ def open_chat(browser):
             pass  # Preserve the navigation failure when cleanup also fails.
         raise
     return driver
+
+
+def new_chat(driver):
+    """Reset context in the same private session before sending a fresh form prompt."""
+    try:
+        driver.get("https://chatgpt.com/")
+        WebDriverWait(driver, 20, poll_frequency=0.2).until(lambda d: not _messages(d))
+    except (WebDriverException, OSError) as exc:
+        raise ChatGPTError("Could not start a fresh ChatGPT conversation. Generation stopped.") from exc
 
 
 def _editor(driver):
@@ -136,17 +150,26 @@ def ask(driver, messages, schema=None, timeout=180, attention=None):
     except TimeoutException as exc:
         raise ChatGPTError("ChatGPT's Send button is unavailable. Check the page or account limits.") from exc
 
+    latest = ""
+    stable_since = 0.0
+
     def finished(d):
+        nonlocal latest, stable_since
         try:
             replies = _messages(d)
+            if len(replies) > previous:
+                message = replies[-1]
+                content = _content(message)
+                if content != latest:
+                    latest, stable_since = content, time.monotonic()
+            alerts = d.find_elements(By.CSS_SELECTOR, "[role='alert']")
+            error = next((el.text for el in alerts if el.is_displayed() and el.text.strip()), "")
+            if error:
+                raise ChatGPTError(f"ChatGPT reported: {error[:400]}", partial_content=latest)
             if len(replies) <= previous:
-                alerts = d.find_elements(By.CSS_SELECTOR, "[role='alert']")
-                error = next((el.text for el in alerts if el.is_displayed() and el.text.strip()), "")
-                if error:
-                    raise ChatGPTError(f"ChatGPT reported: {error[:400]}")
                 return False
-            message = replies[-1]
             if message.get_dom_attribute("data-message-streaming") is not None:
+                stable_since = time.monotonic()
                 return False
             if any(
                 el.is_displayed()
@@ -155,9 +178,10 @@ def ask(driver, messages, schema=None, timeout=180, attention=None):
                     "button[data-testid='stop-button'], button[aria-label='Stop generating'], button[aria-label='Stop streaming']",
                 )
             ):
+                stable_since = time.monotonic()
                 return False
-            content = _content(message)
-            return content or False
+            # The reply can appear before the site's streaming controls update.
+            return content if content and time.monotonic() - stable_since >= 0.6 else False
         except StaleElementReferenceException:
             return False
 
@@ -165,5 +189,6 @@ def ask(driver, messages, schema=None, timeout=180, attention=None):
         return WebDriverWait(driver, timeout, poll_frequency=0.3).until(finished)
     except TimeoutException as exc:
         raise ChatGPTError(
-            "ChatGPT did not finish its response in time. Check sign-in, usage limits, or the website. No prompt was retried automatically."
+            "ChatGPT did not finish its response in time. Check sign-in, usage limits, or the website. No prompt was retried automatically.",
+            partial_content=latest,
         ) from exc

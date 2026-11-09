@@ -26,38 +26,6 @@ _SECRETS = {
 _URL = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
-# Scoped descriptions only: never scrape the page body, account area or answer controls.
-_COLLECT = """
-const confirmation = arguments[0] === 'confirmation';
-const selectors = confirmation
- ? '.vHW8K, .freebirdFormviewerViewResponseConfirmationMessage, [data-gformbot-confirmation]'
- : '.cBGGJ, .gubaDc, .PqKxpe, .F9yp7e, .freebirdFormviewerViewHeaderDescription, .freebirdFormviewerViewItemsItemItemHelpText, .freebirdFormviewerViewItemsSectionheaderDescription';
-const excluded = 'input, textarea, select, option, button, script, style, nav, footer, [role="button"], [contenteditable="true"]';
-function visible(el) {
- if (!el.getClientRects().length) return false;
- for (let p = el; p; p = p.parentElement) {
-  const s = getComputedStyle(p);
-  if (s.display === 'none' || s.visibility === 'hidden' || s.visibility === 'collapse'
-    || s.opacity === '0' || s.contentVisibility === 'hidden') return false;
- }
- return true;
-}
-function text(el) {
- if (el.nodeType === Node.TEXT_NODE) return el.textContent;
- if (el.nodeType !== Node.ELEMENT_NODE || el.matches(excluded) || !visible(el)) return '';
- if (el.tagName === 'BR') return '\\n';
- const value = Array.from(el.childNodes, text).join('');
- return /^(DIV|P|LI)$/.test(el.tagName) ? value + '\\n' : value;
-}
-return Array.from(document.querySelectorAll(selectors))
- .filter(el => visible(el) && !el.closest(excluded)
-   && !el.parentElement?.closest(selectors))
- .map(el => ({text: text(el).trim(),
-   links: Array.from(el.querySelectorAll('a[href]'))
-    .filter(a => visible(a) && !a.closest(excluded)).map(a => a.getAttribute('href')),
-   stage: confirmation ? 'confirmation' : el.matches('.cBGGJ, .freebirdFormviewerViewHeaderDescription') ? 'intro' : 'section'}));
-"""
-
 
 def safe_url(value: str, base: str, _depth: int = 0) -> str:
     """Keep public destinations; remove credentials and redact known secret parameters."""
@@ -121,17 +89,6 @@ def _sanitize(block, base):
     return {"text": text, "links": links}
 
 
-def observe_page(observer, driver, section, stage):
-    """An optional observer must never turn a successful submit into a retry."""
-    if observer is not None:
-        try:
-            observer(driver, section, stage)
-        except Exception:
-            import logging
-
-            logging.getLogger(__name__).warning("Could not capture form instructions.")
-
-
 def display(records, ui, *, full=False, warning="", log_path=None):
     """Group repeated directions and print literal text, safe on older Windows consoles."""
     try:
@@ -186,7 +143,7 @@ def display(records, ui, *, full=False, warning="", log_path=None):
                 message = message.encode(encoding, errors="backslashreplace").decode(encoding)
             ui._info(message)
     except Exception:
-        # A closed output stream cannot undo a browser-confirmed submission.
+        # A closed output stream cannot undo a confirmed submission.
         pass
 
 
@@ -197,18 +154,8 @@ class Recorder:
         self.records = {}
         self.warning = ""
 
-    def observe(self, driver, response, section, stage):
-        try:
-            blocks = driver.execute_script(_COLLECT, stage)
-            base = driver.current_url
-            self.record(blocks, response, section, stage, base)
-        except Exception:
-            self.warning = (
-                "Some form instructions could not be captured or saved. Submission status is unchanged."
-            )
-
     def record(self, blocks, response, section, stage, base):
-        """Store scoped instructions from either transport using the same privacy policy."""
+        """Store scoped HTTP instructions using the shared privacy policy."""
         try:
             by_stage = defaultdict(list)
             for raw in blocks:

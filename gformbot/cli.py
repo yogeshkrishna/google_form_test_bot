@@ -34,9 +34,17 @@ from .config import (
     save_config,
     validate_config,
 )
+from .terminal import (
+    PromptBack,
+    accent_choice,
+    interactive_input,
+    prompt_steps,
+    run_prompt,
+    wizard_navigation,
+)
 
 console = Console(highlight=False, safe_box=True)
-_INQUIRER = sys.stdin.isatty() and sys.stdout.isatty()
+_INQUIRER = interactive_input() and interactive_input(sys.stdout)
 
 
 @dataclass
@@ -49,23 +57,36 @@ def _choice(value, name):
     return MenuChoice(value, name)
 
 
-def _ask_text(message, default=""):
+def _ask_text(message, default="", *, completed=False):
     if _INQUIRER:
-        from InquirerPy import inquirer
+        from InquirerPy import get_style, inquirer
 
-        value = inquirer.text(message=message, default=default).execute()
+        options = {"instruction": f"(Enter for {default})"} if default else {}
+        if completed:
+            options["style"] = get_style(
+                dict.fromkeys(("answermark", "answered_question", "answer"), "#9299a6"),
+                style_override=False,
+            )
+            options["transformer"] = lambda value: value.strip() or default or "(skipped)"
+        value = run_prompt(inquirer.text(message=message, **options), typing=True)
         if value is None:
             raise click.Abort()
-        return value.strip()
+        return value.strip() or default
     value = input(f"{message}" + (f" [{default}]" if default else "") + ": ").strip()
     return value or default
 
 
-def _ask_confirm(message, default=False):
+def _ask_confirm(message, default=False, *, completed=False):
     if _INQUIRER:
-        from InquirerPy import inquirer
+        from InquirerPy import get_style, inquirer
 
-        value = inquirer.confirm(message=message, default=default).execute()
+        options = {}
+        if completed:
+            options["style"] = get_style(
+                dict.fromkeys(("answermark", "answered_question", "answer"), "#9299a6"),
+                style_override=False,
+            )
+        value = run_prompt(inquirer.confirm(message=message, default=default, **options))
         if value is None:
             raise click.Abort()
         return value
@@ -82,15 +103,21 @@ def _ask_select(message, choices, default=None):
     if _INQUIRER:
         from InquirerPy import inquirer
 
-        value = inquirer.select(
+        prompt = inquirer.select(
             message=message, choices=[{"value": c.value, "name": c.name} for c in choices], default=default
-        ).execute()
+        )
+        if message == "Start" and not console.no_color:
+            accent_choice(prompt, "quick")
+        value = run_prompt(prompt)
         if value is None:
             raise click.Abort()
         return value
     console.print(Text(message))
     for index, choice in enumerate(choices, 1):
-        console.print(Text(f"  {index}. {choice.name}" + (" (default)" if choice.value == default else "")))
+        style = "bold magenta" if message == "Start" and choice.value == "quick" else ""
+        console.print(
+            Text(f"  {index}. {choice.name}" + (" (default)" if choice.value == default else ""), style=style)
+        )
     while True:
         value = input("Enter number: ").strip()
         if not value and default is not None:
@@ -100,9 +127,10 @@ def _ask_select(message, choices, default=None):
         console.print(f"Enter a number between 1 and {len(choices)}.")
 
 
-def _ask_number(message, default=1, min_val=1, max_val=500):
+def _ask_number(message, default=1, min_val=1, max_val=500, *, completed=False):
     while True:
-        value = _ask_text(message, str(default))
+        options = {"completed": True} if completed else {}
+        value = _ask_text(message, str(default), **options)
         if value.isdecimal() and min_val <= int(value) <= max_val:
             return int(value)
         console.print(f"Enter a whole number between {min_val} and {max_val}.")
@@ -111,7 +139,7 @@ def _ask_number(message, default=1, min_val=1, max_val=500):
 def _print_banner():
     console.print(
         Panel.fit(
-            f"[bold cyan]gformbot[/bold cyan] [dim]{__version__}[/dim]\nPrepare, preview and fill Google Forms.",
+            f"[bold cyan]gformbot[/bold cyan] [dim]{__version__}[/dim]\nPrepare and submit Google Forms.",
             border_style="cyan",
         )
     )
@@ -146,16 +174,22 @@ def _validate_form_url(url):
         return False, str(exc)
 
 
-def _url_prompt():
+def _url_prompt(*, completed=False):
     url = _clipboard_url()
-    if url and _ask_confirm(f"Use the form URL in your clipboard? {url}", default=True):
-        return url
+    options = {"completed": True} if completed else {}
     while True:
-        url = _ask_text("Paste your public Google Form link")
-        valid, message = _validate_form_url(url)
-        if valid:
+        if url and _ask_confirm(f"Use the form URL in your clipboard? {url}", default=True, **options):
             return url
-        console.print(Text(message, style="yellow"))
+        try:
+            while True:
+                entered = _ask_text("Paste your public Google Form link", **options)
+                valid, message = _validate_form_url(entered)
+                if valid:
+                    return entered
+                console.print(Text(message, style="yellow"))
+        except PromptBack:
+            if not url:
+                raise
 
 
 def _show_form(config):
@@ -234,11 +268,14 @@ def _show_form(config):
     console.print(table)
     if config.media:
         media_table = Table(title="Images and videos (in form order)")
-        for label in ("Section", "Placement", "Caption / reference"):
+        for label in ("Type", "Section", "Placement", "Caption"):
             media_table.add_column(label)
         for asset in config.media:
             media_table.add_row(
-                str(asset["page"]), asset["placement"], Text(asset["caption"] or asset["key"])
+                Text(asset["kind"]),
+                str(asset["page"]),
+                asset["placement"],
+                Text(asset["caption"]),
             )
         console.print(media_table)
     for note in getattr(config, "instructions", []):
@@ -248,7 +285,7 @@ def _show_form(config):
         console.print(Text(issue, style="yellow"))
 
 
-def _run_inspect(url, save=False, output=DEFAULT_CONFIG_NAME, *, display=True):
+def _run_inspect(url, *, display=True):
     from .access import require_public_form
     from .inspector import inspect_form
 
@@ -261,9 +298,6 @@ def _run_inspect(url, save=False, output=DEFAULT_CONFIG_NAME, *, display=True):
     config = config_from_schema(schema)
     if display:
         _show_form(config)
-    if save:
-        save_config(config, output)
-        _info(f"Config saved: {clean_path(output).resolve()}")
     return config
 
 
@@ -289,11 +323,11 @@ def _select_csv(title="Choose response CSV"):
                 root.destroy()
         except (ImportError, RuntimeError) as exc:
             raise ValueError(
-                "The file picker needs a graphical desktop and Python Tk support. On Linux install python3-tk. Scripted commands accept --pool or --reference."
+                "The file picker needs a graphical desktop and Python Tk support. On Linux install python3-tk. Scripted commands accept --data or --like."
             ) from exc
         except Exception as exc:
             raise ValueError(
-                f"Cannot open the file picker: {exc}. Use a desktop session or a scripted --pool/--reference command."
+                f"Cannot open the file picker: {exc}. Use a desktop session or a scripted --data/--like command."
             ) from exc
         if not selected:
             raise FileSelectionCancelled()
@@ -402,85 +436,38 @@ def _import_profiles(config, path):
 
 
 def _reference_prompt(config, required=False):
-    if required or _ask_confirm("Use an existing CSV as a guide?"):
-        path = _select_csv("Choose reference CSV")
-        return _import_profiles(config, path)
+    while required or _ask_confirm("Use an existing CSV as a guide?"):
+        try:
+            path = _select_csv("Choose reference CSV")
+            return _import_profiles(config, path)
+        except PromptBack:
+            if required:
+                raise
     return None
 
 
 def _generate(config, reference=None, instructions="", **options):
     from .ai import complete_responses, generate_responses
-    from .previews import remember
 
-    if config.media and not config.media_context.strip() and sys.stdin.isatty():
-        choice = _ask_select(
-            "This form contains images or videos",
-            [
-                _choice("describe", "Add the visual information needed to answer"),
-                _choice("decorative", "I reviewed them; they are decorative"),
-            ],
-        )
-        config.media_context = (
-            "The user reviewed all form media and declares it decorative."
-            if choice == "decorative"
-            else _ask_text("Describe the media, identifying each question or option")
-        )
     partials = options.pop("partials", None)
-    compact = options.pop("compact", False)
-    completed = False
+    options.pop("compact", None)
     progress = options.pop("progress", lambda done, total: _info(f"Generating responses: {done}/{total}"))
-    if "browser" not in options:
-        options["browser"] = _generation_browser()
-    if "checkpoint" not in options:
-        options["checkpoint"] = _available_path("gformbot-generation.json")
-        config._temporary_checkpoint = Path(options["checkpoint"])
+    options.setdefault("browser", config.browser)
+    options.setdefault("attention", _ask_text if interactive_input() else None)
     _info(
-        "Opening ChatGPT in a private browser. The form, instructions, and reference examples will be sent to ChatGPT."
+        "Generating with ChatGPT in a private browser. Form context, instructions, "
+        "and reference examples will be sent as text."
     )
-    try:
-        generate = generate_responses if partials is None else complete_responses
-        request = config.count if partials is None else partials
-        answers = generate(
-            config,
-            request,
-            reference=reference,
-            instructions=instructions,
-            progress=progress,
-            attention=_chatgpt_attention if sys.stdin.isatty() else None,
-            **options,
-        )
-        completed = True
-        return answers
-    finally:
-        checkpoint = Path(options["checkpoint"])
-        if checkpoint.is_file():
-            try:
-                remember(checkpoint)
-            except OSError as exc:
-                _info(f"Could not remember where AI progress was saved: {exc}")
-            if not compact or not completed:
-                _info(
-                    f"AI progress saved: {checkpoint.resolve()}. Open gformbot > Open saved AI work to continue."
-                )
-
-
-def _generation_browser():
-    if not sys.stdin.isatty():
-        return "auto"
-    return _ask_select(
-        "Which browser should open ChatGPT?",
-        [
-            _choice("auto", "Use the default installed browser"),
-            _choice("chrome", "Chrome"),
-            _choice("firefox", "Firefox"),
-            _choice("edge", "Edge"),
-        ],
-        default="auto",
+    generate = generate_responses if partials is None else complete_responses
+    request = config.count if partials is None else partials
+    return generate(
+        config,
+        request,
+        reference=reference,
+        instructions=instructions,
+        progress=progress,
+        **options,
     )
-
-
-def _chatgpt_attention(message):
-    _ask_text(message)
 
 
 def _configure_weights(config):
@@ -566,20 +553,8 @@ def _save_plan(config, answers, path=None, source="prepared", *, cleanup_on_succ
     try:
         remember(target)
     except OSError as exc:
-        _info(f"Preview saved, but could not remember its location: {exc}. Use the run command below.")
+        _info(f"Answers saved, but could not remember their location: {exc}. Use the saved file with --data.")
     _info(f"Answers saved: {target.resolve()}")
-    checkpoint = getattr(config, "_temporary_checkpoint", None)
-    if checkpoint and checkpoint.is_file() and not checkpoint.is_symlink():
-        try:
-            completed = json.loads(checkpoint.read_text(encoding="utf-8"))
-            if (
-                completed.get("kind") == "gformbot-generation"
-                and completed.get("responses")
-                and all(row is not None for row in completed["responses"])
-            ):
-                checkpoint.unlink()
-        except (OSError, ValueError) as exc:
-            _info(f"Answers are saved; the AI progress file was also kept: {exc}")
     return target
 
 
@@ -596,52 +571,17 @@ def _finish_plan(path, expected_digest, keep_files=False):
         _info("Kept changed or inaccessible response files: " + ", ".join(str(p) for p in preserved))
 
 
-def _preview_instructions(path):
-    path = clean_path(path).resolve()
-    _info("Answers saved. Nothing has been filled or submitted.")
-    config, _ = _load_plan(path)
-    _info(f'Review later: gformbot generate "{config.url}" --data "{path}" --halt')
-    _info(f'Submit later: gformbot generate "{config.url}" --data "{path}"')
-    _info("Or start gformbot and choose Open saved responses to use these answers again.")
-
-
-def _next_action(saved=False):
-    choices = [] if saved else [_choice("preview", "Save answers and exit")]
+def _next_action(count):
     return _ask_select(
         "What next?",
-        choices
-        + [
-            _choice("fill", "Fill for review (I click Submit myself)"),
-            _choice("submit", "Send responses automatically (recommended)"),
-            _choice("test", "Check answers without submitting (answers stay saved)"),
-            _choice("inspect", "View one response"),
-            _choice("edit", "Edit a response and save a copy"),
-            _choice("export", "Save remaining responses as a CSV"),
-            _choice("back", "Go back (keep my answers saved)"),
+        [
+            _choice("submit", f"Submit {count} responses"),
+            _choice("edit", "Review or edit responses"),
+            _choice("export", "Export remaining responses as CSV"),
+            _choice("back", "Back to start"),
         ],
         default="submit",
     )
-
-
-def _choose_browser():
-    return _ask_select(
-        "Browser",
-        [
-            _choice("auto-background", "Open only when I choose (default browser, recommended)"),
-            _choice("chrome-background", "Open only when I choose (Chrome)"),
-            _choice("chrome", "Chrome (always visible)"),
-            _choice("firefox", "Firefox (visible)"),
-            _choice("edge", "Edge (visible)"),
-            _choice("auto", "Use my default browser (visible)"),
-        ],
-        default="auto-background",
-    )
-
-
-def _apply_browser(config, browser=None):
-    if browser is not None:
-        config.background = browser.endswith("-background")
-        config.browser = browser.removesuffix("-background") if config.background else browser
 
 
 def _load_plan(path):
@@ -673,6 +613,7 @@ def _load_plan(path):
             set(submitted) | {i for i, state in journal_states.items() if state == "confirmed"}
         )
         config._outcomes = journal_states
+        config._submission_started = payload.get("submission_started") is True
         if not Path(config.log_file).is_absolute():
             config.log_file = str(clean_path(path).resolve().parent / config.log_file)
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -687,7 +628,7 @@ def _track_plan(config, answers, path, expected_digest, *, interactive=None):
     payload = json.loads(path.read_text(encoding="utf-8-sig"))
     session = Session(path, payload, expected_digest)
     for index in session.uncertain():
-        if interactive is False or not sys.stdin.isatty():
+        if interactive is False or not interactive_input():
             raise UncertainSubmission(
                 f"Response {index} has an uncertain previous outcome. Reopen this batch interactively to resolve it before retrying."
             )
@@ -702,11 +643,11 @@ def _track_plan(config, answers, path, expected_digest, *, interactive=None):
             default="cancel",
         )
         if choice == "cancel":
-            raise click.Abort()
+            raise PromptBack()
         session.reconcile(index, choice == "yes")
-    if not session.ids:
+    if not session.ids and interactive is False:
         raise ValueError(
-            "Every response in this preview was already confirmed submitted. Choose View or create a new batch."
+            "Every response in this batch was already confirmed submitted. Return to Start or create a new batch."
         )
     config.count = len(session.ids)
     config._submitted_indices = sorted(session.confirmed)
@@ -723,122 +664,96 @@ def _track_plan(config, answers, path, expected_digest, *, interactive=None):
     return [answers[i - 1] for i in session.ids]
 
 
-def _show_answer(answer, config, index=1):
+def _show_answer(answer, config, index=1, *, sample=False):
     from .answers import display_value
     from .routing import Routing
 
     active = Routing(config).active(answer)
-    table = Table(title=f"Prepared response {index}", header_style="bold cyan", show_lines=True)
+    table = Table(
+        title=f"Sample response — {index}" if sample else f"Prepared response {index}",
+        header_style="bold cyan",
+        show_lines=True,
+    )
     table.add_column("Q", style="dim")
     table.add_column("Question", ratio=2)
     table.add_column("Answer", ratio=3)
-    for q in config.questions:
+    questions = config.questions[:12] if sample else config.questions
+    for q in questions:
         value = answer[q.index]
         text = display_value(value)
+        if sample and len(text) > 240:
+            text = text[:237] + "…"
         display = (
             (text or "(blank)") if q.index in active else ((text + " (not used)") if text else "(skipped)")
         )
         table.add_row(str(q.index), Text(q.text), Text(display))
     console.print(table)
-
-
-def _show_preview(config, answers):
-    from .routing import Routing
-
-    _section("Preview")
-    for index, answer in enumerate(answers[:3], 1):
-        _show_answer(answer, config, index)
-    if len(answers) > 3:
-        _info(f"Showing 3 of {len(answers)} responses; all answers are in your saved file.")
-    routes = Routing(config)
-    used = [{index: row[index] for index in routes.active(row)} for row in answers]
-    fingerprints = [json.dumps(row, sort_keys=True, ensure_ascii=False) for row in used]
-    blanks = sum(not value for row in used for value in row.values())
-    _info(
-        f"Quick check: {len(fingerprints) - len(set(fingerprints))} repeated response(s); {blanks} blank answer(s). Please also check that the answers make sense."
-    )
+    if sample and len(config.questions) > len(questions):
+        _info("Sample shortened. Open Review or edit responses to see every answer.")
 
 
 def _pending_preview(config, answers):
     done = set(getattr(config, "_submitted_indices", []))
     remaining = [(i, row) for i, row in enumerate(answers, 1) if i not in done]
-    if done:
-        _info(f"{len(done)} already submitted; showing the rest with their original response numbers.")
-    for index, row in remaining[:3]:
-        _show_answer(row, config, index)
-    if len(remaining) > 3:
-        _info(f"Showing 3 of {len(remaining)} remaining responses. Choose View one response to see another.")
+    _info(f"{len(remaining)} responses ready" + (f" · {len(done)} already submitted" if done else ""))
+    if remaining:
+        index, row = remaining[0]
+        _show_answer(row, config, index, sample=True)
 
 
 def _edit_batch(config, answers, path):
+    from .artifacts import digest
+    from .editor import review
     from .generator import validate_answer
-    from .routing import Routing
+    from .locking import file_lock
+    from .state import Journal, atomic_json, batch_id
 
-    done = set(getattr(config, "_submitted_indices", []))
-    indexes = [i for i in range(1, len(answers) + 1) if i not in done]
-    index = _ask_select(
-        "Which response would you like to edit?",
-        [_choice(i, f"Response {i}") for i in indexes] + [_choice("back", "Back")],
-    )
-    if index == "back":
-        return config, answers, path
-    question = _ask_select("Question", [_choice(q.index, q.text) for q in config.questions])
-    current = answers[index - 1][question]
-    routes = Routing(config)
-    previously_used = routes.active(answers[index - 1])
-    default = json.dumps(current, ensure_ascii=False) if isinstance(current, (list, dict)) else current
-    while True:
-        value = _ask_text("New answer (checkboxes: JSON array; type /blank for empty)", default)
-        value = "" if value == "/blank" else value
-        candidate = {**answers[index - 1], question: value}
-        try:
-            candidate[question] = validate_answer(config, {question: value}, partial=True, routing=routes)[
-                question
-            ]
-            if routes.enabled:
-                for page in routes.walk(candidate):
-                    for q in routes.questions[page]:
-                        if q.index in previously_used or q.index == question:
-                            continue
-                        while True:
-                            try:
-                                validate_answer(
-                                    config, {q.index: candidate[q.index]}, partial=True, routing=routes
-                                )
-                                break
-                            except ValueError as exc:
-                                _info(str(exc))
-                                entry = _ask_text(f"Answer needed for this route: {q.text}")
-                                candidate[q.index] = "" if entry == "/blank" else entry
-            candidate = validate_answer(config, candidate)
-            break
-        except ValueError as exc:
-            _info(str(exc))
-    fresh = config_from_dict(config_to_dict(config))
-    next(q for q in fresh.questions if q.index == question).fixed_value = None
-    rows = [json.loads(json.dumps(answers[i - 1])) for i in indexes]
-    rows = [validate_answer(fresh, row) for row in rows]
-    rows[indexes.index(index)] = candidate
-    fresh.count = len(rows)
-    return fresh, rows, _save_plan(fresh, rows, source="edited")
+    path = clean_path(path)
+    config, answers = _load_plan(path)
+    expected = digest(path)
+
+    def statuses():
+        current, _ = _load_plan(path)
+        confirmed = set(current._submitted_indices)
+        return [
+            "confirmed"
+            if i in confirmed
+            else "uncertain"
+            if current._outcomes.get(i) in {"attempted", "reviewing", "uncertain"}
+            else "ready"
+            for i in range(1, len(answers) + 1)
+        ]
+
+    def save(index, candidate):
+        nonlocal expected
+        with file_lock(path, timeout=5):
+            if digest(path) != expected:
+                raise ValueError("The response file changed. Close the editor and reopen the batch.")
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            answer = validate_answer(config, candidate)
+            Journal(batch_id(payload)).edit(payload, index, answer, lambda data: atomic_json(path, data))
+            expected = digest(path)
+            return answer
+
+    _info("Opening the local response editor. Choose Done to return here, or press Ctrl+C in this terminal.")
+    review(config, answers, save, statuses)
+    current, rows = _load_plan(path)
+    return current, rows, path
 
 
-def _manage_batch(config, answers, path, *, saved=False, keep_files=False):
+def _manage_batch(config, answers, path, *, keep_files=False):
     from .artifacts import digest
 
     _pending_preview(config, answers)
     while True:
-        action = _next_action(saved=saved) if saved else _next_action()
+        done = set(getattr(config, "_submitted_indices", []))
+        action = _next_action(len(answers) - len(done))
         if action == "back":
             _info(f"Answers kept: {clean_path(path).resolve()}")
+            _info(
+                "Continue a started batch from Continue response batch; otherwise choose Start a new form > Use my own answers > Open saved responses."
+            )
             return
-        if action == "preview":
-            _preview_instructions(path)
-            return
-        if action == "inspect":
-            index = _ask_number("Response number", max_val=len(answers))
-            _show_answer(answers[index - 1], config, index)
-            continue
         if action == "export":
             from .generator import write_csv
 
@@ -848,43 +763,33 @@ def _manage_batch(config, answers, path, *, saved=False, keep_files=False):
             _info(f"Export saved: {target.resolve()}")
             continue
         if action == "edit":
-            # Resolve possible prior submissions before creating a fresh identity.
-            if getattr(config, "_submitted_indices", []) or any(
-                state in {"attempted", "reviewing", "uncertain"}
-                for state in getattr(config, "_outcomes", {}).values()
-            ):
-                _track_plan(config, answers, path, digest(path))
             config, answers, path = _edit_batch(config, answers, path)
-            saved = False
             _pending_preview(config, answers)
             continue
-        remaining = _track_plan(config, answers, path, digest(path))
-        if action == "fill":
-            _apply_browser(config, _choose_browser())
-        _confirm_submit(config, action == "submit")
+        try:
+            remaining = _track_plan(config, answers, path, digest(path))
+        except PromptBack:
+            config, answers = _load_plan(path)
+            continue
+        if not remaining:
+            _info("All responses are confirmed submitted.")
+            _finish_plan(path, config._plan_digest, keep_files=keep_files)
+            return
         save_config(config, DEFAULT_CONFIG_NAME)
-        finished = _run_fill(
-            config, answers=remaining, submit=action == "submit", check_only=action == "test"
-        )
-        _finish_plan(
-            path, config._plan_digest, keep_files=keep_files or action == "test" or finished is False
-        )
+        finished = _run_submit(config, answers=remaining)
+        _finish_plan(path, config._plan_digest, keep_files=keep_files or finished is False)
         return
 
 
 @dataclass(frozen=True)
 class RunUI:
-    _ask_confirm: Callable
-    _ask_select: Callable
-    _ask_text: Callable
-    _choice: Callable
     _info: Callable
     _section: Callable
     console: Console
 
 
 def _run_ui():
-    return RunUI(_ask_confirm, _ask_select, _ask_text, _choice, _info, _section, console)
+    return RunUI(_info, _section, console)
 
 
 def _runner(config, answers):
@@ -893,9 +798,7 @@ def _runner(config, answers):
     return Runner(config, answers, _run_ui(), getattr(config, "_session", None))
 
 
-def _run_fill(
-    config, dry_run=False, *, answers=None, submit=False, halt=False, compact=False, check_only=False
-):
+def _run_submit(config, *, answers=None, compact=False):
     from .access import require_public_form
 
     require_public_form(config)
@@ -903,25 +806,7 @@ def _run_fill(
         from .generator import prepare_responses
 
         answers = prepare_responses(config)
-    options = {"dry_run": dry_run, "submit": submit}
-    if halt:
-        options["halt"] = True
-    if compact:
-        options["compact"] = True
-    if check_only:
-        options["check_only"] = True
-    return _runner(config, answers).run(**options)
-
-
-def _confirm_submit(config, submit):
-    if not submit:
-        return
-    if not sys.stdin.isatty():
-        raise ValueError(
-            "Submission needs an interactive confirmation. Use gformbot generate URL for explicit scripted submission."
-        )
-    if not _ask_confirm(f"Submit these {config.count} responses to {config.form_title}?"):
-        raise click.Abort()
+    return _runner(config, answers).run(compact=compact)
 
 
 @dataclass
@@ -931,51 +816,80 @@ class SavedPreview:
     answers: list
 
 
-def _select_saved_preview(config=None):
+def _saved_batches(config=None, *, started_only=False):
     from .inspector import schema_fingerprint
     from .previews import available
 
+    matches, unreadable = [], 0
+    for path in available():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            if not isinstance(payload, dict) or payload.get("kind") != "gformbot-run":
+                continue
+            saved, answers = _load_plan(path)
+            if config is not None and schema_fingerprint(saved) != schema_fingerprint(config):
+                continue
+            if len(saved._submitted_indices) == saved.count:
+                continue
+            # A journal row also records a definite failure on the first response.
+            if started_only and not (
+                saved._submission_started or saved._submitted_indices or saved._outcomes
+            ):
+                continue
+            created = datetime.fromisoformat(payload["created_at"]).timestamp()
+            matches.append((created, SavedPreview(path, saved, answers)))
+        except (ValueError, OSError, KeyError, TypeError, OverflowError):
+            unreadable += 1
+    matches.sort(key=lambda item: (item[0], str(item[1].path)), reverse=True)
+    return matches, unreadable
+
+
+def _batch_label(batch):
+    saved = batch.config
+    confirmed = set(saved._submitted_indices)
+    uncertain = sum(
+        index not in confirmed and state in {"attempted", "reviewing", "uncertain"}
+        for index, state in saved._outcomes.items()
+    )
+    remaining = saved.count - len(confirmed) - uncertain
+    status = f"{len(confirmed)}/{saved.count} submitted"
+    if uncertain:
+        status += f" · {uncertain} needs checking"
+    return f"{saved.form_title or 'Untitled form'} | {status} · {remaining} remaining | {batch.path.name}"
+
+
+def _select_saved_preview(config=None, *, started_only=False):
+    from .inspector import schema_fingerprint
+
     while True:
-        matches = []
-        unreadable = 0
-        for path in available():
-            try:
-                saved, answers = _load_plan(path)
-                if config is not None and schema_fingerprint(saved) != schema_fingerprint(config):
-                    continue
-                if len(saved._submitted_indices) == saved.count:
-                    continue
-                payload = json.loads(path.read_text(encoding="utf-8-sig"))
-                created = datetime.fromisoformat(payload["created_at"]).timestamp()
-                matches.append((created, SavedPreview(path, saved, answers)))
-            except (ValueError, OSError, KeyError, TypeError, OverflowError):
-                unreadable += 1
-        matches.sort(key=lambda item: (item[0], str(item[1].path)), reverse=True)
-        _info(
-            "Saved responses, newest first. Already submitted responses are skipped; response numbers stay the same."
-        )
+        matches, unreadable = _saved_batches(config, started_only=started_only)
+        _info("Saved response batches, newest first. Confirmed submissions are skipped.")
         if unreadable:
-            _info(f"Skipped {unreadable} unreadable or unrelated JSON file(s).")
-        choices = [
-            _choice(
-                batch,
-                f"{datetime.fromtimestamp(created).strftime('%Y-%m-%d %H:%M')} | {batch.config.count - len(batch.config._submitted_indices)} remaining / {batch.config.count} total | {batch.path}",
-            )
-            for created, batch in matches
-        ]
+            _info(f"Skipped {unreadable} unreadable response file(s).")
+        choices = [_choice(batch, _batch_label(batch)) for _, batch in matches]
         if not choices:
-            _info("No matching saved responses found. Save some responses first, or open a CSV.")
+            _info(
+                "No unfinished response batches found."
+                if started_only
+                else "No matching saved responses found. Save some responses first, or open a CSV."
+            )
         choices += [_choice("refresh", "Refresh saved responses"), _choice("back", "Back")]
-        selected = _ask_select("Saved responses", choices)
+        selected = _ask_select("Continue response batch" if started_only else "Saved responses", choices)
         if selected == "refresh":
             continue
         if selected == "back":
             return None
-        # Validate again in case the file changed while the menu was open.
+        # Recheck progress and schema if another process changed the selected file.
         try:
             saved, answers = _load_plan(selected.path)
             if config is not None and schema_fingerprint(saved) != schema_fingerprint(config):
                 raise ValueError("This preview now describes another form.")
+            if len(saved._submitted_indices) == saved.count:
+                raise ValueError("This batch has already finished.")
+            if started_only and not (
+                saved._submission_started or saved._submitted_indices or saved._outcomes
+            ):
+                raise ValueError("This batch has not started submission.")
             return SavedPreview(selected.path, saved, answers)
         except ValueError as exc:
             _info(str(exc))
@@ -985,31 +899,20 @@ def _prepare_source(config, source):
     from .access import require_public_form
 
     require_public_form(config)
-    if source in {"generate", "enlarge", "fresh", "reference"}:
-        reference = (
-            None
-            if source == "fresh"
-            else _reference_prompt(config, required=source in {"enlarge", "reference"})
+    if source in {"fresh", "reference"}:
+        steps = [lambda _: _reference_prompt(config, required=True)] if source == "reference" else []
+        *reference, instructions = prompt_steps(
+            *steps, lambda _: _ask_text("Extra instructions (optional, e.g. what to match in your CSV)")
         )
-        instructions = _ask_text("Extra instructions (optional, e.g. what to match in your CSV)")
-        if source == "enlarge":
-            instructions = (
-                "Generate additional fictional profiles; avoid merely copying entire reference rows. "
-                + instructions
-            )
-        answers = _generate(config, reference, instructions)
+        answers = _generate(config, reference[0] if reference else None, instructions)
         from .generator import write_csv
 
-        output = _available_path(
-            "gformbot-additional.csv" if source == "enlarge" else "gformbot-generated.csv"
-        )
+        output = _available_path("gformbot-generated.csv")
         write_csv(config, answers, output)
         config._generated_artifacts = [output]
         _info(f"CSV saved: {output.resolve()}")
         return answers
     if source == "own":
-        from .generator import prepare_responses
-
         while True:
             kind = _ask_select(
                 "Use my own answers",
@@ -1022,15 +925,28 @@ def _prepare_source(config, source):
             )
             if kind == "back":
                 return None
-            if kind == "csv":
-                break
-            selected = _select_saved_preview(config)
+            try:
+                if kind == "csv":
+                    return _own_csv_answers(config)
+                selected = _select_saved_preview(config)
+            except PromptBack:
+                continue
             if selected is not None:
                 return selected
+    return _random_answers(config)
+
+
+def _own_csv_answers(config):
+    from .generator import prepare_responses
+
+    def read(_):
         path = _select_csv()
         profiles = _import_profiles(config, path)
         config.pool_file = str(path)
-        mode = _ask_select(
+        return profiles
+
+    def sampling(_):
+        return _ask_select(
             "How should rows be chosen from your CSV?",
             [
                 _choice("ordered", "Use rows in order"),
@@ -1039,54 +955,79 @@ def _prepare_source(config, source):
             ],
             default="ordered",
         )
-        if getattr(config, "_prompt_csv_count", False):
-            limit = min(config.max_runs, len(profiles)) if mode in {"ordered", "shuffle"} else config.max_runs
-            config.count = _ask_number("Number of responses", min(config.count, limit), max_val=limit)
-        if mode in {"ordered", "shuffle"} and config.count > len(profiles):
-            _info(f"The CSV has {len(profiles)} rows. Choose a count within that range.")
-            config.count = _ask_number(
-                "Number of responses",
-                min(config.count, len(profiles)),
-                max_val=min(config.max_runs, len(profiles)),
-            )
-        return prepare_responses(config, profiles, sampling=mode)
+
+    def count(selected):
+        profiles, mode = selected
+        limit = config.max_runs if mode == "sample" else min(config.max_runs, len(profiles))
+        if getattr(config, "_prompt_csv_count", False) or config.count > limit:
+            return _ask_number("Number of responses", min(config.count, limit), max_val=limit)
+        return config.count
+
+    profiles, mode, config.count = prompt_steps(read, sampling, count)
+    return prepare_responses(config, profiles, sampling=mode)
+
+
+def _random_answers(config):
     from .generator import CHOICE_TYPES, apply_reference_weights, make_answer
     from .routing import Routing
 
     routes = Routing(config)
 
     other = [q for q in config.questions if q.qtype not in CHOICE_TYPES and q.fixed_value is None]
-    use_ai = False
-    if other:
+
+    def other_answers():
         _info(
             "Random selection supports multiple choice, checkboxes, dropdowns and numeric scales. This form also has text or date questions."
         )
-        use_ai = _ask_confirm("Auto-generate answers for the other questions?")
-        if not use_ai and not routes.enabled and any(q.required for q in other):
+        if _ask_confirm("Auto-generate answers for the other questions?"):
+            return True
+        if not routes.enabled and any(q.required for q in other):
             _info(
                 "Required written/date answers need AI or supplied fixed values. Optional answers may stay blank."
             )
             return None
-    reference = _reference_prompt(config)
-    instructions = _ask_text("Additional instructions for written answers (optional)") if use_ai else ""
-    if reference:
-        apply_reference_weights(config, reference)
-    distribution = _ask_select(
-        "How often should each choice be picked?",
-        [
-            _choice("auto", "Automatic (follow your CSV, or use equal chances)"),
-            _choice("manual", "Set the chances myself"),
-        ],
-        default="auto",
-    )
-    if distribution == "manual":
-        _configure_weights(config)
+        return False
+
+    def distribution(selected):
+        mode = _ask_select(
+            "How often should each choice be picked?",
+            [
+                _choice("auto", "Automatic (follow your CSV, or use equal chances)"),
+                _choice("manual", "Set the chances myself"),
+            ],
+            default="auto",
+        )
+        if selected[0]:
+            apply_reference_weights(config, selected[0])
+        return mode
+
+    def weights(selected):
+        if selected[-1] == "manual":
+            _configure_weights(config)
+
+    while True:
+        use_ai = other_answers() if other else False
+        if use_ai is None:
+            return None
+        steps = (
+            [lambda _: _ask_text("Additional instructions for written answers (optional)")] if use_ai else []
+        )
+        try:
+            reference, *extra, mode, _ = prompt_steps(
+                lambda _: _reference_prompt(config), *steps, distribution, weights
+            )
+        except PromptBack:
+            if other:
+                continue
+            raise
+        break
+    instructions = extra[0] if extra else ""
     validate_config(config)
     import random
 
     partials = []
     for _ in range(config.count):
-        reference_row = random.choice(reference) if reference and distribution == "auto" else None
+        reference_row = random.choice(reference) if reference and mode == "auto" else None
         row = (
             make_answer(config, routing=routes, partial=True)
             if reference_row is None
@@ -1106,69 +1047,117 @@ def _prepare_source(config, source):
 
 def _wizard():
     _print_banner()
+    _info("Arrow keys to choose, Enter to select, Backspace twice to go back.")
+    while True:
+        choices = [_choice("quick", "Quick submit"), _choice("new", "Start a new form")]
+        if _saved_batches(started_only=True)[0]:
+            choices.append(_choice("saved", "Continue response batch"))
+        try:
+            task = _ask_select(
+                "Start",
+                choices + [_choice("more", "More options"), _choice("exit", "Exit")],
+                default="new",
+            )
+            if task == "exit":
+                return
+            if task == "quick":
+                _quick_submit()
+            elif task == "new":
+                _new_batch_wizard()
+            elif task == "saved":
+                _resume_batch()
+            elif task == "more":
+                _more_options()
+        except PromptBack:
+            continue
+
+
+def _resume_batch():
+    while selected := _select_saved_preview(started_only=True):
+        try:
+            _manage_batch(selected.config, selected.answers, selected.path)
+        except PromptBack:
+            continue
+        return
+
+
+def _quick_reference():
+    while _ask_confirm("Use a CSV as a guide? (optional)", completed=True):
+        try:
+            return _select_csv("Choose reference CSV")
+        except (PromptBack, FileSelectionCancelled):
+            pass
+    return None
+
+
+def _quick_submit():
+    _section("Quick submit")
+    _info("GFormBot will generate and submit responses automatically after the last prompt.")
+    url, count, message, like = prompt_steps(
+        lambda _: _url_prompt(completed=True),
+        lambda _: _ask_number("Number of responses", completed=True),
+        lambda _: _ask_text("Extra instructions (optional)", completed=True),
+        lambda _: _quick_reference(),
+    )
+    try:
+        _submit_command(url, count, message, like, None, None)
+    except ValueError as exc:
+        console.print(Text(f"Quick submit could not finish: {exc}", style="yellow"))
+
+
+def _more_options():
     while True:
         task = _ask_select(
-            "Start",
+            "More options",
             [
-                _choice("new", "Create new responses"),
-                _choice("saved", "Open saved responses"),
-                _choice("generation", "Open saved AI work"),
                 _choice("inspect", "View a form's questions"),
                 _choice("doctor", "Check setup"),
-                _choice("exit", "Exit"),
+                _choice("back", "Back"),
             ],
-            default="new",
         )
-        if task == "exit":
+        if task == "back":
             return
-        if task == "new":
-            return _new_batch_wizard()
-        if task == "saved":
-            selected = _select_saved_preview()
-            if selected:
-                return _manage_batch(selected.config, selected.answers, selected.path, saved=True)
-        elif task == "generation":
-            from .previews import available
-
-            jobs = []
-            for path in available():
-                try:
-                    payload = json.loads(path.read_text(encoding="utf-8-sig"))
-                    if payload.get("kind") == "gformbot-generation":
-                        done = sum(row is not None for row in payload["responses"])
-                        count = payload["request"]["count"]
-                        status = "ready to save" if done == count else "responses ready"
-                        jobs.append(
-                            (path.stat().st_mtime, _choice(path, f"{path.name}: {done}/{count} {status}"))
-                        )
-                except (OSError, ValueError, KeyError, TypeError, AttributeError):
-                    continue
-            if not jobs:
-                _info("No saved AI work found.")
+        if task == "inspect":
+            try:
+                _run_inspect(_url_prompt())
+            except PromptBack:
                 continue
-            selected = _ask_select(
-                "Saved AI work (newest first)",
-                [item for _, item in sorted(jobs, key=lambda item: item[0], reverse=True)]
-                + [_choice("back", "Back")],
-            )
-            if selected != "back":
-                return _resume_generation(str(selected))
-        elif task == "inspect":
-            _run_inspect(_url_prompt())
-        else:
+            except ValueError as exc:
+                console.print(Text(str(exc), style="yellow"))
+        elif task == "doctor":
             doctor.callback()
 
 
 def _new_batch_wizard():
-    _print_banner()
-    _info("Arrow keys to choose; Enter to select; Ctrl+C to cancel.")
-    config = _run_inspect(_url_prompt())
-    from .routing import Routing
+    while True:
+        url = _url_prompt()
+        try:
+            with console.status("Reading form..."):
+                config = _run_inspect(url, display=False)
+        except ValueError as exc:
+            console.print(Text(str(exc), style="yellow"))
+            continue
+        _info(config.form_title or "Form ready")
+        config._prompt_csv_count = True
+        try:
+            _form_choices(config)
+        except PromptBack:
+            continue
+        return
 
-    Routing(config).choose_route(
-        {q.index: q.fixed_value for q in config.questions if q.fixed_value is not None}
+
+def _ai_source():
+    return _ask_select(
+        "How should AI create the answers?",
+        [
+            _choice("fresh", "Create new fictional responses"),
+            _choice("reference", "Use an existing CSV as a guide"),
+        ],
+        default="fresh",
     )
-    config._prompt_csv_count = True
+
+
+def _form_choices(config):
     while True:
         source = _ask_select(
             "Where should the answers come from?",
@@ -1176,26 +1165,29 @@ def _new_batch_wizard():
                 _choice("generate", "Generate answers with AI"),
                 _choice("own", "Use my own answers"),
                 _choice("random", "Pick answers randomly (best for choice questions)"),
+                _choice("inspect", "View this form's questions"),
             ],
             default="generate",
         )
-        if source == "generate":
-            source = _ask_select(
-                "How should AI create the answers?",
-                [
-                    _choice("fresh", "Create new fictional responses"),
-                    _choice("reference", "Follow an existing CSV's style and answer patterns"),
-                    _choice("enlarge", "Create extra responses based on an existing CSV"),
-                ],
-                default="fresh",
-            )
-        if source != "own":
-            config.count = _ask_number(
-                "Number of additional responses" if source == "enlarge" else "Number of responses",
-                max_val=config.max_runs,
-            )
+        if source == "inspect":
+            _show_form(config)
+            continue
+
+        def set_count(_):
+            config.count = _ask_number("Number of new responses", max_val=config.max_runs)
+
+        def prepare(selected, source=source):
+            picked = selected[0] if source == "generate" else source
+            return picked, _prepare_source(config, picked)
+
         try:
-            answers = _prepare_source(config, source)
+            if source == "own":
+                picked, answers = prepare([])
+            else:
+                steps = [lambda _: _ai_source()] if source == "generate" else []
+                *_, (picked, answers) = prompt_steps(*steps, set_count, prepare)
+        except PromptBack:
+            continue
         except FileSelectionCancelled:
             _info("No file chosen. Choose another way to get answers.")
             continue
@@ -1203,25 +1195,34 @@ def _new_batch_wizard():
             _info(f"Could not prepare responses: {exc}")
             _info("Choose another way to get answers and try again.")
             continue
-        if answers is not None:
-            break
-    config.log_file = "gformbot-runs.csv"
-    reusing_preview = isinstance(answers, SavedPreview)
-    if reusing_preview:
-        target, config, answers = answers.path, answers.config, answers.answers
-        _info(f"Reusing saved preview: {target}. Response count: {config.count}.")
-    else:
-        target = _save_plan(config, answers, source=source)
-    _manage_batch(config, answers, target, saved=reusing_preview)
+        if answers is None:
+            continue
+        config.log_file = "gformbot-runs.csv"
+        if isinstance(answers, SavedPreview):
+            target, batch_config, rows = answers.path, answers.config, answers.answers
+            _info(f"Reusing saved preview: {target}. Response count: {batch_config.count}.")
+        else:
+            batch_config, rows = config, answers
+            target = _save_plan(config, answers, source=picked)
+        try:
+            _manage_batch(batch_config, rows, target)
+        except PromptBack:
+            _info(f"Answers kept: {clean_path(target).resolve()}")
+            continue
+        return
 
 
 @click.group(invoke_without_command=True)
 @click.version_option(__version__, prog_name="gformbot")
 @click.pass_context
 def cli(ctx):
-    """Prepare, preview and fill Google Forms. No arguments starts the wizard."""
+    """Prepare and submit Google Forms. No arguments starts the wizard."""
     if ctx.invoked_subcommand is None:
-        _wizard()
+        token = wizard_navigation.set(True)
+        try:
+            _wizard()
+        finally:
+            wizard_navigation.reset(token)
 
 
 def _response_options(function):
@@ -1238,12 +1239,7 @@ def _response_options(function):
             type=click.IntRange(1, 500),
             help="Number of responses; uses saved settings or 1.",
         ),
-        click.option("-m", "--message", default="", help="Extra instructions for ChatGPT."),
-        click.option(
-            "--media-context",
-            default=None,
-            help="Describe visual information, or explicitly declare form media decorative.",
-        ),
+        click.option("-m", "--message", default="", help="Extra instructions for AI answers."),
         click.option(
             "--like",
             type=click.Path(exists=True, dir_okay=False),
@@ -1257,7 +1253,7 @@ def _response_options(function):
         click.option(
             "--browser",
             type=click.Choice(["auto", "chrome", "firefox", "edge"]),
-            help="Visible browser for ChatGPT or --halt review; submission uses HTTP.",
+            help="Browser for ChatGPT generation only.",
         ),
     ]
     for option in reversed(options):
@@ -1275,7 +1271,6 @@ def _command_answers(
     date_order=None,
     *,
     cleanup_on_success=True,
-    media_context=None,
 ):
     """Reuse the wizard's preparation path without its tables and questions."""
     from .generator import load_reference, prepare_responses
@@ -1297,8 +1292,6 @@ def _command_answers(
     config.requires_signin = current.requires_signin
     config.one_response = current.one_response
     config.email_collection = current.email_collection
-    if media_context is not None:
-        config.media_context = media_context
     if date_order is not None:
         config.csv_date_order = date_order
     if data and clean_path(data).suffix.lower() == ".json":
@@ -1336,7 +1329,7 @@ def _command_answers(
         answers = prepare_responses(config, load_reference(config, data), ordered=True)
     else:
         reference = load_reference(config, like) if like else None
-        answers = _generate(config, reference, message, browser=config.browser, progress=None, compact=True)
+        answers = _generate(config, reference, message, progress=None, compact=True)
     path = _save_plan(
         config,
         answers,
@@ -1349,7 +1342,6 @@ def _command_answers(
 
 @cli.command()
 @_response_options
-@click.option("--halt", is_flag=True, help="Fill visible forms without submitting, and leave them open.")
 def generate(
     url,
     count,
@@ -1357,11 +1349,13 @@ def generate(
     like,
     data,
     browser,
-    halt,
     date_order=None,
-    media_context=None,
 ):
-    """Generate answers and send them by HTTP. Use --halt for browser review."""
+    """Generate answers and submit them automatically over HTTP."""
+    _submit_command(url, count, message, like, data, browser, date_order)
+
+
+def _submit_command(url, count, message, like, data, browser, date_order=None):
     from .artifacts import digest
 
     config, answers, path, owned = _command_answers(
@@ -1372,19 +1366,15 @@ def generate(
         data,
         browser,
         date_order,
-        **({"media_context": media_context} if media_context is not None else {}),
     )
     remaining = _track_plan(config, answers, path, digest(path), interactive=False)
-    if halt:
-        _apply_browser(config, config.browser)
-        config.background = False
-    finished = _run_fill(config, answers=remaining, submit=not halt, halt=halt, compact=True)
+    finished = _run_submit(config, answers=remaining, compact=True)
     _finish_plan(path, config._plan_digest, keep_files=not owned or finished is False)
 
 
 @cli.command()
 @_response_options
-def prepare(url, count, message, like, data, browser, date_order=None, media_context=None):
+def prepare(url, count, message, like, data, browser, date_order=None):
     """Create and save response JSON without filling or submitting the form."""
     _, _, path, _ = _command_answers(
         url,
@@ -1395,7 +1385,6 @@ def prepare(url, count, message, like, data, browser, date_order=None, media_con
         browser,
         date_order,
         cleanup_on_success=False,
-        **({"media_context": media_context} if media_context is not None else {}),
     )
     _info(f'Ready. Open with: gformbot preview "{path.resolve()}"')
 
@@ -1419,10 +1408,6 @@ def preview(file):
                     config, answers = _load_plan(candidate)
                     count = len(answers) - len(config._submitted_indices)
                     label = f"{config.form_title} | {count} not submitted"
-                elif payload.get("kind") == "gformbot-generation":
-                    count = payload["request"]["count"]
-                    done = sum(row is not None for row in payload["responses"])
-                    label = f"AI work | {done}/{count} responses ready"
                 else:
                     continue
                 if count:
@@ -1445,92 +1430,6 @@ def preview(file):
         raise ValueError(f"Could not open {path}. Set a default application for JSON files.")
 
 
-def _resume_generation(checkpoint, resume=False, export=None):
-    """Resume a saved generation job, or export its valid partial results."""
-    from .generator import validate_answer, write_csv
-
-    path = clean_path(checkpoint)
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
-        if payload.get("kind") != "gformbot-generation" or payload.get("schema_version") != 1:
-            raise ValueError("Unknown generation checkpoint format.")
-        request = payload["request"]
-        config = config_from_dict(request["config"])
-        rows = payload["responses"]
-        if (
-            type(request["count"]) is not int
-            or not 1 <= request["count"] <= config.max_runs
-            or not isinstance(rows, list)
-            or len(rows) != request["count"]
-        ):
-            raise ValueError("Checkpoint response count is inconsistent.")
-        valid = [validate_answer(config, row) for row in rows if row is not None]
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        raise ValueError(f"Cannot open generation checkpoint: {exc}") from exc
-    if resume and export:
-        raise ValueError("Choose either continuing generation or exporting completed responses.")
-    _info(f"AI responses saved: {len(valid)}/{len(rows)}.")
-    if not resume and not export:
-        choice = _ask_select(
-            "Saved AI work",
-            [
-                _choice(
-                    "resume",
-                    "Continue creating the remaining responses"
-                    if len(valid) < len(rows)
-                    else "Save the completed responses for later",
-                ),
-                _choice("export", "Save completed responses as a CSV"),
-                _choice("back", "Back"),
-            ],
-            default="resume",
-        )
-        if choice == "back":
-            return
-        resume = choice == "resume"
-        if not resume:
-            export = str(_available_path("gformbot-partial.csv"))
-    if export:
-        if not valid:
-            raise ValueError("No completed profiles are available to export yet.")
-        if clean_path(export).suffix.lower() != ".csv":
-            raise ValueError("The export filename must end in .csv.")
-        _info(f"Export saved: {write_csv(config, valid, export).resolve()}")
-        return
-    from .ai import complete_responses, generate_responses
-
-    if len(valid) < len(rows):
-        from .access import require_public_form
-
-        require_public_form(config)
-    options = {
-        "reference": request.get("reference"),
-        "instructions": request.get("instructions", ""),
-        "checkpoint": path,
-        "browser": _generation_browser() if len(valid) < len(rows) else "auto",
-        "attention": _chatgpt_attention if sys.stdin.isatty() else None,
-        "progress": lambda done, total: _info(f"Generating responses: {done}/{total}"),
-    }
-    if len(valid) < len(rows):
-        _info("Resuming through ChatGPT; the saved form, instructions and reference context will be sent.")
-    else:
-        _info("All responses are ready. Saving your answers without opening a browser.")
-    partials = request.get("partials")
-    answers = (
-        complete_responses(config, partials, **options)
-        if partials is not None
-        else generate_responses(config, request["count"], **options)
-    )
-    config.count = len(answers)
-    output = _available_path("gformbot-generated.csv")
-    write_csv(config, answers, output)
-    plan = _save_plan(
-        config, answers, source="resumed-generation", cleanup_on_success=False, artifacts=[output]
-    )
-    _show_preview(config, answers)
-    _preview_instructions(plan)
-
-
 @cli.command()
 @click.option("--check", is_flag=True, help="Return an error if a required local prerequisite is missing.")
 def doctor(check=False):
@@ -1545,7 +1444,9 @@ def doctor(check=False):
     table.add_row("Python", sys.version.split()[0])
     installed = available_browsers()
     table.add_row("Execution", "Direct HTTP; no browser needed for supplied answers")
-    table.add_row("Browsers found", ", ".join(installed) or "None detected (needed for ChatGPT or review)")
+    table.add_row(
+        "Browsers found", ", ".join(installed) or "None detected (needed for ChatGPT generation only)"
+    )
     table.add_row("Default browser", detect_default_browser() if installed else "Unavailable")
     from .selenium_runtime import PACKAGE
 
@@ -1561,7 +1462,7 @@ def doctor(check=False):
             else "Missing" + (" (optional)" if module != "urllib3" else ""),
         )
     table.add_row("Output folder", "Writable" if os.access(Path.cwd(), os.W_OK) else "Not writable")
-    table.add_row("Driver", "Needed only for ChatGPT or review; resolved on first browser use")
+    table.add_row("Driver", "Needed for ChatGPT generation only; resolved on first browser use")
     console.print(table)
     if check and (missing or not os.access(Path.cwd(), os.W_OK)):
         raise click.ClickException(

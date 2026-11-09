@@ -1,4 +1,4 @@
-# Modified by GFormBot for its private Windows runtime; see NOTICE and tools/vendor_selenium.py.
+# Modified by GFormBot for its private runtime; see NOTICE and tools/vendor_selenium.py.
 # Licensed to the Software Freedom Conservancy (SFC) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -126,6 +126,13 @@ class SeleniumManager:
 
         if path is None or not path.is_file():
             raise WebDriverException(f"Unable to obtain working Selenium Manager binary; {path}")
+
+        # Editable/source installs may lose executable bits when copied from Windows.
+        if sys.platform != "win32" and env_path is None and not os.access(path, os.X_OK):
+            try:
+                path.chmod(path.stat().st_mode | 0o111)
+            except OSError as exc:
+                raise WebDriverException(f"Manager is not executable; run chmod +x {path}") from exc
 
         logger.debug(f"Selenium Manager binary found at: {path}")
 

@@ -2,7 +2,6 @@
 
 import copy
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -33,14 +32,15 @@ def test_malformed_validation_container_is_not_treated_as_no_rules(raw):
         parse_form_html(document([item]), URL)
 
 
-def test_invalid_answers_stop_before_browser_navigation():
+def test_invalid_answers_stop_before_opening_http_client(monkeypatch):
     from types import SimpleNamespace
 
-    from gformbot.filler import execute_response
+    from gformbot import transport
+    from gformbot.execution import Runner
 
-    driver = SimpleNamespace(get=lambda *a: pytest.fail("Invalid answers must not reach the browser"))
+    monkeypatch.setattr(transport, "Client", lambda *a: pytest.fail("Invalid answer opened a client"))
     with pytest.raises(ValueError, match="Number between"):
-        execute_response(driver, config([1, 7, ["0", "40"]]), {1: "41"})
+        Runner(config([1, 7, ["0", "40"]]), [{1: "41"}], SimpleNamespace()).run()
 
 
 @pytest.mark.parametrize(
@@ -176,7 +176,7 @@ def test_public_commands_enforce_supplied_rules(tmp_path, monkeypatch, rule, goo
     monkeypatch.chdir(tmp_path)
     c = config(rule)
     monkeypatch.setattr(cli, "_run_inspect", lambda *a, **kw: c)
-    monkeypatch.setattr(cli, "_run_fill", lambda config, **kw: False)
+    monkeypatch.setattr(cli, "_run_submit", lambda config, **kw: False)
     csv = tmp_path / "data.csv"
     csv.write_text("Q1\n" + good + "\n", encoding="utf-8")
     runner = CliRunner()
@@ -185,72 +185,3 @@ def test_public_commands_enforce_supplied_rules(tmp_path, monkeypatch, rule, goo
     before = csv.read_bytes()
     result = runner.invoke(cli.cli, [command, URL, "--data", str(csv)])
     assert result.exit_code != 0 and csv.read_bytes() == before
-
-
-@pytest.mark.browser
-@pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Enable local browser fixtures.")
-def test_supported_regex_semantics_match_google_javascript_wrappers(html_page):
-    from gformbot.browser import get_driver
-    from gformbot.patterns import matches
-
-    patterns = [
-        "cat",
-        "cat|dog",
-        "(?:cat|dog)",
-        r"\d+",
-        r"\w+",
-        r"\bcat\b",
-        r"\s",
-        r"\S",
-        r"[^a]",
-        r"[A-Z\s]+",
-        r"a.*b",
-        r"^a$",
-        r"\u00e9",
-        r"\x61",
-        r"[0-9]{2,3}",
-        r"a+?",
-        r"a(?=b)",
-        r"a(?!b)",
-        "😀",
-        ".",
-    ]
-    values = [
-        "cat",
-        "a cat!",
-        "dog",
-        "cat\n",
-        "a\r\nb",
-        "ab",
-        "aaa",
-        "abc",
-        "١٢",
-        "12",
-        "é",
-        "😀",
-        "\ufeff",
-        "\u00a0",
-        "\u2028",
-        " ",
-        "A B",
-    ]
-    cases = []
-    compiled = []
-    for op in (299, 300, 301, 302):
-        for pattern in patterns:
-            rule = text_rules(config([4, op, [pattern]]).questions[0])[0]
-            for value in values:
-                cases.append([rule.pattern, value])
-                compiled.append((rule.compiled, value))
-    driver = get_driver("chrome")
-    try:
-        driver.get(html_page("<!doctype html><html><body>Regex conformance fixture</body></html>"))
-        expected = driver.execute_script(
-            "return arguments[0].map(([pattern,value])=>new RegExp(pattern).test(value))", cases
-        )
-        actual = [matches(pattern, value) for pattern, value in compiled]
-        assert actual == expected, [
-            (case, a, e) for case, a, e in zip(cases, actual, expected, strict=True) if a != e
-        ][:5]
-    finally:
-        driver.quit()

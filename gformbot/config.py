@@ -63,11 +63,8 @@ class RunConfig:
     questions: list[QuestionConfig] = field(default_factory=list)
     count: int = 1
     browser: str = "auto"
-    background: bool = False
     min_delay: float = 0.25
     max_delay: float = 0.75
-    page_delay_min: float = 0.0
-    page_delay_max: float = 0.0
     max_runs: int = 500
     log_file: str = "gformbot-runs.csv"
     sections: list[str] = field(default_factory=list)
@@ -81,7 +78,6 @@ class RunConfig:
     section_ids: list[str] = field(default_factory=list)
     section_next: list[int] = field(default_factory=list)
     media: list[dict] = field(default_factory=list)
-    media_context: str = ""
 
 
 def validate_config(config: RunConfig) -> None:
@@ -119,8 +115,6 @@ def validate_config(config: RunConfig) -> None:
         "edge",
     }:
         raise ValueError("Browser must be auto, chrome, firefox or edge.")
-    if not isinstance(config.background, bool):
-        raise ValueError("background must be true or false.")
     for name in ("form_title", "form_description", "confirmation_text"):
         if not isinstance(getattr(config, name), str):
             raise ValueError(f"{name} must be text.")
@@ -154,7 +148,7 @@ def validate_config(config: RunConfig) -> None:
             or not isinstance(note["description"], str)
         ):
             raise ValueError("Each instruction needs page, before_question, title, and description.")
-    for low, high in ((config.min_delay, config.max_delay), (config.page_delay_min, config.page_delay_max)):
+    for low, high in ((config.min_delay, config.max_delay),):
         if (
             any(
                 isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
@@ -339,16 +333,11 @@ def config_from_schema(schema) -> RunConfig:
 
 def config_to_dict(config: RunConfig) -> dict:
     value = asdict(config)
-    # Accepted by older callers/config files, but these settings never affected
-    # execution. Do not advertise inert knobs in newly written configuration.
-    value.pop("page_delay_min")
-    value.pop("page_delay_max")
     for q in value["questions"]:
         q["type"] = q.pop("qtype")
     setting_names = (
         "count",
         "browser",
-        "background",
         "min_delay",
         "max_delay",
         "max_runs",
@@ -370,12 +359,18 @@ def config_from_dict(value: dict) -> RunConfig:
     if not isinstance(settings, dict):
         raise ValueError("run_settings must be an object.")
     data.update(settings)
-    # Read old saved work without carrying the retired browser mode into new files.
-    if "headless" in data:
-        if type(data.pop("headless")) is not bool:
-            raise ValueError("The retired headless setting must be true or false.")
+    # Older plans stored a separate media prompt. Keep their answers and ignore that prompt.
+    data.pop("media_context", None)
+    # Retired browser settings are consumed only for saved-file compatibility.
+    for name in ("headless", "background"):
+        if name in data and type(data.pop(name)) is not bool:
+            raise ValueError(f"The retired {name} setting must be true or false.")
+    for name in ("page_delay_min", "page_delay_max"):
+        data.pop(name, None)
     if data.get("browser") == "headless":
         data["browser"] = "auto"
+    if isinstance(data.get("browser"), str) and data["browser"] in {"auto-background", "chrome-background"}:
+        data["browser"] = data["browser"].removesuffix("-background")
     questions = data.pop("questions", [])
     if not isinstance(questions, list):
         raise ValueError("questions must be a list.")

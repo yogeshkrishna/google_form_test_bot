@@ -31,14 +31,14 @@ def batch(tmp_path, monkeypatch):
 
 def test_startup_saved_batch_needs_no_url_or_form_read(batch, monkeypatch):
     config, rows, path = batch
-    choices = iter(["saved"])
+    choices = iter(["saved", "exit"])
     monkeypatch.setattr(cli, "_ask_select", lambda *a, **k: next(choices))
-    monkeypatch.setattr(cli, "_select_saved_preview", lambda: cli.SavedPreview(path, config, rows))
+    monkeypatch.setattr(cli, "_select_saved_preview", lambda **kw: cli.SavedPreview(path, config, rows))
     monkeypatch.setattr(cli, "_url_prompt", lambda: pytest.fail("offline resume requested a URL"))
     calls = []
     monkeypatch.setattr(cli, "_manage_batch", lambda *a, **k: calls.append((a, k)))
     cli._wizard()
-    assert calls == [((config, rows, path), {"saved": True})]
+    assert calls == [((config, rows, path), {})]
 
 
 def test_saved_batches_can_list_without_inspecting_form(batch, monkeypatch):
@@ -63,26 +63,13 @@ def test_saved_batches_can_list_without_inspecting_form(batch, monkeypatch):
 def test_manage_saved_batch_export_inspect_and_back_preserves_input(batch, monkeypatch):
     config, rows, path = batch
     original = path.read_bytes()
-    choices = iter(["export", "inspect", "back"])
-    monkeypatch.setattr(cli, "_next_action", lambda **k: next(choices))
+    choices = iter(["export", "back"])
+    monkeypatch.setattr(cli, "_next_action", lambda count: next(choices))
     monkeypatch.setattr(cli, "_ask_number", lambda *a, **k: 2)
     config._submitted_indices = [1]
-    cli._manage_batch(config, rows, path, saved=True)
+    cli._manage_batch(config, rows, path)
     assert path.read_bytes() == original
     assert generator.load_reference(config, path.parent / "gformbot-export.csv") == rows[1:]
-
-
-def test_edit_creates_new_identity_and_preserves_other_rows(batch, monkeypatch):
-    config, rows, path = batch
-    original = path.read_bytes()
-    choices = iter([2, 2])
-    monkeypatch.setattr(cli, "_ask_select", lambda *a, **k: next(choices))
-    monkeypatch.setattr(cli, "_ask_text", lambda *a, **k: "Edited")
-    fresh, edited, output = cli._edit_batch(config, rows, path)
-    assert path.read_bytes() == original
-    assert edited == [rows[0], {1: "B", 2: "Edited"}]
-    assert fresh.count == 2 and output != path
-    assert json.loads(output.read_text())["batch_id"] != json.loads(original)["batch_id"]
 
 
 def test_optional_written_answers_can_stay_blank_without_ai(batch, monkeypatch):
@@ -106,13 +93,6 @@ def test_optional_csv_mapping_requires_explicit_blank_acknowledgement(batch, mon
     monkeypatch.setattr(cli, "_ask_select", choose)
     assert cli._mapping(config, ["Unrelated"]) == {1: None, 2: None}
     assert len(seen) == 1 and seen[0][1] == "map"
-
-
-def test_visible_browser_choice_clears_saved_background_setting(batch):
-    config, _, _ = batch
-    config.background = True
-    cli._apply_browser(config, "chrome")
-    assert config.browser == "chrome" and not config.background
 
 
 def test_preview_rejects_execution_overrides(batch):

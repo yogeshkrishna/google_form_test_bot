@@ -16,7 +16,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from .access import FormAccessError, check_browser_access, raise_for_access
+from .access import FormAccessError, raise_for_access
 from .media import inspect_media
 from .validation import checkbox_bounds, date_settings, is_checkbox_rule, text_rules, time_settings
 
@@ -383,28 +383,20 @@ def parse_form_html(document: str, url: str) -> FormSchema:
     return form
 
 
-def inspect_form(url: str, status_cb=None, timeout: int = 30, *, driver=None) -> FormSchema:
+def inspect_form(url: str, status_cb=None, timeout: int = 30) -> FormSchema:
     requested = clean_url(url)
     if status_cb:
         status_cb("Reading all form questions and constraints…")
     try:
-        if driver is not None:
-            driver.get(requested)
-            check_browser_access(driver)
-            final_url = clean_url(driver.current_url, allow_short=False)
-            document = driver.page_source
-            if len(document) > 10_000_000:
+        request = Request(requested, headers={"User-Agent": "gformbot (form inspection)"})
+        with urlopen(request, timeout=timeout) as response:
+            raise_for_access(url=response.url, status=getattr(response, "status", None))
+            raw = response.read(10_000_001)
+            if len(raw) > 10_000_000:
                 raise ValueError("The responder page is too large to inspect safely.")
-        else:
-            request = Request(requested, headers={"User-Agent": "gformbot (form inspection)"})
-            with urlopen(request, timeout=timeout) as response:
-                raise_for_access(url=response.url, status=getattr(response, "status", None))
-                raw = response.read(10_000_001)
-                if len(raw) > 10_000_000:
-                    raise ValueError("The responder page is too large to inspect safely.")
-                encoding = response.headers.get_content_charset() or "utf-8"
-                document = raw.decode(encoding)
-                final_url = clean_url(response.url, allow_short=False)
+            encoding = response.headers.get_content_charset() or "utf-8"
+            document = raw.decode(encoding)
+            final_url = clean_url(response.url, allow_short=False)
         schema = parse_form_html(document, final_url)
         if status_cb:
             status_cb(f"Read {len(schema.questions)} questions across {schema.pages} section(s).")

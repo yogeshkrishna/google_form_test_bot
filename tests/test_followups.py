@@ -7,7 +7,7 @@ import pytest
 from click.testing import CliRunner
 from rich.console import Console
 
-from gformbot import cli, filler
+from gformbot import cli
 from gformbot.followups import Recorder, safe_url
 from gformbot.state import Journal
 
@@ -58,24 +58,33 @@ def test_existing_journal_upgrade_and_retry_deduplication(tmp_path):
     assert Journal("other").followups(log_path=str(tmp_path / "other.csv")) == []
 
 
-class Page:
-    def __init__(self, blocks):
-        self.blocks = blocks
-        self.current_url = "https://example.test/viewform"
-
-    def execute_script(self, script, *args):
-        return self.blocks
-
-
 def recorder(tmp_path):
     return Recorder(Journal("batch"), str(tmp_path / "runs.csv"), "Form")
 
 
 def test_summary_is_short_full_log_keeps_every_description(tmp_path):
     notes = recorder(tmp_path)
-    notes.observe(Page([{"text": "Long question instructions", "links": []}]), 7, 1, "section")
-    notes.observe(Page([{"text": "click here", "links": ["https://discord.gg/abc"]}]), 7, 1, "section")
-    notes.observe(Page([{"text": "Your response has been recorded.", "links": []}]), 7, 0, "confirmation")
+    notes.record(
+        [{"text": "Long question instructions", "links": []}],
+        7,
+        1,
+        "section",
+        "https://example.test/viewform",
+    )
+    notes.record(
+        [{"text": "click here", "links": ["https://discord.gg/abc"]}],
+        7,
+        1,
+        "section",
+        "https://example.test/viewform",
+    )
+    notes.record(
+        [{"text": "Your response has been recorded.", "links": []}],
+        7,
+        0,
+        "confirmation",
+        "https://example.test/viewform",
+    )
     messages = []
     notes.show(SimpleNamespace(_info=messages.append))
     output = "\n".join(messages)
@@ -93,7 +102,7 @@ def test_unicode_display_and_storage_failure_do_not_escape(tmp_path, monkeypatch
     monkeypatch.setattr(
         notes.journal, "record_followups", lambda *args: (_ for _ in ()).throw(OSError("secret"))
     )
-    notes.observe(Page([{"text": "வணக்கம் नमस्ते", "links": []}]), 3, 0, "confirmation")
+    notes.record([{"text": "வணக்கம் नमस्ते", "links": []}], 3, 0, "confirmation", "https://example.test/viewform")
     stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
     console = Console(file=stream, force_terminal=False)
     notes.show(SimpleNamespace(console=console, _info=console.print))
@@ -103,41 +112,10 @@ def test_unicode_display_and_storage_failure_do_not_escape(tmp_path, monkeypatch
     assert "could not" in data.lower()
 
 
-def test_manual_confirmation_only_collects_after_live_positive_check(tmp_path, monkeypatch):
-    from gformbot.execution import Runner
-
-    config = SimpleNamespace(
-        url="https://example.test/viewform",
-        confirmation_text="",
-        log_file=str(tmp_path / "runs.csv"),
-        form_title="Form",
-    )
-    runner = Runner(config, [{}], SimpleNamespace(_info=lambda text: None))
-    page = Page([{"text": "Email the coordinator", "links": []}])
-    monkeypatch.setattr("gformbot.access.check_browser_access", lambda *args: None)
-    monkeypatch.setattr(filler, "_positive_confirmation", lambda *args: False)
-    assert runner.confirmed(page, 1) is False
-    assert runner.followups.journal.followups() == []
-    monkeypatch.setattr(filler, "_positive_confirmation", lambda *args: True)
-    assert runner.confirmed(page, 1) is True
-    assert runner.followups.journal.followups()[0]["stage"] == "confirmation"
-
-
 def test_failed_display_does_not_escape(tmp_path):
     notes = recorder(tmp_path)
-    notes.observe(Page([{"text": "Next step", "links": []}]), 1, 0, "confirmation")
+    notes.record([{"text": "Next step", "links": []}], 1, 0, "confirmation", "https://example.test/viewform")
     notes.show(SimpleNamespace(_info=lambda text: (_ for _ in ()).throw(OSError("closed stream"))))
-
-
-def test_manual_reconciliation_does_not_invent_a_confirmation(tmp_path, monkeypatch):
-    from gformbot.execution import Runner
-
-    config = SimpleNamespace(log_file=str(tmp_path / "runs.csv"), form_title="Form")
-    session = SimpleNamespace(identity="batch", ids=[17], digest="digest", confirm=lambda index: None)
-    runner = Runner(config, [{}], SimpleNamespace(), session)
-    monkeypatch.setattr(runner, "log", lambda *args: None)
-    runner.confirm(1)
-    assert runner.followups.journal.followups() == []
 
 
 def test_log_limits_responses_and_keeps_custom_logs_separate(tmp_path):
@@ -153,15 +131,13 @@ def test_log_limits_responses_and_keeps_custom_logs_separate(tmp_path):
 
 def test_text_urls_are_sanitized_without_logging_raw_errors(tmp_path):
     notes = recorder(tmp_path)
-    page = Page(
-        [
-            {
-                "text": "Visit https://name:PRIVATE@example.test or https://example.test/?token=PRIVATE",
-                "links": [],
-            }
-        ]
-    )
-    notes.observe(page, 1, 0, "confirmation")
+    blocks = [
+        {
+            "text": "Visit https://name:PRIVATE@example.test or https://example.test/?token=PRIVATE",
+            "links": [],
+        }
+    ]
+    notes.record(blocks, 1, 0, "confirmation", "https://example.test/viewform")
     records = notes.journal.followups()
     assert "PRIVATE" not in str(records)
     assert "REDACTED" in str(records)
@@ -180,7 +156,13 @@ def test_confirmation_navigation_is_not_a_followup_link():
 
 def test_plain_text_links_also_appear_in_the_short_summary(tmp_path):
     notes = recorder(tmp_path)
-    notes.observe(Page([{"text": "Join https://discord.gg/public.", "links": []}]), 1, 1, "section")
+    notes.record(
+        [{"text": "Join https://discord.gg/public.", "links": []}],
+        1,
+        1,
+        "section",
+        "https://example.test/viewform",
+    )
     records = notes.journal.followups()
     assert records[0]["content"]["links"] == ["https://discord.gg/public"]
     messages = []

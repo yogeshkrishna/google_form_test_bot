@@ -102,6 +102,164 @@ def test_editor_lookup_survives_replaced_control():
     assert chatgpt._editor(Driver()) is visible
 
 
+def test_new_conversation_reuses_browser_and_requires_old_messages_to_disappear(monkeypatch):
+    events = []
+
+    class Driver:
+        def get(self, url):
+            events.append(url)
+
+    driver = Driver()
+
+    class Wait:
+        def __init__(self, actual, *args, **kwargs):
+            assert actual is driver
+
+        def until(self, ready):
+            assert ready(driver) is False
+            assert ready(driver) is True
+
+    messages = iter([[object()], []])
+    monkeypatch.setattr(chatgpt, "_messages", lambda d: next(messages))
+    monkeypatch.setattr(chatgpt, "WebDriverWait", Wait)
+    chatgpt.new_chat(driver)
+    assert events == ["https://chatgpt.com/"]
+
+
+def test_new_conversation_failure_stops_without_sending(monkeypatch):
+    class Driver:
+        def get(self, url):
+            raise chatgpt.WebDriverException("Offline")
+
+    with pytest.raises(chatgpt.ChatGPTError, match="fresh ChatGPT conversation"):
+        chatgpt.new_chat(Driver())
+
+
+@pytest.fixture
+def website(monkeypatch):
+    """A deterministic message stream without a browser or real waiting."""
+    from types import SimpleNamespace
+
+    clock = SimpleNamespace(now=0.0)
+    state = SimpleNamespace(prompt="", sends=0, streaming=False, content="", old=False, alert="")
+
+    class Element:
+        tag_name = "textarea"
+
+        def is_displayed(self):
+            return True
+
+        def is_enabled(self):
+            return True
+
+        def click(self):
+            pass
+
+        def get_attribute(self, name):
+            return state.prompt
+
+    class Send(Element):
+        def click(self):
+            state.sends += 1
+
+    class Message:
+        text = "old response"
+
+        def __init__(self, old=False):
+            self.old = old
+
+        def get_dom_attribute(self, name):
+            return "" if not self.old and state.streaming else None
+
+        def find_elements(self, by, selector):
+            text = self.text if self.old else state.content
+            return [SimpleNamespace(get_attribute=lambda name: text)] if selector == "pre code" else []
+
+    class Driver:
+        def execute_script(self, code, editor, prompt):
+            state.prompt = prompt
+
+        def find_elements(self, by, selector):
+            if selector.startswith("#prompt"):
+                return [Element()]
+            if "data-message-author-role" in selector:
+                old = [Message(old=True)] if state.old else []
+                return old + ([Message()] if state.sends and state.content else [])
+            if "send-button" in selector:
+                return [Send()]
+            if "stop-button" in selector:
+                return [Element()] if state.streaming else []
+            if selector == "[role='alert']" and state.alert:
+                return [SimpleNamespace(text=state.alert, is_displayed=lambda: True)]
+            return []
+
+    class Wait:
+        def __init__(self, driver, timeout, **kwargs):
+            self.driver, self.timeout = driver, timeout
+
+        def until(self, ready):
+            deadline = clock.now + self.timeout
+            while clock.now < deadline:
+                result = ready(self.driver)
+                if result:
+                    return result
+                clock.now += 0.2
+            raise chatgpt.TimeoutException()
+
+    monkeypatch.setattr(chatgpt.time, "monotonic", lambda: clock.now)
+    monkeypatch.setattr(chatgpt, "WebDriverWait", Wait)
+    return Driver(), state, clock
+
+
+def test_ask_waits_for_stable_reply_and_sends_only_current_prompt(website):
+    driver, state, clock = website
+    state.content = '{"profile_id":7,"answers":{"1":"A"}}'
+    result = chatgpt.ask(driver, [{"content": "Create profile 7 using the previous form."}], timeout=2)
+    assert result == state.content
+    assert state.prompt == "Create profile 7 using the previous form."
+    assert state.sends == 1
+    assert clock.now >= 0.6
+
+
+def test_timeout_exposes_only_new_partial_content_without_resending(website):
+    driver, state, _ = website
+    state.old = True
+    state.streaming = True
+    state.content = '{"profile_id":1,"answers":{"1":"A"}}\n{"profile_id":2'
+    with pytest.raises(chatgpt.ChatGPTError) as failure:
+        chatgpt.ask(driver, [{"content": "Create profiles 1 and 2."}], timeout=1)
+    assert failure.value.partial_content == state.content
+    assert state.sends == 1
+
+
+def test_missing_reply_never_salvages_previous_conversation_message(website):
+    driver, state, _ = website
+    state.old = True
+    with pytest.raises(chatgpt.ChatGPTError) as failure:
+        chatgpt.ask(driver, [{"content": "Next batch."}], timeout=1)
+    assert failure.value.partial_content == ""
+    assert state.sends == 1
+
+
+def test_site_limit_alert_stops_without_resending(website):
+    driver, state, _ = website
+    state.alert = "Message limit reached"
+    with pytest.raises(chatgpt.ChatGPTError, match="Message limit reached"):
+        chatgpt.ask(driver, [{"content": "Next batch."}], timeout=1)
+    assert state.sends == 1
+
+
+def test_site_alert_after_partial_reply_is_fatal_even_without_streaming_controls(website):
+    driver, state, _ = website
+    state.old = True
+    state.content = '{"profile_id":1,"answers":{"1":"A"}}\n{"profile_id":2'
+    state.alert = "Connection lost"
+    with pytest.raises(chatgpt.ChatGPTError, match="Connection lost") as failure:
+        chatgpt.ask(driver, [{"content": "Create profiles 1 and 2."}], timeout=2)
+    assert failure.value.partial_content == state.content
+    assert state.sends == 1
+
+
 @pytest.mark.browser
 @pytest.mark.skipif(
     os.environ.get("GFORMBOT_BROWSER_TESTS") != "1",

@@ -16,6 +16,16 @@ class UncertainSubmission(ValueError):
     """A previous attempt needs a human decision before it can be repeated."""
 
 
+def _content_digest(payload):
+    return hashlib.sha256(
+        json.dumps(
+            {k: payload.get(k) for k in ("form_fingerprint", "responses")},
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode()
+    ).hexdigest()
+
+
 def batch_id(payload: dict) -> str:
     explicit = payload.get("batch_id")
     if explicit is not None:
@@ -45,9 +55,6 @@ class Journal:
             )
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS batches (batch TEXT PRIMARY KEY, content TEXT NOT NULL)"
-            )
-            connection.execute(
-                "CREATE TABLE IF NOT EXISTS review_claims (batch TEXT NOT NULL, response INTEGER NOT NULL, token TEXT NOT NULL, PRIMARY KEY(batch,response))"
             )
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS followups (batch TEXT NOT NULL, response INTEGER NOT NULL, "
@@ -119,12 +126,18 @@ class Journal:
             for b, r, s, t, c, title in rows
         ]
 
-    def set(self, index: int, state: str, *, from_review=None):
+    def set(self, index: int, state: str, *, expected_content=None, check_current=None):
         if state not in {"prepared", "reviewing", "attempted", "confirmed", "uncertain"}:
             raise ValueError("Unknown execution state.")
         try:
             with self._connect() as connection:
                 connection.execute("BEGIN IMMEDIATE")
+                if expected_content is not None:
+                    bound = connection.execute(
+                        "SELECT content FROM batches WHERE batch=?", (self.identity,)
+                    ).fetchone()
+                    if bound != (expected_content,):
+                        raise ValueError("The batch was edited. Reopen it before submitting.")
                 previous = connection.execute(
                     "SELECT state FROM responses WHERE batch=? AND response=?", (self.identity, index)
                 ).fetchone()
@@ -132,45 +145,23 @@ class Journal:
                     raise UncertainSubmission(
                         f"Response {index} is confirmed and cannot be reset by a stale execution."
                     )
-                if from_review is not None:
-                    claim = connection.execute(
-                        "SELECT token FROM review_claims WHERE batch=? AND response=?", (self.identity, index)
-                    ).fetchone()
-                    if state != "attempted" or previous != ("reviewing",) or claim != (from_review,):
-                        raise UncertainSubmission(
-                            f"Response {index}'s review changed; reopen and reconcile it before submitting."
-                        )
                 if state in {"attempted", "reviewing"}:
                     current = previous
-                    own_review = state == "attempted" and from_review is not None
-                    if current and current[0] != "prepared" and not own_review:
+                    if current and current[0] != "prepared":
                         raise UncertainSubmission(
                             f"Response {index} is already {current[0]}; reconcile it before another attempt."
                         )
+                if check_current is not None:
+                    check_current()
                 connection.execute(
                     "INSERT INTO responses(batch,response,state) VALUES(?,?,?) ON CONFLICT(batch,response) DO UPDATE SET state=excluded.state",
                     (self.identity, index, state),
                 )
-                connection.execute(
-                    "DELETE FROM review_claims WHERE batch=? AND response=?", (self.identity, index)
-                )
-                token = uuid.uuid4().hex if state == "reviewing" else None
-                if token is not None:
-                    connection.execute(
-                        "INSERT INTO review_claims VALUES(?,?,?)", (self.identity, index, token)
-                    )
-                return token
         except (sqlite3.Error, OSError) as exc:
             raise ValueError(f"Cannot save submission state; execution stopped: {exc}") from exc
 
     def bind(self, payload):
-        signature = hashlib.sha256(
-            json.dumps(
-                {k: payload.get(k) for k in ("form_fingerprint", "responses")},
-                sort_keys=True,
-                ensure_ascii=False,
-            ).encode()
-        ).hexdigest()
+        signature = _content_digest(payload)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             previous = connection.execute(
@@ -182,6 +173,33 @@ class Journal:
                 )
             connection.execute(
                 "INSERT OR IGNORE INTO batches(batch,content) VALUES(?,?)", (self.identity, signature)
+            )
+
+    def edit(self, payload, index, answer, write):
+        """Serialize edits against submission claims; never reset response identities or outcomes."""
+        if type(index) is not int or not 1 <= index <= len(payload["responses"]):
+            raise ValueError("Choose an existing response number.")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            bound = connection.execute(
+                "SELECT content FROM batches WHERE batch=?", (self.identity,)
+            ).fetchone()
+            if bound is not None and bound != (_content_digest(payload),):
+                raise ValueError("This batch changed. Reopen it before editing.")
+            previous = connection.execute(
+                "SELECT state FROM responses WHERE batch=? AND response=?", (self.identity, index)
+            ).fetchone()
+            if index in payload.get("submitted_indices", []) or previous not in (None, ("prepared",)):
+                raise ValueError("This response is submitted or needs checking and cannot be edited.")
+            changed = {**payload, "responses": list(payload["responses"])}
+            changed["responses"][index - 1] = {str(key): value for key, value in answer.items()}
+            changed["batch_id"] = payload.get("batch_id") or self.identity
+            write(changed)
+            # An interrupted commit after the atomic file write leaves a binding
+            # mismatch, which stops execution rather than allowing stale answers.
+            connection.execute(
+                "INSERT INTO batches(batch,content) VALUES(?,?) ON CONFLICT(batch) DO UPDATE SET content=excluded.content",
+                (self.identity, _content_digest(changed)),
             )
 
 
@@ -218,11 +236,11 @@ class Session:
                 "The saved preview changed while you were reviewing it. Reopen it before running."
             )
         self.identity = batch_id(payload)
+        self.signature = _content_digest(payload)
         self.journal = Journal(self.identity)
         self.journal.bind(payload)
         self.confirmed = set(payload.get("submitted_indices", []))
         self.outcomes = self.journal.states()
-        self._owned_reviews = {}
         for index in self.confirmed:
             if self.outcomes.get(index) != "confirmed":
                 self.journal.set(index, "confirmed")
@@ -233,9 +251,14 @@ class Session:
     def uncertain(self):
         return [i for i in self.ids if self.outcomes.get(i) in {"attempted", "reviewing", "uncertain"}]
 
+    def start(self):
+        """Remember an execution choice even if the first connection fails."""
+        if not self.payload.get("submission_started"):
+            self.payload["submission_started"] = True
+            self._save()
+
     def reconcile(self, index: int, submitted: bool):
         self.journal.set(index, "confirmed" if submitted else "prepared")
-        self._owned_reviews.pop(index, None)
         self.outcomes[index] = "confirmed" if submitted else "prepared"
         if submitted:
             self.confirmed.add(index)
@@ -244,41 +267,48 @@ class Session:
 
     def before_submit(self, local_index: int):
         original = self.ids[local_index - 1]
-        self.journal.set(original, "attempted", from_review=self._owned_reviews.get(original))
-        self._owned_reviews.pop(original, None)
+        self.journal.set(
+            original,
+            "attempted",
+            expected_content=self.signature,
+            check_current=self._check_current,
+        )
         self.outcomes[original] = "attempted"
-
-    def review(self, local_index: int):
-        self._owned_reviews[self.ids[local_index - 1]] = self._set(local_index, "reviewing")
 
     def failed(self, local_index: int, uncertain: bool):
         self._set(local_index, "uncertain" if uncertain else "prepared")
 
     def _set(self, local_index: int, state: str):
         original = self.ids[local_index - 1]
-        token = self.journal.set(original, state)
+        self.journal.set(original, state)
         self.outcomes[original] = state
-        if state != "reviewing":
-            self._owned_reviews.pop(original, None)
-        return token
 
     def confirm(self, local_index: int):
         original = self.ids[local_index - 1]
         # The journal must survive a subsequent CSV log or plan-file write failure.
         self.journal.set(original, "confirmed")
-        self._owned_reviews.pop(original, None)
         self.outcomes[original] = "confirmed"
         self.confirmed.add(original)
         self._save()
 
     def _save(self):
+        from .locking import file_lock
+
+        with file_lock(self.path, timeout=5):
+            self._check_current()
+            self.payload["batch_id"] = self.identity
+            self.payload["submitted_indices"] = sorted(self.confirmed)
+            atomic_json(self.path, self.payload)
+            self.digest = self._digest()
+
+    def _digest(self):
         from .artifacts import digest
 
-        if digest(self.path) != self.digest:
+        return digest(self.path)
+
+    def _check_current(self):
+
+        if self._digest() != self.digest:
             raise ValueError(
                 "The saved preview changed during execution. Check the submission journal before retrying."
             )
-        self.payload["batch_id"] = self.identity
-        self.payload["submitted_indices"] = sorted(self.confirmed)
-        atomic_json(self.path, self.payload)
-        self.digest = digest(self.path)

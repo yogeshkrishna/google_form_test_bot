@@ -1,13 +1,10 @@
 import json
-import os
 import re
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from test_inspector import URL, document, item
 
-from gformbot import ai, filler, inspector
+from gformbot import ai, inspector
 from gformbot.config import QuestionConfig, RunConfig, config_from_schema, load_config, save_config
 from gformbot.generator import load_reference, validate_answer, write_csv
 
@@ -110,8 +107,8 @@ def test_optional_blanks_preserved_and_required_blanks_rejected():
 def test_ai_date_and_email_constraints_correct_invalid_answers(monkeypatch):
     contents = iter(
         [
-            json.dumps({"responses": [{"1": "bad", "2": "2026-02-30 14:30"}]}),
-            json.dumps({"responses": [{"1": "profile@example.com", "2": "2026-10-12 14:30"}]}),
+            json.dumps({"profile_id": 1, "answers": {"1": "bad", "2": "2026-02-30 14:30"}}),
+            json.dumps({"profile_id": 1, "answers": {"1": "profile@example.com", "2": "2026-10-12 14:30"}}),
         ]
     )
     calls = []
@@ -125,7 +122,7 @@ def test_ai_date_and_email_constraints_correct_invalid_answers(monkeypatch):
     assert ai.generate_responses(config(), 1) == [{1: "profile@example.com", 2: "2026-10-12 14:30"}]
     assert len(calls) == 2
     assert "corrections" in calls[1][0]
-    fields = calls[0][1]["properties"]["responses"]["items"]["properties"]
+    fields = calls[0][1]["properties"]
     assert re.fullmatch(fields["1"]["pattern"], "profile@example.com")
     assert not re.fullmatch(fields["1"]["pattern"], "bad")
     assert re.fullmatch(fields["2"]["pattern"], "2026-10-12 14:30")
@@ -158,84 +155,3 @@ def test_short_url_resolves_before_parsing(monkeypatch):
     assert requested == ["https://forms.gle/RfpthHMQeW81wjFLA"]
     assert schema.url == URL
     assert len(schema.questions) == 1
-
-
-@pytest.mark.browser
-@pytest.mark.skipif(
-    os.environ.get("GFORMBOT_BROWSER_TESTS") != "1",
-    reason="Set GFORMBOT_BROWSER_TESTS=1 for Chrome integration.",
-)
-def test_browser_email_all_date_modes_blanks_and_range():
-    from gformbot.browser import get_driver
-
-    c = config(required=False)
-    c.sections = ["One"]
-    c.questions += [
-        QuestionConfig(3, "Date only", "date", entry_id="3"),
-        QuestionConfig(4, "Annual date", "date", entry_id="4", date_include_year=False),
-        QuestionConfig(
-            5, "Annual date and time", "date", entry_id="5", date_include_year=False, date_include_time=True
-        ),
-    ]
-    markup = """<!doctype html><html><body><form>
-        <div role="listitem"><h2 role="heading">Email</h2><input type="email" name="entry.1"></div>
-        <div role="listitem"><h2 role="heading">Date needed</h2><input type="date" name="entry.2_year" max="2076-01-01"><input aria-label="Hour" min="0" max="23" type="number"><input aria-label="Minute" min="0" max="59" type="number"></div>
-        <div role="listitem"><h2 role="heading">Date only</h2><input type="date" name="entry.3_day"></div>
-        <div role="listitem"><h2 role="heading">Annual date</h2><input aria-label="Month" name="entry.4_month" type="number"><input aria-label="Day" name="entry.4_day" type="number"></div>
-        <div role="listitem"><h2 role="heading">Annual date and time</h2><input aria-label="Month" name="entry.5_month" type="number"><input aria-label="Day" name="entry.5_day" type="number"><input aria-label="Hour" type="number"><input aria-label="Minute" type="number"></div>
-        <button type="button">Submit</button></form><script>
-        window.submitted = false;
-        document.querySelector('button').onclick = () => window.submitted = true;
-        window.dateEvents = [];
-        document.addEventListener('change', e => { if(e.target.type === 'date') window.dateEvents.push(e.target.value); });
-        </script></body></html>"""
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write(markup.encode())
-
-        def log_message(self, *args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    driver = None
-    try:
-        c.url = f"http://127.0.0.1:{server.server_port}/viewform"
-        driver = get_driver(browser="chrome")
-        answers = {
-            1: "profile@example.com",
-            2: "2026-10-12 00:05",
-            3: "2028-02-29",
-            4: "02-29",
-            5: "12-31 23:59",
-        }
-        result = filler.execute_response(driver, c, validate_answer(c, answers), submit=False)
-        assert result["status"] == "filled"
-        assert driver.execute_script(
-            "return Array.from(document.querySelectorAll('input')).map(e => e.value)"
-        ) == ["profile@example.com", "2026-10-12", "0", "5", "2028-02-29", "2", "29", "12", "31", "23", "59"]
-        assert driver.execute_script("return window.dateEvents") == ["2026-10-12", "2028-02-29"]
-        assert not driver.execute_script("return window.submitted")
-        assert not driver._gformbot_submission_clicked
-        result = filler.execute_response(driver, c, {q.index: "" for q in c.questions}, submit=False)
-        assert result["status"] == "filled"
-        assert all(
-            value == ""
-            for value in driver.execute_script(
-                "return Array.from(document.querySelectorAll('input')).map(e => e.value)"
-            )
-        )
-        with pytest.raises(RuntimeError, match="allowed range"):
-            filler.execute_response(driver, c, {**answers, 2: "2077-01-01 12:00"}, submit=False)
-        assert not driver.execute_script("return window.submitted")
-    finally:
-        if driver:
-            driver.quit()
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)

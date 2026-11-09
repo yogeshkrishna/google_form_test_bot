@@ -22,6 +22,13 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         python: ["3.10", "3.12", "3.13", "3.14"]
+        include:
+          - os: ubuntu-24.04-arm
+            python: "3.12"
+          - os: macos-15-intel
+            python: "3.12"
+          - os: macos-15
+            python: "3.12"
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
@@ -49,7 +56,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-15-intel, macos-15]
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
@@ -75,21 +82,31 @@ jobs:
         run: |
           python -m venv "$RUNNER_TEMP/gformbot-wheel"
           if [ "$RUNNER_OS" = "Windows" ]; then
-            WHEEL_PYTHON="$RUNNER_TEMP/gformbot-wheel/Scripts/python.exe"
+            WHEEL_BIN="$RUNNER_TEMP/gformbot-wheel/Scripts"
+            WHEEL_PYTHON="$WHEEL_BIN/python.exe"
+            WHEEL_ENTRY="$WHEEL_BIN/gformbot.exe"
           else
-            WHEEL_PYTHON="$RUNNER_TEMP/gformbot-wheel/bin/python"
+            WHEEL_BIN="$RUNNER_TEMP/gformbot-wheel/bin"
+            WHEEL_PYTHON="$WHEEL_BIN/python"
+            WHEEL_ENTRY="$WHEEL_BIN/gformbot"
           fi
           WHEEL_FILE="$(python -c "from pathlib import Path; print(next(Path('dist').glob('*.whl')).resolve())")"
-          "$WHEEL_PYTHON" -m pip install dist/*.whl
+          "$WHEEL_PYTHON" -m pip install "$WHEEL_FILE"
+          cp -R tests "$RUNNER_TEMP/gformbot-wheel-tests"
           cd "$RUNNER_TEMP"
           "$WHEEL_PYTHON" -m pip check
-          "$WHEEL_PYTHON" -m gformbot --version
-          "$WHEEL_PYTHON" -m gformbot --help
+          "$WHEEL_PYTHON" -c "import importlib.util; from gformbot.selenium_runtime import PACKAGE, webdriver; assert PACKAGE == 'gformbot._vendor.selenium'; assert importlib.util.find_spec('selenium') is None; assert importlib.util.find_spec('typing_extensions') is None; assert all(getattr(webdriver, name) for name in ('Chrome', 'Edge', 'Firefox'))"
+          "$WHEEL_PYTHON" -c "import os, subprocess; from gformbot._vendor.selenium.webdriver.common.selenium_manager import SeleniumManager; path = SeleniumManager._get_binary(); assert os.access(path, os.X_OK); subprocess.run([str(path), '--version'], check=True, timeout=15)"
+          "$WHEEL_ENTRY" --version
+          # The module command also works when the launcher directory is not on PATH.
+          PATH="" "$WHEEL_PYTHON" -m gformbot --version
+          PATH="" "$WHEEL_PYTHON" -m gformbot --help
           for command in generate prepare preview doctor config log; do
             "$WHEEL_PYTHON" -m gformbot "$command" --help
           done
+          "$WHEEL_PYTHON" -m pip install pytest
+          "$WHEEL_PYTHON" -m pytest -q gformbot-wheel-tests/test_transport.py gformbot-wheel-tests/test_editor.py
           if [ "$RUNNER_OS" = "Windows" ]; then
-            "$WHEEL_PYTHON" -c "import importlib.util; from gformbot.selenium_runtime import PACKAGE; assert PACKAGE == 'gformbot._vendor.selenium'; assert importlib.util.find_spec('selenium') is None; assert importlib.util.find_spec('typing_extensions') is None"
             "$WHEEL_PYTHON" -m pip install selenium==4.51.0
             "$WHEEL_PYTHON" -c "from selenium.common.exceptions import WebDriverException as official; from gformbot.selenium_runtime import WebDriverException as bundled; assert official is not bundled; from selenium import webdriver; assert webdriver.Chrome.__module__.startswith('selenium.')"
             "$WHEEL_PYTHON" -m pip uninstall -y gformbot

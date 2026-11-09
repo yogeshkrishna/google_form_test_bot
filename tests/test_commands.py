@@ -48,7 +48,7 @@ def commands(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli, "_run_inspect", inspect)
     monkeypatch.setattr(cli, "_generate", generate)
-    monkeypatch.setattr(cli, "_run_fill", fill)
+    monkeypatch.setattr(cli, "_run_submit", fill)
     monkeypatch.setattr(
         cli.click, "launch", lambda filename, **kwargs: state.opened.append(Path(filename)) or 0
     )
@@ -117,7 +117,7 @@ def test_generate_defaults_to_one_response_and_submission(commands):
     result = invoke("generate", commands.config.url)
     assert result.exit_code == 0, result.exception
     assert commands.generated[0][0].count == 1
-    assert len(commands.filled) == 1 and commands.filled[0][1]["submit"] is True
+    assert len(commands.filled) == 1
     assert commands.filled[0][1]["answers"] == [{1: "A", 2: "Generated 1"}]
     assert commands.filled[0][1].get("compact") is True
     assert commands.inspected[0][1].get("display") is False
@@ -140,16 +140,14 @@ def test_generate_passes_message_reference_count_and_browser(commands, tmp_path)
     assert result.exit_code == 0, result.exception
     config, rows, message, options = commands.generated[0]
     assert config.count == 3 and rows == profiles() and message == "University students"
-    assert options["browser"] == "firefox"
+    assert config.browser == "firefox"
     assert commands.filled[0][0].browser == "firefox"
-    assert commands.filled[0][1]["submit"] is True
 
 
-def test_generate_halt_keeps_submission_manual(commands):
+def test_retired_halt_flag_is_rejected_before_execution(commands):
     result = invoke("generate", commands.config.url, "--halt")
-    assert result.exit_code == 0, result.exception
-    assert commands.filled[0][1]["submit"] is False
-    assert commands.filled[0][1].get("halt") is True
+    assert result.exit_code == 2 and "No such option" in result.output
+    assert not commands.inspected and not commands.filled and not commands.generated
 
 
 def test_prepare_saves_exact_json_without_filling(commands, tmp_path):
@@ -216,16 +214,14 @@ def test_prepare_output_survives_confirmed_wizard_execution(commands, tmp_path, 
     path = next(tmp_path.glob("gformbot-responses*.json"))
     config, rows = cli._load_plan(path)
     identity = batch_id(json.loads(path.read_text()))
-    monkeypatch.setattr(cli, "_next_action", lambda **kw: "submit")
-    monkeypatch.setattr(cli, "_choose_browser", lambda: "auto")
-    monkeypatch.setattr(cli, "_confirm_submit", lambda *a: None)
+    monkeypatch.setattr(cli, "_next_action", lambda *a, **kw: "submit")
 
     def confirmed(config, **kwargs):
         config._record_submission(1)
         return True
 
-    monkeypatch.setattr(cli, "_run_fill", confirmed)
-    cli._manage_batch(config, rows, path, saved=True)
+    monkeypatch.setattr(cli, "_run_submit", confirmed)
+    cli._manage_batch(config, rows, path)
     payload = json.loads(path.read_text())
     assert payload["submitted_indices"] == [1]
     assert payload["batch_id"] == identity and payload["cleanup_on_success"] is False
@@ -395,7 +391,7 @@ def test_preview_without_saved_files_returns_without_menu(commands):
     assert not commands.opened and not commands.inspected and not commands.filled
 
 
-def test_preview_lists_unfinished_runs_and_ai_jobs_newest_first(commands, tmp_path, monkeypatch):
+def test_preview_lists_response_plans_and_ignores_old_ai_jobs(commands, tmp_path, monkeypatch):
     old = saved_plan(commands, tmp_path)
     payload = json.loads(old.read_text())
     payload["created_at"] = "2026-10-20T10:00:00+00:00"
@@ -423,18 +419,17 @@ def test_preview_lists_unfinished_runs_and_ai_jobs_newest_first(commands, tmp_pa
 
     def select(message, choices, **kwargs):
         seen.extend(choices)
-        selected = next(choice for choice in choices if job.name in choice.name)
+        selected = next(choice for choice in choices if old.name in choice.name)
         return selected.value
 
     monkeypatch.setattr(cli, "_ask_select", select)
     result = invoke("preview")
     assert result.exit_code == 0, result.exception
     labels = [choice.name for choice in seen]
-    assert next(i for i, name in enumerate(labels) if job.name in name) < next(
-        i for i, name in enumerate(labels) if old.name in name
-    )
+    assert any(old.name in name for name in labels)
+    assert all(job.name not in name for name in labels)
     assert all(done.name not in name for name in labels)
-    assert [p.resolve() for p in commands.opened] == [job.resolve()]
+    assert [p.resolve() for p in commands.opened] == [old.resolve()]
     assert not commands.inspected and not commands.generated and not commands.filled
 
 

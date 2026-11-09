@@ -8,6 +8,7 @@ __pycache__/
 # Distribution / packaging
 dist/
 build/
+reproduced/
 *.egg-info/
 *.egg
 .eggs/
@@ -36,10 +37,7 @@ gformbot-responses*.json.lock
 *.yaml.lock
 *.yml.lock
 *.csv.lock
-.work/
 response_pool.csv
-
-# Keep the example pool but not user-generated logs
 bot_log.csv
 
 # IDE / editors
@@ -50,6 +48,8 @@ bot_log.csv
 *~
 
 # Local personal notes
+.work/
+/FINDINGS*.md
 publish_instructions.txt
 PUBLISH_NOTES.txt
 *.local.txt

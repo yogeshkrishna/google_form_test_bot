@@ -23,7 +23,7 @@ python -m ruff check .
 python -m ruff format --check .
 ```
 
-For optional visible-browser fixtures on a graphical desktop:
+For optional ChatGPT adapter fixtures on a graphical desktop (form submission uses HTTP only):
 
 ```powershell
 $env:GFORMBOT_BROWSER_TESTS = '1'

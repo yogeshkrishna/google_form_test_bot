@@ -13,10 +13,10 @@ These instructions apply to this project. They override unrelated inherited chal
 
 ## Project direction
 
-- Support anonymous public forms. Automatic submission uses direct HTTP; visible browsers are for manual review and the unchanged ChatGPT generation backend. Google-account sign-in and file transfers are outside the product scope; detect restrictions and report them clearly.
+- Support anonymous public forms. Form inspection and submission use HTTP. Selenium is only for text generation via the ChatGPT website in a private browser. The local response editor uses the standard-library browser opener. Keep image and video metadata in form inspection only. The user can share relevant details in ordinary instructions. Google-account sign-in and file transfers are outside the product scope.
 - Implement and verify one agreed slice at a time. Reuse the existing parser, validation, browser factory, runner, and recovery journal. Preserve complete imported CSV profiles and exact saved-response identities.
 - Inspect status and diffs before editing; preserve unrelated work and private audit evidence.
-- The size goal is a barebones Windows Selenium distribution containing the features actually used by this program plus their necessary runtime/import dependencies. Measure before removing anything. Retain required upstream notices and make updates reproducible. Broader operating-system packages are a later goal; do not remove the existing cross-platform implementation incidentally.
+- Keep native Windows, macOS and Linux wheels barebones: only used Selenium features, their runtime/import dependencies and one matching Manager binary. Measure before removing anything. Retain required upstream notices and make updates reproducible. Preserve portable installation on other platforms.
 - Use ordinary, specific language for issues, PRs, and documentation. Do not rename existing issues unless the user requests it.
 - Propose new runtime dependencies or departures from the agreed approach before implementing them.
 

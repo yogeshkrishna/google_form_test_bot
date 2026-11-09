@@ -1,12 +1,13 @@
-recursive-include tests *.py *.html
-recursive-include tests/fixtures *.json
-exclude response_pool.csv gformbot_config.yaml gformbot_log.csv gformbot-runs.csv
-exclude gformbot-responses*.json gformbot-generated*.csv gformbot-additional*.csv
-exclude gformbot-export*.csv gformbot-partial*.csv gformbot-generation*.json gformbot-generation*.json.lock
-include CHANGELOG.md
-include SECURITY.md
-include docs/windows-selenium.md
-recursive-include tools *.py
-recursive-include gformbot/_vendor *.py *.js *.exe *.txt *.json LICENSE NOTICE
+prune tests
 prune .work
 prune .venv
+prune reproduced
+exclude FINDINGS*.md response_pool.csv bot_log.csv
+exclude gformbot*.csv gformbot*.yaml gformbot*.json gformbot*.lock
+include CHANGELOG.md
+include SECURITY.md
+include docs/selenium-runtime.md
+recursive-include tools *.py
+include gformbot/editor.html
+recursive-include gformbot/_vendor *.py *.js *.exe *.txt *.json LICENSE NOTICE
+recursive-include gformbot/_vendor selenium-manager

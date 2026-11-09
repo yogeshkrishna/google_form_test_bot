@@ -147,7 +147,7 @@ def detect_default_browser() -> BrowserName:
 
 
 def get_driver(browser: BrowserName = "auto"):
-    """Return a visible private browser for review or ChatGPT generation."""
+    """Return a visible private browser for ChatGPT generation."""
     if browser == "auto":
         browser = detect_default_browser()
 

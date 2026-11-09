@@ -1,4 +1,4 @@
-"""Rebuild GFormBot's private Windows runtime from a hash-locked upstream wheel."""
+"""Rebuild GFormBot's private runtime from a hash-locked upstream wheel."""
 
 from __future__ import annotations
 
@@ -23,12 +23,15 @@ ROOTS = [
     for browser in ("chrome", "edge", "firefox")
     for module in ("webdriver", "options", "service")
 ]
-ROOTS += ["selenium.common.exceptions", "selenium.webdriver.common.by", "selenium.webdriver.support.ui"]
+ROOTS += ["selenium.common.exceptions", "selenium.webdriver.common.by", "selenium.webdriver.support.wait"]
 RESOURCES = [
     "webdriver/remote/getAttribute.js",
     "webdriver/remote/isDisplayed.js",
     "webdriver/remote/findElements.js",
     "webdriver/common/windows/selenium-manager.exe",
+    "webdriver/common/macos/selenium-manager",
+    "webdriver/common/linux-x86_64/selenium-manager",
+    "webdriver/common/linux-arm64/selenium-manager",
     "webdriver/common/selenium-manager-THIRD-PARTY-NOTICES.txt",
 ]
 
@@ -84,12 +87,25 @@ def patch(source, name):
             "from typing_extensions import Self\n",
             "try:\n    from typing import Self\nexcept ImportError:  # Python 3.10\n    from typing_extensions import Self\n",
         )
+    if name == "selenium.webdriver.common.selenium_manager":
+        anchor = '        logger.debug(f"Selenium Manager binary found at: {path}")'
+        assert anchor in source, "Upstream Manager lookup changed; review before rebuilding."
+        source = source.replace(
+            anchor,
+            "        # Editable/source installs may lose executable bits when copied from Windows.\n"
+            '        if sys.platform != "win32" and env_path is None and not os.access(path, os.X_OK):\n'
+            "            try:\n"
+            "                path.chmod(path.stat().st_mode | 0o111)\n"
+            "            except OSError as exc:\n"
+            '                raise WebDriverException(f"Manager is not executable; run chmod +x {path}") from exc\n\n'
+            + anchor,
+        )
     # Change imports and qualified module references, including lazy-import/resource strings.
     source = re.sub(r"(?m)^(\s*(?:from|import)\s+)selenium\b", rf"\g<1>{PREFIX}", source)
     source = re.sub(r"(?P<quote>['\"])selenium(?=\.[a-z_]|['\"])", rf"\g<quote>{PREFIX}", source)
     if source != original:
         source = (
-            "# Modified by GFormBot for its private Windows runtime; see NOTICE and tools/vendor_selenium.py.\n"
+            "# Modified by GFormBot for its private runtime; see NOTICE and tools/vendor_selenium.py.\n"
             + source
         )
     return source
@@ -161,7 +177,7 @@ def generate(wheel):
     output["NOTICE"] += (
         b"\nGFormBot modifications: private import namespace, supported browser exports, "
         b"standard-library Self on Python 3.11+, "
-        b"and removal of unused BiDi/CDP protocol code and non-Windows assets. "
+        b"and removal of unused BiDi/CDP protocol code. Wheels retain only their native Manager. "
         b"Rebuild with tools/vendor_selenium.py from the SHA-256-locked upstream wheel.\n"
     )
     manifest = {
@@ -196,6 +212,8 @@ def main():
             target = DEST / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
+            if target.name == "selenium-manager":
+                target.chmod(0o755)
     print(f"Verified {len(output)} files, {sum(map(len, output.values())):,} bytes.")
 
 

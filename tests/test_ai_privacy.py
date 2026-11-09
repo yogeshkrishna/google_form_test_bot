@@ -32,13 +32,13 @@ def capture_chat(monkeypatch, replies):
                 "task": json.loads(messages[-1]["content"]),
             }
         )
-        return json.dumps({"responses": [next(replies)]})
+        return json.dumps({"profile_id": calls[-1]["task"]["profile_numbers"][0], "answers": next(replies)})
 
     monkeypatch.setattr(ai, "_chat", chat)
     return calls
 
 
-def test_outbound_context_redacts_urls_without_changing_metadata_or_checkpoint(tmp_path, monkeypatch):
+def test_outbound_context_redacts_urls_without_changing_local_inputs(tmp_path, monkeypatch):
     config = RunConfig(
         URL,
         form_title=f"Visit {PRIVATE}",
@@ -53,11 +53,8 @@ def test_outbound_context_redacts_urls_without_changing_metadata_or_checkpoint(t
     reference = [{1: PRIVATE, 2: f"Reference {PRIVATE}"}]
     before, before_reference = config_to_dict(config), deepcopy(reference)
     fingerprint = schema_fingerprint(config)
-    checkpoint = tmp_path / "generation.json"
     calls = capture_chat(monkeypatch, [{"1": 1, "2": "Fictional reason"}])
-    rows = ai.generate_responses(
-        config, 1, reference=reference, instructions=f"Use {PRIVATE}", checkpoint=checkpoint
-    )
+    rows = ai.generate_responses(config, 1, reference=reference, instructions=f"Use {PRIVATE}")
 
     sent = json.dumps(calls[0]["messages"])
     assert SECRET not in sent
@@ -67,18 +64,7 @@ def test_outbound_context_redacts_urls_without_changing_metadata_or_checkpoint(t
     assert rows == [{1: PRIVATE, 2: "Fictional reason"}]
     assert config_to_dict(config) == before and reference == before_reference
     assert schema_fingerprint(config) == fingerprint
-    payload = json.loads(checkpoint.read_text(encoding="utf-8"))
-    assert payload["request"]["config"] == before
-    assert payload["request"]["reference"] == [{"1": PRIVATE, "2": f"Reference {PRIVATE}"}]
-    assert SECRET in checkpoint.read_text(encoding="utf-8")
-    assert (
-        ai.generate_responses(
-            config, 1, reference=reference, instructions=f"Use {PRIVATE}", checkpoint=checkpoint
-        )
-        == rows
-    )
-    assert len(calls) == 1
-    assert json.loads(checkpoint.read_text(encoding="utf-8"))["job_key"] == payload["job_key"]
+    assert not list(tmp_path.glob("*.json"))
 
 
 @pytest.mark.parametrize(

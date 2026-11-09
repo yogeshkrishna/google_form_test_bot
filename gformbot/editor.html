@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Review responses · GFormBot</title>
+<style>
+:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#223437;background:#f2f6f4;line-height:1.5;color-scheme:light}*{box-sizing:border-box}body{margin:0}main{max-width:920px;margin:auto;padding:36px 24px 100px}header{margin-bottom:24px}.brand{font-size:.75rem;font-weight:700;letter-spacing:.12em;color:#42716a;text-transform:uppercase}h1{font-size:1.9rem;line-height:1.2;margin:10px 0}p{margin:8px 0;color:#5e6c6e}button,input,select,textarea{font:inherit}button{border:1px solid #cddbd6;background:#fff;color:#254c45;border-radius:9px;padding:9px 16px;cursor:pointer}button:hover{background:#eaf2ee}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid #7ab7a9;outline-offset:3px}button:disabled{opacity:.45;cursor:default}.primary{background:#276d5c;border-color:#276d5c;color:white}.primary:hover{background:#205a4c}.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:20px 0}.toolbar select{flex:1;min-width:180px}.search{width:100%;margin-bottom:18px}input,select,textarea{border:1px solid #cddbd6;border-radius:8px;background:white;color:inherit;padding:10px 12px;max-width:100%}input:not([type=checkbox]),textarea{width:100%}textarea{min-height:112px;resize:vertical}fieldset{min-width:0;margin:0 0 16px;padding:20px 22px;border:1px solid #dae4df;border-radius:12px;background:#fff}legend{float:left;width:100%;font-weight:650;margin-bottom:8px}legend+*{clear:both}.description,.hint{font-size:.88rem;color:#687674;white-space:pre-wrap;margin:0 0 12px}.hint{margin:8px 0 0}.choices{display:grid;gap:8px}.choice{display:flex;gap:10px;align-items:flex-start;padding:8px;background:#f5f8f6;border-radius:7px}.choice input{margin-top:5px;accent-color:#276d5c}.required{font-size:.75rem;font-weight:400;color:#687674;margin-left:8px}.error{color:#a22f38;font-size:.9rem;white-space:pre-wrap}.invalid{border-color:#b44751}.notice{background:#e5efea;border-radius:9px;padding:12px 16px}.footer{position:fixed;bottom:0;left:0;right:0;background:#f9fbfa;border-top:1px solid #d7e2dc;padding:14px 24px}.footer-inner{max-width:872px;margin:auto;display:flex;gap:10px;align-items:center}.footer-inner .status{flex:1;font-size:.88rem;color:#64746c}details>summary{cursor:pointer;margin:22px 0 14px;color:#547168}.badge{font-size:.8rem;padding:4px 10px;border-radius:6px;background:#e5efea;color:#315e51}[hidden]{display:none!important}@media(max-width:560px){main{padding:22px 16px 140px}fieldset{padding:16px}h1{font-size:1.5rem}.footer{padding:12px 16px}.footer-inner{flex-wrap:wrap}.footer-inner .status{flex-basis:100%}}
+</style>
+</head>
+<body>
+<main>
+<header><div class="brand">GFormBot · Local editor</div><h1>Review or edit responses</h1><p id="title"></p><p>Changes stay on this computer. This editor never submits responses or sends them to AI.</p></header>
+<div class="toolbar"><button id="previous" type="button" aria-label="Previous response">← Previous</button><select id="response" aria-label="Choose a response"></select><button id="next" type="button" aria-label="Next response">Next →</button><span class="badge" id="position"></span></div>
+<p id="readonly" class="notice" hidden></p>
+<input id="search" class="search" type="search" placeholder="Search questions…" aria-label="Search questions">
+<p id="message" class="error" role="alert"></p>
+<form id="form" novalidate><div id="questions"></div><details id="skipped"><summary>Questions outside this response’s current route</summary><p class="hint">Changing a routing answer may make these questions required. Validation will tell you which answers are needed.</p><div id="unused"></div></details></form>
+<p id="empty" hidden>No questions match your search.</p>
+</main>
+<div class="footer"><div class="footer-inner"><span id="status" class="status" role="status" aria-live="polite">Opening your responses…</span><button id="cancel" type="button">Discard unsaved changes</button><button id="save" class="primary" type="button">Save changes</button><button id="done" type="button">Done</button></div></div>
+<script>
+'use strict';
+const el=id=>document.getElementById(id);
+const make=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
+let state,current,dirty=false,busy=false,closing=false,fields=[];
+async function api(path,body){const r=await fetch(path,body===undefined?{cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok){const error=new Error(data.error||'Could not complete this action.');error.data=data;throw error;}return data;}
+function setDirty(value){dirty=value;el('status').textContent=value?'Unsaved changes':'All changes saved locally';el('save').disabled=!value||busy||current?.status!=='ready';el('cancel').disabled=!value||busy;}
+function collect(){return Object.fromEntries(fields.map(field=>[String(field.question.index),field.read()]));}
+function optionLabels(q,value){return Array.isArray(value)?value:typeof value==='string'&&value?[value]:[];}
+function field(q,value,locked){
+ const box=make('fieldset');box.id='q'+q.index;box.dataset.search=(q.text+' '+q.description+' '+q.grid_title+' '+q.grid_row).toLowerCase();
+ const legend=make('legend',(q.grid_title?q.grid_title+' — ':'')+q.text);legend.append(make('span',q.required?'Required':'Optional','required'));box.append(legend);
+ if(q.description)box.append(make('p',q.description,'description'));
+ let read;
+ if(q.options.length){
+  const structured=value&&typeof value==='object'&&!Array.isArray(value);const chosen=optionLabels(q,structured?value.choices:value);
+  let choicesRead;
+  if(q.qtype==='checkbox'){
+   const group=make('div',undefined,'choices');const checks=q.options.map(label=>{const line=make('label',undefined,'choice');const input=make('input');input.type='checkbox';input.checked=chosen.includes(label);input.disabled=locked;line.append(input,make('span',label));group.append(line);return [label,input];});box.append(group);choicesRead=()=>checks.filter(([,input])=>input.checked).map(([label])=>label);
+  }else{
+   const select=make('select');select.setAttribute('aria-label',q.text);select.disabled=locked;const blank=make('option','Choose an answer');blank.value='';select.append(blank);q.options.forEach(label=>{const opt=make('option',label);opt.value=label;select.append(opt);});select.value=chosen[0]||'';box.append(select);choicesRead=()=>select.value?[select.value]:[];
+  }
+  if(q.allow_other){
+   const toggleLine=make('label',undefined,'choice');const toggle=make('input');toggle.type='checkbox';toggle.checked=structured;toggle.disabled=locked;toggleLine.append(toggle,make('span','Include an Other answer'));const other=make('input');other.type='text';other.placeholder='Your Other answer';other.setAttribute('aria-label',q.text+' — Other');other.value=structured?value.other:'';other.disabled=locked;other.hidden=!toggle.checked;toggle.addEventListener('change',()=>{other.hidden=!toggle.checked;if(toggle.checked&&q.qtype!=='checkbox')box.querySelector('select').value='';});if(q.qtype!=='checkbox')box.querySelector('select').addEventListener('change',()=>{if(box.querySelector('select').value){toggle.checked=false;other.hidden=true;}});box.append(toggleLine,other);read=()=>toggle.checked?{choices:choicesRead(),other:other.value}:q.qtype==='checkbox'?choicesRead():(choicesRead()[0]||'');
+  }else read=()=>q.qtype==='checkbox'?choicesRead():(choicesRead()[0]||'');
+ }else{
+  const input=make(q.qtype==='textarea'?'textarea':'input');if(input.tagName==='INPUT')input.type='text';input.value=typeof value==='string'?value:'';input.disabled=locked;input.setAttribute('aria-label',q.text);
+  if(q.qtype==='date'&&q.date_include_year){input.type=q.date_include_time?'datetime-local':'date';input.value=q.date_include_time?input.value.replace(' ','T'):input.value;}
+  if(q.qtype==='time'){input.type='time';input.step='60';}
+  box.append(input);if(q.format)box.append(make('p','Format: '+q.format,'hint'));read=()=>q.qtype==='date'?input.value.replace('T',' '):input.value;
+ }
+ const error=make('p','','error');error.id='error'+q.index;box.append(error);box.querySelectorAll('input,select,textarea').forEach(input=>input.setAttribute('aria-describedby',error.id));box.addEventListener('input',()=>setDirty(true));box.addEventListener('change',()=>setDirty(true));return {question:q,box,read};
+}
+function render(answers=current.answers,active=current.active){
+ fields=[];el('questions').replaceChildren();el('unused').replaceChildren();const reached=new Set(active);const locked=current.status!=='ready';
+ for(const q of state.questions){const item=field(q,answers[String(q.index)],locked);fields.push(item);(reached.has(q.index)?el('questions'):el('unused')).append(item.box);}
+ el('skipped').hidden=el('unused').childElementCount===0;filter();
+ el('position').textContent=current.index+' of '+state.count;el('response').value=String(current.index);el('previous').disabled=current.index===1;el('next').disabled=current.index===state.count;
+ el('readonly').hidden=!locked;el('readonly').textContent=current.status==='confirmed'?'This response was already submitted. You can read it, but cannot change it.':'This response may already have been submitted. Return to the CLI to check its outcome before editing.';
+}
+function filter(){const query=el('search').value.toLowerCase().trim();let visible=0;for(const item of fields){item.box.hidden=!!query&&!item.box.dataset.search.includes(query);if(!item.box.hidden)visible++;}if(query)el('skipped').open=true;el('empty').hidden=visible!==0;}
+async function load(index){
+ if(busy){el('response').value=String(current.index);return;}
+ if(dirty&&!confirm('Discard your unsaved changes before switching responses?')){el('response').value=String(current.index);return;}
+ try{current=await api('response?index='+index);render();setDirty(false);el('message').textContent='';}catch(error){el('message').textContent=error.message;}
+}
+el('previous').addEventListener('click',()=>load(current.index-1));el('next').addEventListener('click',()=>load(current.index+1));el('response').addEventListener('change',()=>load(Number(el('response').value)));el('search').addEventListener('input',filter);
+el('form').addEventListener('submit',event=>event.preventDefault());
+el('cancel').addEventListener('click',()=>{if(confirm('Discard the unsaved changes to this response?')){render();setDirty(false);el('message').textContent='';}});
+el('save').addEventListener('click',async()=>{
+ if(busy||!dirty||current.status!=='ready')return;busy=true;setDirty(true);const answers=collect();el('message').textContent='';
+ try{current=await api('save',{index:current.index,answers});render();setDirty(false);}
+ catch(error){if(error.data?.active)render(answers,error.data.active);el('message').textContent=error.message;const index=error.data?.question;if(index){const box=el('q'+index);box.classList.add('invalid');el('error'+index).textContent=error.message;const details=box.closest('details');if(details)details.open=true;box.scrollIntoView({behavior:'smooth',block:'center'});}}
+ finally{busy=false;setDirty(dirty);}
+});
+el('done').addEventListener('click',async()=>{if(busy)return;if(dirty&&!confirm('Discard unsaved changes and return to the CLI?'))return;try{await api('close',{});closing=true;dirty=false;document.querySelector('main').replaceChildren(make('h1','Review complete'),make('p','You can close this tab and return to your terminal.'));document.querySelector('.footer').hidden=true;}catch(error){el('message').textContent=error.message;}});
+window.addEventListener('beforeunload',event=>{if(dirty&&!closing){event.preventDefault();event.returnValue='';}});
+async function start(){try{state=await api('state');el('title').textContent=state.title;state.statuses.forEach((status,i)=>{const opt=make('option','Response '+(i+1)+(status==='ready'?'':status==='confirmed'?' · Submitted':' · Needs checking'));opt.value=String(i+1);el('response').append(opt);});await load(state.initial_index);}catch(error){el('message').textContent=error.message;el('status').textContent='Editor unavailable. Return to your terminal.';}}
+start();
+</script>
+</body>
+</html>

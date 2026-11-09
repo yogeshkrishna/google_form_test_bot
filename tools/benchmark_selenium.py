@@ -16,7 +16,7 @@ from packaging.utils import canonicalize_name
 IMPORT = """
 import json, time, sys
 start = time.perf_counter()
-import gformbot.filler
+import gformbot.chatgpt
 try:
     from gformbot.selenium_runtime import webdriver
 except ModuleNotFoundError:
@@ -59,63 +59,6 @@ for d in m.distributions():
 print(json.dumps(result))
 """
 
-BROWSER = r"""
-import json, time
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from gformbot.browser import get_driver
-name = __import__('sys').argv[1]
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        html = '<input id="text"><select id="choice"><option>A</option><option>B</option></select><button onclick="this.textContent=\'done\'">go</button>' if self.path == '/form' else '<title>second</title>' if self.path == '/second' else '<title>ready</title>'
-        self.send_response(200)
-        self.send_header('Content-Type', 'text/html; charset=utf-8')
-        self.end_headers()
-        self.wfile.write(html.encode('utf-8'))
-    def log_message(self, *args):
-        pass
-server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-threading.Thread(target=server.serve_forever, daemon=True).start()
-base = f'http://127.0.0.1:{server.server_port}'
-start = time.perf_counter()
-driver = get_driver(name)
-driver.get(base + '/ready')
-startup = time.perf_counter() - start
-try:
-    start = time.perf_counter()
-    driver.get(base + '/form')
-    field = driver.find_element('id', 'text')
-    field.send_keys('A [literal] café')
-    assert field.get_attribute('value') == 'A [literal] café'
-    field.clear()
-    driver.execute_script('arguments[0].value = arguments[1]', field, 'new value')
-    assert field.get_attribute('value') == 'new value'
-    button = driver.find_element('tag name', 'button')
-    assert button.is_displayed()
-    button.click()
-    assert button.text == 'done'
-    try:
-        from gformbot.selenium_runtime import Select
-    except ModuleNotFoundError:
-        from selenium.webdriver.support.ui import Select
-    Select(driver.find_element('id', 'choice')).select_by_visible_text('B')
-    first = driver.current_window_handle
-    driver.switch_to.new_window('tab')
-    driver.get(base + '/second')
-    assert driver.title == 'second' and len(driver.window_handles) == 2
-    driver.close()
-    driver.switch_to.window(first)
-    operations = time.perf_counter() - start
-finally:
-    start = time.perf_counter()
-    driver.quit()
-    cleanup = time.perf_counter() - start
-    server.shutdown()
-    server.server_close()
-print(json.dumps({'startup_seconds':startup, 'operations_seconds':operations, 'cleanup_seconds':cleanup,
-                  'total_seconds': startup + operations + cleanup}))
-"""
-
 
 def closure(distributions):
     packages = {canonicalize_name(name): values for name, values in distributions.items()}
@@ -156,7 +99,6 @@ def main():
         "--compare-python", type=Path, help="Alternate runs against a second clean environment."
     )
     parser.add_argument("--samples", type=int, default=7)
-    parser.add_argument("--browser-samples", type=int, default=3)
     args = parser.parse_args()
     executable = str(args.python.resolve())
     environment = {k: v for k, v in os.environ.items() if k not in {"PYTHONPATH", "PYTHONHOME"}}
@@ -184,21 +126,12 @@ def main():
             else {"runtime": executable}
         )
         measurements = {
-            label: {"installed": closure(run(SIZES, python=target)), "imports": [], "browsers": {}}
+            label: {"installed": closure(run(SIZES, python=target)), "imports": []}
             for label, target in targets.items()
         }
         for sample in range(args.samples):
             for label in list(targets)[:: 1 if sample % 2 == 0 else -1]:
                 measurements[label]["imports"].append(run(IMPORT, python=targets[label]))
-        names = run(
-            "import json; from gformbot.browser import available_browsers; print(json.dumps(available_browsers()))"
-        )
-        for name in names:
-            for sample in range(args.browser_samples):
-                for label in list(targets)[:: 1 if sample % 2 == 0 else -1]:
-                    measurements[label]["browsers"].setdefault(name, []).append(
-                        run(BROWSER, name, python=targets[label])
-                    )
         reports = {}
         for label, measurement in measurements.items():
             installed = measurement["installed"]
@@ -207,9 +140,7 @@ def main():
                 "installed_bytes": sum(p["bytes"] for p in installed.values()),
                 "bytecode_bytes": sum(p["bytecode_bytes"] for p in installed.values()),
                 "imports": summarize(measurement["imports"]),
-                "browsers": {name: summarize(samples) for name, samples in measurement["browsers"].items()},
                 "samples": args.samples,
-                "browser_samples": args.browser_samples,
                 "conditions": "Fresh Python processes, warm OS/driver caches; Python peak RSS excludes browsers. Paired runs alternate order.",
             }
         output = reports if args.compare_python else reports["runtime"]

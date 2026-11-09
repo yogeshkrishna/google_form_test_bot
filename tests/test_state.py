@@ -1,12 +1,11 @@
-import io
 import json
 import sqlite3
 from contextlib import closing
-from types import SimpleNamespace
 
 import pytest
 
-from gformbot import browser, cli, execution, filler, inspector, logger, transport
+from gformbot import cli, logger, transport
+from gformbot.access import SubmissionRejectedError, SubmissionUncertainError
 from gformbot.artifacts import digest
 from gformbot.config import QuestionConfig, RunConfig
 from gformbot.state import Journal, Session, UncertainSubmission, batch_id
@@ -33,14 +32,39 @@ def session(saved):
     return Session(path, json.loads(path.read_text()), digest(path))
 
 
+def test_start_is_persisted_once_without_changing_identity_or_response_states(saved):
+    current = session(saved)
+    identity, ids = current.identity, current.ids.copy()
+    current.start()
+    first = current.path.read_bytes()
+    current.start()
+    assert current.path.read_bytes() == first
+    assert current.payload["submission_started"] is True
+    assert current.identity == identity and current.ids == ids
+    assert current.journal.states() == {}
+    matches, _ = cli._saved_batches(started_only=True)
+    assert len(matches) == 1
+
+
+def test_connection_failure_before_first_submission_keeps_batch_discoverable(saved, monkeypatch):
+    c, answers, path = setup_runner(saved, monkeypatch)
+
+    def disconnected(*args, **kwargs):
+        raise RuntimeError("Network unavailable before first response")
+
+    monkeypatch.setattr(transport, "Client", disconnected)
+    with pytest.raises(RuntimeError, match="Network unavailable"):
+        cli._run_submit(c, answers=answers)
+    restored, rows = cli._load_plan(path)
+    assert restored._submission_started and restored._submitted_indices == []
+    assert rows == answers and restored._outcomes == {}
+    assert len(cli._saved_batches(started_only=True)[0]) == 1
+
+
 def setup_runner(saved, monkeypatch):
     c, answers, path = saved
     cli._track_plan(c, answers, path, digest(path))
-    driver = SimpleNamespace(quit=lambda: None)
-    monkeypatch.setattr(browser, "get_driver", lambda *a, **kw: driver)
-    monkeypatch.setattr(inspector, "inspect_form", lambda *a: c)
-    monkeypatch.setattr(execution, "config_from_schema", lambda value: value)
-    monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
+    monkeypatch.setattr(cli, "interactive_input", lambda: False)
 
     class Client:
         def __init__(self, config):
@@ -53,7 +77,7 @@ def setup_runner(saved, monkeypatch):
             pass
 
         def submit(self, answer, **options):
-            return filler.submit_response(self.config, answer, **options)
+            pytest.fail("Each execution test must supply its HTTP outcome")
 
     monkeypatch.setattr(transport, "Client", Client)
     return c, answers, path
@@ -62,13 +86,13 @@ def setup_runner(saved, monkeypatch):
 def test_uncertain_submit_is_not_silently_requeued(saved, monkeypatch):
     c, answers, path = setup_runner(saved, monkeypatch)
 
-    def uncertain(config, answer, *, before_submit, **kwargs):
+    def uncertain(self, answer, *, before_submit, **kwargs):
         before_submit()
-        raise filler.SubmissionUncertainError("No acceptance appeared")
+        raise SubmissionUncertainError("No acceptance appeared")
 
-    monkeypatch.setattr(filler, "submit_response", uncertain)
+    monkeypatch.setattr(transport.Client, "submit", uncertain)
     with pytest.raises(ValueError, match="uncertain"):
-        cli._run_fill(c, answers=answers, submit=True)
+        cli._run_submit(c, answers=answers)
     restored, rows = cli._load_plan(path)
     with pytest.raises(UncertainSubmission, match="previous outcome"):
         cli._track_plan(restored, rows, path, digest(path))
@@ -102,14 +126,14 @@ def test_missing_retention_policy_preserves_identity_progress_and_uncertainty(sa
 def test_log_failure_after_success_keeps_confirmed_progress(saved, monkeypatch):
     c, answers, path = setup_runner(saved, monkeypatch)
 
-    def accepted(config, answer, *, before_submit, **kwargs):
+    def accepted(self, answer, *, before_submit, **kwargs):
         before_submit()
         return True, "submitted"
 
-    monkeypatch.setattr(filler, "submit_response", accepted)
+    monkeypatch.setattr(transport.Client, "submit", accepted)
     monkeypatch.setattr(logger, "log_result", lambda *a, **kw: (_ for _ in ()).throw(OSError("disk full")))
     with pytest.raises(ValueError, match="disk full"):
-        cli._run_fill(c, answers=answers, submit=True)
+        cli._run_submit(c, answers=answers)
     restored, rows = cli._load_plan(path)
     assert restored._submitted_indices == [1]
     assert cli._track_plan(restored, rows, path, digest(path)) == [answers[1]]
@@ -137,14 +161,14 @@ def test_journal_failure_prevents_submit(saved, monkeypatch):
 
     monkeypatch.setattr(Journal, "set", failing_write)
 
-    def execute(config, answer, *, before_submit, **kwargs):
+    def execute(self, answer, *, before_submit, **kwargs):
         before_submit()
         clicked.append(True)
         return True, "submitted"
 
-    monkeypatch.setattr(filler, "submit_response", execute)
+    monkeypatch.setattr(transport.Client, "submit", execute)
     with pytest.raises(ValueError, match="journal unavailable"):
-        cli._run_fill(c, answers=answers, submit=True)
+        cli._run_submit(c, answers=answers)
     assert clicked == []
 
 
@@ -152,7 +176,7 @@ def test_reconciliation_is_explicit_and_original_ids_survive(saved, monkeypatch)
     c, answers, path = saved
     current = session(saved)
     current.before_submit(1)
-    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(cli, "interactive_input", lambda: True)
     monkeypatch.setattr(cli, "_ask_select", lambda *a, **kw: "yes")
     restored, rows = cli._load_plan(path)
     assert cli._track_plan(restored, rows, path, digest(path)) == [answers[1]]
@@ -231,13 +255,13 @@ def test_stale_execution_cannot_erase_a_confirmed_outcome(saved):
 def test_definitive_submit_rejection_does_not_require_uncertain_reconciliation(saved, monkeypatch):
     c, answers, path = setup_runner(saved, monkeypatch)
 
-    def rejected(config, answer, *, before_submit, **kwargs):
+    def rejected(self, answer, *, before_submit, **kwargs):
         before_submit()
-        raise filler.SubmissionRejectedError("Form rejected the response: invalid answer")
+        raise SubmissionRejectedError("Form rejected the response: invalid answer")
 
-    monkeypatch.setattr(filler, "submit_response", rejected)
+    monkeypatch.setattr(transport.Client, "submit", rejected)
     with pytest.raises(ValueError, match="Form rejected"):
-        cli._run_fill(c, answers=answers, submit=True)
+        cli._run_submit(c, answers=answers)
     assert c._session.journal.states() == {1: "prepared"}
     restored, rows = cli._load_plan(path)
     assert cli._track_plan(restored, rows, path, digest(path)) == answers
@@ -265,39 +289,13 @@ def test_simultaneous_sessions_allow_only_one_submit_intent(saved):
     assert current.journal.states() == {1: "attempted"}
 
 
-def test_only_session_that_opened_review_can_continue_to_submit(saved):
-    first, other = session(saved), session(saved)
-    first.review(1)
-    with pytest.raises(UncertainSubmission, match="reviewing"):
-        other.before_submit(1)
-    first.before_submit(1)
-    assert first.journal.states() == {1: "attempted"}
-    with pytest.raises(UncertainSubmission, match="attempted"):
-        first.before_submit(1)
-
-
-def test_interrupted_review_remains_uncertain_on_reopen(saved):
+def test_legacy_interrupted_review_remains_uncertain_on_reopen(saved):
     current = session(saved)
-    current.review(1)
+    current.journal.set(1, "reviewing")
     reopened = session(saved)
     assert reopened.uncertain() == [1]
     with pytest.raises(UncertainSubmission, match="reviewing"):
         reopened.before_submit(1)
-
-
-@pytest.mark.parametrize("review_again", [False, True])
-def test_reconciliation_revokes_stale_review_ownership(saved, review_again):
-    first = session(saved)
-    first.review(1)
-    second = session(saved)
-    second.reconcile(1, False)
-    if review_again:
-        second.review(1)
-    with pytest.raises(UncertainSubmission):
-        first.before_submit(1)
-    assert second.journal.states() == {1: "reviewing" if review_again else "prepared"}
-    second.before_submit(1)
-    assert second.journal.states() == {1: "attempted"}
 
 
 def test_legacy_journal_reviews_still_require_reconciliation(saved):
@@ -318,7 +316,6 @@ def test_legacy_journal_reviews_still_require_reconciliation(saved):
     with pytest.raises(UncertainSubmission):
         current.before_submit(1)
     current.reconcile(1, False)
-    current.review(1)
     current.before_submit(1)
     assert current.journal.states() == {1: "attempted"}
 

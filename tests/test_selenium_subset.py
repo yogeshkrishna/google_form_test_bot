@@ -1,8 +1,6 @@
 import hashlib
 import importlib
 import json
-import sys
-import sysconfig
 from pathlib import Path
 
 import pytest
@@ -12,13 +10,10 @@ from gformbot import browser
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_windows_runtime_uses_private_namespace_without_official_selenium():
+def test_runtime_uses_private_namespace_without_official_selenium():
     from gformbot import selenium_runtime
 
-    if sys.platform == "win32" and sysconfig.get_platform() == "win-amd64":
-        assert selenium_runtime.PACKAGE == "gformbot._vendor.selenium"
-    else:
-        assert selenium_runtime.PACKAGE == "selenium"
+    assert selenium_runtime.PACKAGE == "gformbot._vendor.selenium"
     assert selenium_runtime.options("chrome").__class__.__module__.startswith(selenium_runtime.PACKAGE)
 
 
@@ -32,14 +27,7 @@ def test_subset_files_match_manifest_and_keep_required_notices():
     }
     assert actual == manifest["files"]
     assert {"LICENSE", "NOTICE", "webdriver/common/selenium-manager-THIRD-PARTY-NOTICES.txt"} <= actual.keys()
-    assert not any(
-        "/bidi/" in name
-        or "/devtools/" in name
-        or "/safari/" in name
-        or "/linux" in name
-        or "/macos/" in name
-        for name in actual
-    )
+    assert not any("/bidi/" in name or "/devtools/" in name or "/safari/" in name for name in actual)
 
 
 def test_private_browser_classes_and_resources_import_without_async_dependencies():
@@ -93,7 +81,6 @@ def test_proxy_and_tls_dependencies_are_retained(address, expected):
         connection.close()
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows executable")
 def test_manager_bad_override_keeps_actionable_error(tmp_path, monkeypatch):
     from gformbot._vendor.selenium.common.exceptions import WebDriverException
     from gformbot._vendor.selenium.webdriver.common.selenium_manager import SeleniumManager
@@ -103,7 +90,27 @@ def test_manager_bad_override_keeps_actionable_error(tmp_path, monkeypatch):
         SeleniumManager._get_binary()
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows executable")
+@pytest.mark.parametrize("override", [False, True])
+def test_source_manager_repairs_only_its_own_execute_permission(tmp_path, monkeypatch, override):
+    from gformbot._vendor.selenium.webdriver.common import selenium_manager as manager
+
+    binary = tmp_path / "linux-x86_64/selenium-manager"
+    binary.parent.mkdir()
+    binary.write_bytes(b"test fixture")
+    monkeypatch.setattr(manager, "__file__", str(tmp_path / "selenium_manager.py"))
+    monkeypatch.setattr(manager.sys, "platform", "linux")
+    monkeypatch.setattr(manager.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(manager.os, "access", lambda *args: False)
+    changed = []
+    monkeypatch.setattr(Path, "chmod", lambda path, mode: changed.append(path))
+    if override:
+        monkeypatch.setenv("SE_MANAGER_PATH", str(binary))
+    else:
+        monkeypatch.delenv("SE_MANAGER_PATH", raising=False)
+    assert manager.SeleniumManager._get_binary() == binary
+    assert changed == ([] if override else [binary])
+
+
 def test_manager_offline_empty_cache_is_conservative(tmp_path, monkeypatch):
     from gformbot._vendor.selenium.common.exceptions import NoSuchDriverException
     from gformbot._vendor.selenium.webdriver.chrome.options import Options

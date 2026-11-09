@@ -31,7 +31,7 @@ class SubmissionRejectedError(RuntimeError):
 
 
 def require_public_form(form) -> None:
-    """Reject account-bound forms before opening a browser or exposing answers."""
+    """Reject account-bound forms before exposing answers."""
     if form.requires_signin or form.one_response is True or form.email_collection == "verified":
         raise FormAccessError("login_required")
 
@@ -168,40 +168,3 @@ def raise_for_access(document: str = "", url: str = "", status: int | None = Non
     state = classify_access(document, url, status)
     if state is not None or unknown:
         raise FormAccessError(state or "unknown")
-
-
-def check_browser_access(driver) -> None:
-    """Check the current session without reading or retaining authentication data."""
-    url = driver.current_url
-    raise_for_access(url=url)
-    execute_script = getattr(driver, "execute_script", None)
-    if callable(execute_script):
-        message = execute_script(
-            """
-            const visible = e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
-            const confirmation = '.vHW8K, .freebirdFormviewerViewResponseConfirmationMessage, [data-gformbot-confirmation]';
-            if ([...document.querySelectorAll(confirmation)].some(visible)) return '';
-            const statuses = [...document.querySelectorAll('.freebirdFormviewerViewResponseMessage, .freebirdFormviewerViewResponseStatus')];
-            const status = statuses.filter(e => visible(e) && !e.closest('[role="listitem"]')).map(e => e.innerText).join(' ');
-            if (status) return status;
-            const controls = 'form, input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, select, [role="radio"], [role="checkbox"], [role="textbox"], [role="listbox"], [role="combobox"]';
-            if ([...document.querySelectorAll(controls)].some(visible) || !document.body) return '';
-            const parts = [];
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-            let node;
-            while ((node = walker.nextNode())) {
-                const parent = node.parentElement;
-                if (parent && visible(parent) && !parent.closest('script, style, template, noscript, [role="listitem"], [hidden], [aria-hidden="true"]')) parts.push(node.textContent);
-            }
-            return parts.join(' ');
-            """
-        )
-        if isinstance(message, str):
-            state = _classify_message(message)
-            if state:
-                raise FormAccessError(state)
-            return
-    document = getattr(driver, "page_source", "")
-    if not isinstance(document, str):
-        document = ""
-    raise_for_access(document, url)

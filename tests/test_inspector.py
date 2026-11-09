@@ -298,24 +298,6 @@ def test_inspection_reports_distinct_access_states(body, state):
     assert failure.value.state == state
 
 
-def test_borrowed_browser_is_used_and_never_closed(monkeypatch):
-    from gformbot import inspector
-
-    class Driver:
-        current_url = URL
-        page_source = policy_document(one_response=1, email=2)
-
-        def get(self, url):
-            assert url == URL
-
-        def quit(self):
-            pytest.fail("The caller owns this browser")
-
-    monkeypatch.setattr(inspector, "urlopen", lambda *a, **k: pytest.fail("Anonymous request"))
-    schema = inspector.inspect_form(URL, driver=Driver())
-    assert schema.requires_signin and schema.one_response
-
-
 def test_http_error_is_classified_without_printing_the_response(monkeypatch):
     from io import BytesIO
     from urllib.error import HTTPError

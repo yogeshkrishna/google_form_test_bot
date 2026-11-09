@@ -1,6 +1,5 @@
 import copy
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -53,7 +52,7 @@ def test_time_pipeline_roundtrip(duration, value, tmp_path):
         (True, "-1:00:00"),
     ],
 )
-def test_invalid_time_fails_before_browser(duration, value):
+def test_invalid_time_fails_before_execution(duration, value):
     with pytest.raises(ValueError, match="time|duration|HH"):
         validate_answer(time_config(duration), {1: value})
 
@@ -152,71 +151,12 @@ def test_unknown_time_settings_and_lossy_csv_rejected(tmp_path):
         load_reference(time_config(), path)
 
 
-def test_unsupported_route_blocks_before_opening_browser():
-    from gformbot.filler import execute_response
-
-    class Unopened:
-        def get(self, url):
-            pytest.fail("Unsupported route opened a browser")
-
-    with pytest.raises(ValueError, match="Upload"):
-        execute_response(Unopened(), branch_config(), {1: "Worker", 4: "Hi"})
-
-
-@pytest.mark.browser
-@pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Enable browser fixtures.")
-@pytest.mark.parametrize("duration,value", [(False, "00:05"), (True, "27:15:03")])
-@pytest.mark.parametrize("google_labels", [False, True])
-def test_time_browser_readback(duration, value, google_labels, html_page):
-    from gformbot.browser import get_driver
-    from gformbot.filler import execute_response
-
-    config = time_config(duration)
-    q = config.questions[0]
-    fields = "".join(
-        f'<input aria-label="{part.title()}s" type="text" role="combobox" onchange="if(this.value)this.value=this.value.padStart(2,\'0\')">'
-        if google_labels
-        else f'<input name="entry.{q.entry_id}_{part}" aria-label="{part.title()}" type="number">'
-        for part in (["hour", "minute", "second"] if duration else ["hour", "minute"])
-    )
-    config.url = html_page(
-        f'<div role="listitem"><div role="heading">{q.text}</div><input type="hidden" name="entry.{q.entry_id}_sentinel">{fields}</div><button>Submit</button>'
-    )
-    driver = get_driver("chrome")
-    try:
-        execute_response(driver, config, {1: value}, submit=False, timeout=3)
-        assert driver.execute_script(
-            'return [...document.querySelectorAll("input:not([type=hidden])")].map(e=>Number(e.value))'
-        ) == list(map(int, value.split(":")))
-        q.required = False
-        execute_response(driver, config, {1: ""}, submit=False, timeout=3)
-        assert driver.execute_script(
-            'return [...document.querySelectorAll("input:not([type=hidden])")].every(e=>e.value==="")'
-        )
-    finally:
-        driver.quit()
-
-
-@pytest.mark.parametrize(
-    "requested,retained,numeric,accepted",
-    [
-        ("02", "2", True, True),
-        ("2", "02", True, True),
-        ("02", "2", False, False),
-        ("0", "", True, False),
-        ("2", "2x", True, False),
-        ("2", "3", True, False),
-    ],
-)
-def test_numeric_time_readback_accepts_only_equal_components(requested, retained, numeric, accepted):
+def test_unsupported_route_blocks_before_opening_http_client(monkeypatch):
     from types import SimpleNamespace
 
-    from gformbot.filler import _set_value
+    from gformbot import transport
+    from gformbot.execution import Runner
 
-    driver = SimpleNamespace(execute_script=lambda *args: retained)
-    field = SimpleNamespace(get_attribute=lambda *args: retained)
-    if accepted:
-        _set_value(driver, field, requested, 0.01, "Changed answer", numeric=numeric)
-    else:
-        with pytest.raises(RuntimeError, match="Changed answer"):
-            _set_value(driver, field, requested, 0.01, "Changed answer", numeric=numeric)
+    monkeypatch.setattr(transport, "Client", lambda *a: pytest.fail("Unsupported route opened a client"))
+    with pytest.raises(ValueError, match="Upload"):
+        Runner(branch_config(), [{1: "Worker", 4: "Hi"}], SimpleNamespace()).run()

@@ -2,14 +2,12 @@
 
 import copy
 import json
-import os
-from html import escape
 from pathlib import Path
 
 import pytest
 from test_inspector import URL, document
 
-from gformbot import ai, cli, filler
+from gformbot import ai, cli
 from gformbot.config import config_from_schema
 from gformbot.generator import load_reference, prepare_responses, validate_answer, write_csv
 from gformbot.inspector import parse_form_html
@@ -114,51 +112,15 @@ def test_impossible_checkbox_requirements_stop_inspection(rules):
         parse_form_html(document([item]), URL)
 
 
-@pytest.mark.browser
-@pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Enable local browser fixtures.")
-def test_captured_fields_roundtrip_and_fill_without_submitting(html_page, tmp_path):
+def test_captured_fields_csv_and_saved_response_roundtrip(tmp_path):
     items = [copy.deepcopy(ITEMS[name]) for name in ("date_default", "date_time", "checkbox_exact")]
     form = parse_form_html(document(items), URL)
     form.require_supported()
     config = config_from_schema(form)
-    boxes = []
-    for q in config.questions:
-        if q.qtype == "date":
-            controls = '<input type="date">'
-            if q.date_include_time:
-                controls += '<input aria-label="Hour" type="number"><input aria-label="Minute" type="number">'
-        else:
-            controls = "".join(
-                f'<input type="checkbox" role="checkbox" value="{escape(label)}">' for label in q.options
-            )
-        boxes.append(
-            f'<div role="listitem" data-item-id="{q.item_id}"><h2>{escape(q.text)}</h2>{controls}</div>'
-        )
-    config.url = html_page(
-        "<form>"
-        + "".join(boxes)
-        + '<button type="button" onclick="window.submitted=true">Submit</button></form>'
-    )
     row = {1: "2028-02-29", 2: "2028-02-29 00:05", 3: ["Python", "SQL"]}
     csv = write_csv(config, [row], tmp_path / "data.csv")
     assert load_reference(config, csv) == [row]
     plan = cli._save_plan(config, [row], tmp_path / "plan.json", cleanup_on_success=False)
     restored, answers = cli._load_plan(plan)
-    from gformbot.browser import get_driver
-
-    driver = get_driver("chrome")
-    try:
-        assert filler.execute_response(driver, restored, answers[0], submit=False)["status"] == "filled"
-        assert driver.execute_script(
-            "return [...document.querySelectorAll('input[type=date]')].map(e=>e.value)"
-        ) == ["2028-02-29", "2028-02-29"]
-        assert driver.execute_script(
-            "return [...document.querySelectorAll('input[type=number]')].map(e=>e.value)"
-        ) == ["0", "5"]
-        assert driver.execute_script(
-            "return [...document.querySelectorAll('input[type=checkbox]:checked')].map(e=>e.value)"
-        ) == ["Python", "SQL"]
-        assert not driver.execute_script("return Boolean(window.submitted)")
-        assert not driver._gformbot_submission_clicked
-    finally:
-        driver.quit()
+    assert answers == [row]
+    assert restored.questions == config.questions

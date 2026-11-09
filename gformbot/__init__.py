@@ -1,8 +1,8 @@
 """
-gformbot — A general-purpose Google Form auto-filler CLI.
+gformbot — A synthetic Google Forms response CLI.
 """
 
-__version__ = "0.4.0.dev0"
+__version__ = "0.4.0"
 
 
 def main():

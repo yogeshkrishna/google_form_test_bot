@@ -1,41 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (unpublished)
 
-- Submit public forms directly over HTTP by default, with verified confirmation and the existing recovery journal. Retain visible-browser review; remove the hidden-browser execution mode.
-
-- Remove a Windows sidecar-initialization race that could reject simultaneous config or log writers before acquiring their lock.
-- Redact known private URL parameters from AI requests and retries while preserving exact local answers, metadata and saved-work identities.
-- Handle Google's Next-labelled early submission actions without clicking during fill-only checks, and spread choice retries across their existing timeout.
-- Serialize shared CSV run logs so concurrent writers cannot duplicate headers or read incomplete headers.
-
-- Limit execution to anonymous public forms. Remove Google sign-in, file transfers and their retired options without deleting existing files or submission records.
-- Fix cumulative icon-rating readback, URL validation and scoped rejection of malformed choices on unused routes.
-- Handle normalized split time fields, wait for editable controls and recover replaced dropdowns using their Google model identity.
-- Serialize config saves, use unique atomic writes, keep AI correction messages free of local preset values, and remove retired command handlers.
-- Send runtime errors to stderr, add `doctor --check`, and distinguish the unpublished source build from PyPI.
-
-- Recognize verified navigation and clear-selection identities across translated labels; reject conflicting controls and batch navigation metadata reads.
-
-- Preserve ordered media and attachments; accept explicit visual context or a decorative declaration for AI generation without adding a vision dependency.
-
-- Support explicit Other answers on radio/checkbox questions, including CSV, AI generation, editing, routing and saved-plan recovery. Existing answer formats remain unchanged.
-
-- Support icon ratings as a distinct type with existing choice validation, generation and browser readback.
-
-- Add clock time/duration and route-aware compatibility checks. Preserve unused imported answers, block unsupported selected sections, and generate supported terminating routes without retry loops.
-
-- Support both grid types across CSV, saved answers, generation, and verified filling, including shuffled rows and column restrictions.
-
-- Validate number comparisons, text rules, character limits and supported regex patterns through one shared path for CSV, AI output, editing and browser execution. Preserve imported values, display readable constraints, and isolate regex checks with bounded waits without adding dependencies.
-
-- Decode compact Google date settings and exact checkbox counts correctly. Add `--date-order` to `generate`/`prepare`, retain prepared and ambiguous legacy files consistently, and require journal confirmations before temporary-file cleanup.
-
-- Bundle a private Windows x64 Selenium runtime with only supported browser adapters, their synchronous dependencies and the unchanged Windows Manager. Remove unused OS binaries, generated protocols and asynchronous dependencies; retain official Selenium on other platforms.
-- Keep directions and links from visited form pages and confirmed completion screens. Show a short next-steps summary and add `log --followups` for saved instructions across automatic and manual review modes, without affecting submission recovery.
-- Follow answer-based section routes across CSV import, generation, previews, and filling, including skipped required questions and early Submit. Stop before submission if the browser deviates from the planned route.
-- Support typed email questions and detect Google-account restrictions before execution.
-- Report blocked forms clearly and keep manual or automatic submission outcomes conservative when access changes.
+- Submit public anonymous forms over HTTP. Verify the receipt before recording a success. Keep exact saved responses, skip confirmed submissions, and ask before retrying an uncertain outcome. Selenium is used only for ChatGPT.
+- Add Quick submit, double-Backspace navigation, and empty count fields that accept their displayed default on Enter. Form questions can be opened on demand without leaving answer selection.
+- Show one sample response before submitting from the guided workflow. Review or edit through a local browser editor with shared validation and protection for submitted and uncertain rows. Export remaining responses or resume an interrupted submission.
+- Generate with ChatGPT using adaptive batches, individual JSON records, and bounded corrections. Redact known private links and keep image and video metadata in inspection only. Remove cross-session AI checkpoints.
+- Support branching and early submission, text and number rules, dates and times, both grid types, ratings, typed email and explicit Other answers. Reject unsupported questions on the chosen route, account restrictions and file uploads.
+- Capture form directions and completion links, retain prepared files and legacy batch progress, and fix concurrent log and config writes. Add CSV date order and clearer diagnostics.
+- Build native wheels for Windows x64, macOS Intel/Apple Silicon, and Linux glibc x64/ARM64 with a small private Selenium subset. Keep a portable fallback. Test console and module launchers outside the checkout.
 
 ## 0.3.1
 

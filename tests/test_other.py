@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -111,40 +110,3 @@ def test_other_counts_and_exclusivity():
     q.exclusive_options = ["Python"]
     with pytest.raises(ValueError, match="alone"):
         validate_answer(c, {1: {"choices": ["Python"], "other": "Rust"}})
-
-
-@pytest.mark.browser
-@pytest.mark.skipif(os.environ.get("GFORMBOT_BROWSER_TESTS") != "1", reason="Enable browser fixtures")
-@pytest.mark.parametrize("checkbox", [False, True])
-def test_other_browser_selection_and_text(checkbox, html_page):
-    from gformbot.browser import get_driver
-    from gformbot.filler import _fill_question, _page_questions
-
-    c = config(checkbox)
-    q = c.questions[0]
-    role = "checkbox" if checkbox else "radio"
-    controls = "".join(
-        f'<input type="{role}" name="entry.{q.entry_id}" value="{v}">'
-        for v in [*q.options, "__other_option__"]
-    )
-    url = html_page(
-        f'<div role="listitem"><div role="heading">Tools</div>{controls}<input name="entry.{q.entry_id}.other_option_response" type="text"></div>'
-    )
-    d = get_driver("chrome")
-    try:
-        d.get(url)
-        question, box = _page_questions(d, c)[0]
-        answer = {"choices": ["Python"] if checkbox else [], "other": "Rust 😀"}
-        _fill_question(d, question, box, answer, 3)
-        assert d.execute_script('return [...document.querySelectorAll("input:checked")].map(e=>e.value)') == [
-            *answer["choices"],
-            "__other_option__",
-        ]
-        assert d.execute_script('return document.querySelector("input[type=text]").value') == "Rust 😀"
-        _fill_question(d, question, box, ["Python"] if checkbox else "Python", 3)
-        assert d.execute_script('return document.querySelector("input[type=text]").value') == ""
-        assert d.execute_script('return [...document.querySelectorAll("input:checked")].map(e=>e.value)') == [
-            "Python"
-        ]
-    finally:
-        d.quit()

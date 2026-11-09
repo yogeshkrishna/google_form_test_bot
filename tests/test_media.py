@@ -1,12 +1,10 @@
 import json
 from pathlib import Path
 
-import pytest
 from test_inspector import URL, document
 
 from gformbot import ai
 from gformbot.config import config_from_dict, config_from_schema, config_to_dict
-from gformbot.generator import validate_answer
 from gformbot.inspector import parse_form_html, schema_fingerprint
 
 
@@ -24,21 +22,14 @@ def test_real_media_order_attachments_and_roundtrip():
     assert any(m["kind"] == "video" for m in form.media)
     assert len({m["key"] for m in form.media}) == len(form.media)
     config = config_from_schema(form)
-    assert config_from_dict(config_to_dict(config)).media == form.media
     fingerprint = schema_fingerprint(config)
-    config.media_context = "The user reviewed these assets and declares them decorative."
-    assert schema_fingerprint(config) == fingerprint
+    legacy = {**config_to_dict(config), "media_context": "Old media instructions"}
+    restored = config_from_dict(legacy)
+    assert restored.media == form.media
+    assert "media_context" not in config_to_dict(restored)
+    assert schema_fingerprint(restored) == fingerprint
     config.media[0]["asset_id"] += "changed"
     assert schema_fingerprint(config) != fingerprint
-
-
-def test_generation_needs_explicit_interpretation_not_for_supplied_answers(monkeypatch):
-    config = config_from_schema(media_form())
-    config.questions = [q for q in config.questions if q.options]
-    monkeypatch.setattr(ai, "_chat", lambda *a, **k: pytest.fail("Unresolved media reached AI"))
-    with pytest.raises(ai.GenerationError, match="media"):
-        ai.generate_responses(config, 1)
-    assert validate_answer(config, {q.index: q.options[0] for q in config.questions})
 
 
 def test_option_media_retains_placement():
@@ -52,19 +43,23 @@ def test_option_media_retains_placement():
     assert form.media[0]["asset_id"] == "asset-id"
 
 
-def test_explicit_decorative_context_reaches_generation(monkeypatch):
+def test_generation_only_sends_media_facts_the_user_included_in_instructions(monkeypatch):
     from types import SimpleNamespace
 
     config = config_from_schema(media_form())
-    config.media_context = "I reviewed the media; it is decorative for these synthetic test answers."
+    config.media[0]["asset_id"] = "private-media-identity"
+    config.media[0]["caption"] = "private-media-caption"
+    instructions = "The image shows a red circle."
     requests = []
     monkeypatch.setattr(ai, "_open_chat", lambda *a, **k: SimpleNamespace(quit=lambda: None))
 
     def chat(driver, messages, *args, **kwargs):
-        requests.append(json.loads(messages[-1]["content"]))
-        return json.dumps({"responses": [{str(q.index): 1 for q in config.questions}]})
+        requests.extend(message["content"] for message in messages)
+        return json.dumps({"profile_id": 1, "answers": {str(q.index): 1 for q in config.questions}})
 
     monkeypatch.setattr(ai, "_chat", chat)
-    assert ai.generate_responses(config, 1)
-    assert requests[0]["user_media_context"] == config.media_context
-    assert requests[0]["media"] == config.media
+    assert ai.generate_responses(config, 1, instructions=instructions)
+    task = json.loads(requests[-1])
+    assert task["instructions"] == instructions
+    assert not {"media", "user_media_context"} & task.keys()
+    assert all("private-media-" not in message for message in requests)

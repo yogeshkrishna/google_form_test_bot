@@ -9,7 +9,7 @@ import pytest
 from test_inspector import URL, document, item
 from test_routing import branch_items
 
-from gformbot import ai, cli
+from gformbot import ai
 from gformbot.config import (
     QuestionConfig,
     RunConfig,
@@ -185,7 +185,7 @@ def test_retry_corrections_do_not_echo_arbitrary_error_details(monkeypatch):
 
     def chat(driver, messages, *args, **kwargs):
         calls.append(json.loads(messages[-1]["content"]))
-        return '{"responses":[{"1":"Test"}]}'
+        return '{"profile_id":1,"answers":{"1":"Test"}}'
 
     monkeypatch.setattr(ai, "_chat", chat)
     real = ai._validate_batch
@@ -203,35 +203,3 @@ def test_retry_corrections_do_not_echo_arbitrary_error_details(monkeypatch):
     assert "corrections" in calls[1]
     assert secret not in json.dumps(calls)
     assert "customer.pdf" not in json.dumps(calls)
-
-
-@pytest.mark.parametrize("completed", [False, True])
-def test_baseline_generation_job_resumes_without_changing_identity(tmp_path, monkeypatch, completed):
-    payload = json.loads(
-        (Path(__file__).parent / "fixtures/legacy-public-generation.json").read_text(encoding="utf-8")
-    )
-    assert "upload_types" in payload["request"]["config"]["questions"][0]
-    if not completed:
-        payload["responses"][1] = None
-    checkpoint = tmp_path / "legacy-generation.json"
-    checkpoint.write_text(json.dumps(payload), encoding="utf-8")
-    calls = []
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "_generation_browser", lambda: "auto")
-    monkeypatch.setattr(cli, "_show_preview", lambda *a: None)
-    monkeypatch.setattr(cli, "_preview_instructions", lambda *a: None)
-    monkeypatch.setattr(ai, "_open_chat", lambda *a: type("Driver", (), {"quit": lambda self: None})())
-
-    def chat(driver, messages, *args, **kwargs):
-        task = json.loads(messages[-1]["content"])
-        calls.append(task)
-        assert task["profile_numbers"] == [2]
-        return '{"responses":[{"1":2,"2":"Resumed answer"}]}'
-
-    monkeypatch.setattr(ai, "_chat", chat)
-    cli._resume_generation(checkpoint, resume=True)
-    restored = json.loads(checkpoint.read_text(encoding="utf-8"))
-    assert restored["job_key"] == payload["job_key"]
-    assert restored["responses"][0] == payload["responses"][0]
-    assert all(restored["responses"])
-    assert len(calls) == (0 if completed else 1)

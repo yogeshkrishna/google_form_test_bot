@@ -204,21 +204,6 @@ def test_saved_branching_plan_resumes_original_rows_without_rewriting_answers(tm
     assert json.loads(path.read_text())["responses"] == json.loads(json.dumps(rows))
 
 
-def test_editing_a_routing_answer_collects_newly_required_answers(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    config = config_from_schema(schema())
-    original = validate_answer(config, {1: "Student", 2: "Math", 4: "Hi"})
-    path = cli._save_plan(config, [original])
-    original_digest = digest(path)
-    selections = iter([1, 1])
-    text = iter(["Worker", "Teacher"])
-    monkeypatch.setattr(cli, "_ask_select", lambda *args, **kwargs: next(selections))
-    monkeypatch.setattr(cli, "_ask_text", lambda *args, **kwargs: next(text))
-    _, rows, edited = cli._edit_batch(config, [original], path)
-    assert rows == [{1: "Worker", 2: "Math", 3: "Teacher", 4: "Hi"}]
-    assert edited != path and digest(path) == original_digest
-
-
 def test_ai_generates_a_branching_batch_in_one_request(monkeypatch):
     config = config_from_schema(schema())
     requests = []
@@ -229,8 +214,11 @@ def test_ai_generates_a_branching_batch_in_one_request(monkeypatch):
 
     def chat(driver, messages, output_schema, *args, **kwargs):
         requests.append(json.loads(messages[1]["content"]))
-        return json.dumps(
-            {"responses": [{"1": 1, "2": "Math", "3": "", "4": "Hi"}, {"1": 3, "2": "", "3": "", "4": ""}]}
+        return "\n".join(
+            json.dumps({"profile_id": i, "answers": row})
+            for i, row in enumerate(
+                [{"1": 1, "2": "Math", "3": "", "4": "Hi"}, {"1": 3, "2": "", "3": "", "4": ""}], 1
+            )
         )
 
     monkeypatch.setattr(ai, "_open_chat", lambda *args: Driver())
@@ -287,15 +275,15 @@ def test_saved_config_rejects_malformed_routing(field, value):
         config_from_dict(data)
 
 
-def test_loop_is_rejected_before_browser_navigation():
-    from gformbot.filler import execute_response
+def test_loop_is_rejected_before_opening_http_client(monkeypatch):
+    from types import SimpleNamespace
+
+    from gformbot import transport
+    from gformbot.execution import Runner
 
     config = config_from_schema(schema())
     config.questions[0].branches["Student"] = 1
 
-    class Driver:
-        def get(self, url):
-            raise AssertionError("A looping plan must be rejected before navigation")
-
+    monkeypatch.setattr(transport, "Client", lambda *a: pytest.fail("Looping plan opened a client"))
     with pytest.raises(ValueError, match="repeated sections"):
-        execute_response(Driver(), config, {1: "Student"}, submit=True)
+        Runner(config, [{1: "Student"}], SimpleNamespace()).run()

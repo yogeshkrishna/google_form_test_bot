@@ -1,12 +1,10 @@
 """Public-only scope and predictable process diagnostics."""
 
-import json
-
 import pytest
 from click.testing import CliRunner
 
 from gformbot import browser, cli, inspector
-from gformbot.config import QuestionConfig, RunConfig, config_to_dict
+from gformbot.config import QuestionConfig, RunConfig
 
 
 @pytest.mark.parametrize("command", ["generate", "prepare"])
@@ -67,8 +65,8 @@ def test_doctor_http_check_succeeds_without_browser(monkeypatch):
 
 def test_execution_ui_exposes_only_its_explicit_contract():
     ui = cli._run_ui()
-    assert callable(ui._info) and callable(ui._ask_select)
-    assert not hasattr(ui, "os") and not hasattr(ui, "load_config")
+    assert callable(ui._info) and callable(ui._section)
+    assert not hasattr(ui, "_ask_select") and not hasattr(ui, "load_config")
 
 
 def test_cancel_is_reported_on_stderr(monkeypatch, capsys):
@@ -78,31 +76,3 @@ def test_cancel_is_reported_on_stderr(monkeypatch, capsys):
     assert failure.value.code == 130
     captured = capsys.readouterr()
     assert captured.out == "" and "Cancelled" in captured.err
-
-
-def test_legacy_account_checkpoint_cannot_resume_generation(tmp_path, monkeypatch):
-    config = RunConfig(
-        "https://docs.google.com/forms/d/e/test/viewform",
-        requires_signin=True,
-        questions=[QuestionConfig(1, "Answer", "text", True)],
-    )
-    path = tmp_path / "legacy.json"
-    path.write_text(
-        json.dumps(
-            {
-                "kind": "gformbot-generation",
-                "schema_version": 1,
-                "request": {"config": config_to_dict(config), "count": 2},
-                "responses": [{"1": "Accepted earlier"}, None],
-            }
-        ),
-        encoding="utf-8",
-    )
-    original = path.read_bytes()
-    monkeypatch.setattr(cli, "_generation_browser", lambda: pytest.fail("No account-bound generation"))
-    with pytest.raises(ValueError, match="Only public forms"):
-        cli._resume_generation(path, resume=True)
-    assert path.read_bytes() == original
-    cli._resume_generation(path, export=tmp_path / "accepted.csv")
-    assert "Accepted earlier" in (tmp_path / "accepted.csv").read_text(encoding="utf-8")
-    assert path.read_bytes() == original
