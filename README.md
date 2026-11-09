@@ -13,7 +13,7 @@ python -m gformbot
 
 On macOS or Linux, use `python3` in both commands if that is your Python command. On Windows, use `py` in both if you use the Python launcher. Keeping the same interpreter for install and launch works even when the standalone `gformbot` command is missing from PATH.
 
-These instructions describe the GitHub source build of `0.4.0`. PyPI still has `0.3.1`. Installing from GitHub requires Git and Python 3.10 or newer. Submitting supplied answers uses HTTP and needs no browser. ChatGPT generation needs a supported installed browser and its driver.
+These instructions describe the GitHub source build of `0.4.0`. PyPI still has `0.3.1`. Installing from GitHub requires Git and Python 3.10 or newer. Submitting supplied answers uses HTTP and needs no browser. ChatGPT generation needs a supported installed browser and its driver, and runs headless by default.
 
 Windows x64, macOS Intel/Apple Silicon, and Linux glibc x64/ARM64 wheels include a private Selenium subset and only their native driver manager. All use the same package name and version; pip selects the matching wheel. Other platforms retain official Selenium. Existing Selenium installations can coexist; pip does not remove old shared dependencies during an upgrade. [Build details and measurements](docs/selenium-runtime.md).
 
@@ -27,7 +27,7 @@ The wizard's file picker opens after you press Enter. It needs a graphical deskt
 | --- | --- |
 | `gformbot` | Guided setup, answer sources, saved work, review, and execution choices. |
 | `gformbot generate URL` | Prepare answers and submit directly over HTTP. No form browser or manual Submit step. |
-| `gformbot prepare URL` | Prepare and save response JSON without filling or submitting a form. AI preparation uses ChatGPT in a private browser. |
+| `gformbot prepare URL` | Prepare and save response JSON without filling or submitting a form. AI preparation uses ChatGPT in a headless private browser. |
 | `gformbot preview [FILE.json]` | Open a JSON file in your system's default app. Without a file, choose saved response plans, newest first. This command does not fill or submit. |
 
 Public respondent URLs and `forms.gle` short links work. In the wizard, **View this form's questions** displays questions, choices, sections and rules, then returns to the answer choices.
@@ -84,7 +84,9 @@ Completion messages are captured only after an HTTP confirmation. Internal reque
 
 ## AI generation
 
-AI generation uses the ChatGPT website in a visible private browser. No API key, model download or separate AI SDK is required. Use your ChatGPT account when the website asks for sign-in; the interactive workflow pauses for sign-in or verification. Private sessions do not reuse your ordinary browser profile.
+AI generation uses the ChatGPT website in a headless private browser. Chromium sessions use their installed browser's desktop user-agent, preserving its platform and version. No API key, model download or separate AI SDK is required. Private sessions do not reuse your ordinary browser profile.
+
+If ChatGPT needs sign-in or verification before the first prompt, the interactive wizard asks you to press Enter to open a fresh visible private session. Chrome and Edge start minimized; open the window from your taskbar, complete the requested step, then press Enter again to continue. This fallback needs a graphical desktop; headless generation does not. Scripted runs stop with an explanation instead of opening a window. GFormBot does not automate verification or restart the session after sending a prompt.
 
 GFormBot sends text prompts with the form context, user instructions, answer schema, reference choice frequencies and up to six reference examples. The website does not enforce that schema: returned answers pass the same local form validation as imported data, with bounded correction attempts. Do not send private reference data without permission. AI answers can be plausible but factually wrong; format and constraint checks do not establish correctness or representativeness.
 
@@ -150,7 +152,7 @@ python -m build
 python -m twine check dist/*
 ```
 
-Set `GFORMBOT_BROWSER_TESTS=1` for optional visible-browser fixtures on a graphical desktop. These exercise a local test server without Google submissions or live AI.
+Set `GFORMBOT_BROWSER_TESTS=1` for optional headless ChatGPT adapter fixtures. These exercise a local test server without Google submissions or live AI, and need no graphical desktop.
 Set `GFORMBOT_TEST_BROWSER=edge` or `firefox` to run the same fixtures against that installed browser.
 
 CI checks Windows and Ubuntu on Python 3.10, 3.12, 3.13, and 3.14, with Python 3.12 checks on macOS Intel, Apple Silicon, and Linux ARM64. It builds and smoke-tests each native wheel outside the checkout. Local ChatGPT adapter fixtures run in Chrome on Ubuntu and in Chrome, Edge, and Firefox on Windows. Build artifacts are retained in CI for inspection.

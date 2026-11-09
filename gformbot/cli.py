@@ -455,7 +455,7 @@ def _generate(config, reference=None, instructions="", **options):
     options.setdefault("browser", config.browser)
     options.setdefault("attention", _ask_text if interactive_input() else None)
     _info(
-        "Generating with ChatGPT in a private browser. Form context, instructions, "
+        "Generating with ChatGPT in a private headless browser. Form context, instructions, "
         "and reference examples will be sent as text."
     )
     generate = generate_responses if partials is None else complete_responses

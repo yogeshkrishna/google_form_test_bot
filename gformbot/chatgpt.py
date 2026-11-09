@@ -1,4 +1,4 @@
-"""Use the visible ChatGPT website in one fresh private browser session."""
+"""Use ChatGPT in a private headless session, with manual help before sending."""
 
 import math
 import time
@@ -21,8 +21,8 @@ class ChatGPTError(ValueError):
         self.partial_content = partial_content
 
 
-def open_chat(browser):
-    driver = get_driver(browser)
+def _open_driver(browser, *, headless):
+    driver = get_driver(browser, headless=headless)
     try:
         driver.get("https://chatgpt.com/")
     except BaseException:
@@ -32,6 +32,35 @@ def open_chat(browser):
             pass  # Preserve the navigation failure when cleanup also fails.
         raise
     return driver
+
+
+class _ChatSession:
+    """Keep the caller's session stable if initial sign-in needs a visible browser."""
+
+    def __init__(self, browser):
+        self.browser = browser
+        self.headless = True
+        self.sent = False
+        self._driver = _open_driver(browser, headless=True)
+
+    def __getattr__(self, name):
+        return getattr(self._driver, name)
+
+    def show(self):
+        if self.sent:
+            raise ChatGPTError("ChatGPT's session cannot be restarted after sending a prompt.")
+        self.quit()
+        self._driver = _open_driver(self.browser, headless=False)
+        self.headless = False
+
+    def quit(self):
+        driver, self._driver = self._driver, None
+        if driver is not None:
+            driver.quit()
+
+
+def open_chat(browser):
+    return _ChatSession(browser)
 
 
 def new_chat(driver):
@@ -53,6 +82,19 @@ def _editor(driver):
         except StaleElementReferenceException:
             continue
     return None
+
+
+def _verification_page(driver):
+    """Require both the challenge title and markup before naming the block."""
+    try:
+        return driver.title.strip() == "Just a moment..." and bool(
+            driver.find_elements(
+                By.CSS_SELECTOR,
+                "script[src*='/cdn-cgi/challenge-platform'], #challenge-stage, #challenge-running",
+            )
+        )
+    except (AttributeError, WebDriverException, OSError):
+        return False
 
 
 def _messages(driver):
@@ -93,10 +135,23 @@ def ask(driver, messages, schema=None, timeout=180, attention=None):
     try:
         editor = WebDriverWait(driver, min(20, timeout), poll_frequency=0.2).until(_editor)
     except TimeoutException as exc:
+        verification = _verification_page(driver)
+        reason = "Cloudflare browser verification is blocking ChatGPT. " if verification else ""
+        if isinstance(driver, _ChatSession) and driver.headless and driver.sent:
+            raise ChatGPTError(
+                reason
+                + "ChatGPT's headless session is no longer ready. Generation stopped; accepted answers are preserved."
+            ) from exc
         if attention is None:
             raise ChatGPTError(
-                "ChatGPT needs sign-in, a verification step, or its page has changed. Use the interactive wizard to handle this in the browser."
+                (reason or "ChatGPT needs sign-in, a verification step, or its page has changed. ")
+                + "Use the interactive wizard to open a visible private browser and complete any verification manually, or supply answers with --data."
             ) from exc
+        if isinstance(driver, _ChatSession) and driver.headless:
+            attention(
+                (reason or "ChatGPT needs your attention. ") + "Press Enter to open a visible private browser"
+            )
+            driver.show()
         attention("Complete any ChatGPT sign-in or verification in the private browser, then press Enter")
         try:
             editor = WebDriverWait(driver, min(30, timeout), poll_frequency=0.2).until(_editor)
@@ -146,6 +201,8 @@ def ask(driver, messages, schema=None, timeout=180, attention=None):
                 None,
             )
         )
+        if isinstance(driver, _ChatSession):
+            driver.sent = True  # An uncertain Send must never trigger a session restart.
         button.click()
     except TimeoutException as exc:
         raise ChatGPTError("ChatGPT's Send button is unavailable. Check the page or account limits.") from exc

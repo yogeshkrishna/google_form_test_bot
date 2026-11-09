@@ -40,7 +40,7 @@ def html_page():
 
 @pytest.fixture(autouse=True)
 def selected_fixture_browser(request, monkeypatch):
-    """Allow an explicitly selected browser for optional visible interaction checks."""
+    """Allow an explicitly selected browser for local interaction checks."""
     import os
 
     selected = os.environ.get("GFORMBOT_TEST_BROWSER")
@@ -51,7 +51,7 @@ def selected_fixture_browser(request, monkeypatch):
         monkeypatch.setattr(
             browser,
             "get_driver",
-            lambda name="auto", **kw: factory(selected),
+            lambda name="auto", **kw: factory(selected, **kw),
         )
 
 

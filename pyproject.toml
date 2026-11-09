@@ -45,7 +45,7 @@ gformbot = "gformbot:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["browser: opens a visible local browser session"]
+markers = ["browser: opens a local browser session"]
 
 [tool.ruff]
 target-version = "py310"
