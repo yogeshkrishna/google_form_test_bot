@@ -2,13 +2,14 @@ import json
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
 
 from gformbot import chatgpt
 
 
-def test_open_chat_is_visible_and_navigates_only_to_chatgpt(monkeypatch):
+def test_open_chat_is_headless_and_navigates_only_to_chatgpt(monkeypatch):
     events = []
 
     class Driver:
@@ -18,13 +19,14 @@ def test_open_chat_is_visible_and_navigates_only_to_chatgpt(monkeypatch):
         def quit(self):
             events.append("quit")
 
-    def get_driver(browser):
-        events.append(browser)
+    def get_driver(browser, *, headless):
+        events.append((browser, headless))
         return Driver()
 
     monkeypatch.setattr(chatgpt, "get_driver", get_driver)
-    chatgpt.open_chat("chrome")
-    assert events == ["chrome", "https://chatgpt.com/"]
+    session = chatgpt.open_chat("chrome")
+    assert session.headless is True
+    assert events == [("chrome", True), "https://chatgpt.com/"]
 
 
 def test_open_failure_closes_private_browser(monkeypatch):
@@ -258,6 +260,88 @@ def test_site_alert_after_partial_reply_is_fatal_even_without_streaming_controls
         chatgpt.ask(driver, [{"content": "Create profiles 1 and 2."}], timeout=2)
     assert failure.value.partial_content == state.content
     assert state.sends == 1
+
+
+@pytest.mark.parametrize("verification", [False, True])
+@pytest.mark.parametrize("mode", ["interactive", "scripted", "cancelled", "already_sent"])
+def test_headless_attention_never_opens_a_window_or_restarts_without_consent(
+    website, monkeypatch, mode, verification
+):
+    visible, state, _ = website
+    state.content = '{"profile_id":1,"answers":{"1":"A"}}'
+    events = []
+    hidden = SimpleNamespace(
+        title="Just a moment..." if verification else "ChatGPT",
+        get=lambda url: events.append(("hidden", url)),
+        quit=lambda: events.append("hidden closed"),
+        find_elements=lambda by, selector: (
+            [object()] if verification and "challenge-platform" in selector else []
+        ),
+    )
+    visible.get = lambda url: events.append(("visible", url))
+    visible.quit = lambda: events.append("visible closed")
+
+    def factory(browser, *, headless):
+        events.append((browser, headless))
+        return hidden if headless else visible
+
+    def attention(message):
+        events.append(message)
+        if mode == "cancelled":
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(chatgpt, "get_driver", factory)
+    session = chatgpt.open_chat("edge")
+    session.sent = mode == "already_sent"
+    try:
+        if mode == "interactive":
+            assert chatgpt.ask(
+                session, [{"content": "Generate one profile."}], timeout=2, attention=attention
+            )
+            assert session.headless is False
+            assert events.index("hidden closed") < events.index(("edge", False))
+            assert "Press Enter to open" in events[2]
+            assert ("Cloudflare" in events[2]) is verification
+            assert state.sends == 1
+            assert state.prompt == "Generate one profile."
+        else:
+            error = KeyboardInterrupt if mode == "cancelled" else chatgpt.ChatGPTError
+            with pytest.raises(error) as failure:
+                chatgpt.ask(
+                    session,
+                    [{"content": "Generate one profile."}],
+                    timeout=2,
+                    attention=None if mode == "scripted" else attention,
+                )
+            if mode != "cancelled":
+                assert ("Cloudflare" in str(failure.value)) is verification
+            assert ("edge", False) not in events
+            assert state.sends == 0
+    finally:
+        session.quit()
+    assert "hidden closed" in events
+    assert ("visible closed" in events) is (mode == "interactive")
+
+
+@pytest.mark.parametrize("title,markup", [("Just a moment...", False), ("ChatGPT", True)])
+def test_challenge_detection_requires_both_title_and_markup(title, markup):
+    driver = SimpleNamespace(title=title, find_elements=lambda *args: [object()] if markup else [])
+    assert chatgpt._verification_page(driver) is False
+
+
+def test_unavailable_challenge_diagnostic_preserves_original_editor_failure(website, monkeypatch):
+    driver, state, _ = website
+    driver.title = "Just a moment..."
+
+    def missing_editor(by, selector):
+        if "challenge-platform" in selector:
+            raise chatgpt.WebDriverException("Session disappeared during diagnostics")
+        return []
+
+    monkeypatch.setattr(driver, "find_elements", missing_editor)
+    with pytest.raises(chatgpt.ChatGPTError, match="needs sign-in"):
+        chatgpt.ask(driver, [{"content": "Generate one profile."}], timeout=1)
+    assert state.sends == 0
 
 
 @pytest.mark.browser

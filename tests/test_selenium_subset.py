@@ -41,7 +41,8 @@ def test_private_browser_classes_and_resources_import_without_async_dependencies
         assert pkgutil.get_data(prefix + ".webdriver.remote", name + ".js")
 
 
-def test_all_browser_options_keep_existing_private_flags(monkeypatch):
+@pytest.mark.parametrize("headless", [True, False])
+def test_all_browser_options_keep_private_flags_and_explicit_visibility(monkeypatch, headless):
     from gformbot.selenium_runtime import webdriver
 
     for name, private in (("chrome", "--incognito"), ("edge", "--inprivate"), ("firefox", "-private")):
@@ -51,8 +52,14 @@ def test_all_browser_options_keep_existing_private_flags(monkeypatch):
             {"chrome": "Chrome", "edge": "Edge", "firefox": "Firefox"}[name],
             lambda captured=captured, **kwargs: captured.append(kwargs["options"]),
         )
-        getattr(browser, "_" + name + "_driver")()
+        getattr(browser, "_" + name + "_driver")(headless=headless)
         assert private in captured[0].arguments
+        flag = "-headless" if name == "firefox" else "--headless=new"
+        assert (flag in captured[0].arguments) is headless
+        if name != "firefox":
+            assert ("--window-size=1280,900" in captured[0].arguments) is headless
+            assert ("--start-minimized" in captured[0].arguments) is not headless
+            assert "--start-maximized" not in captured[0].arguments
 
 
 def test_vendor_recipe_rejects_untrusted_bytes():

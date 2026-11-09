@@ -2,6 +2,7 @@
 
 ## 0.4.0 (unpublished)
 
+- Run ChatGPT headless by default with the installed Chromium browser's desktop user-agent. Offer a minimized private session for manual sign-in or verification only before sending the first prompt, and report browser-verification blocks explicitly.
 - Submit public anonymous forms over HTTP. Verify the receipt before recording a success. Keep exact saved responses, skip confirmed submissions, and ask before retrying an uncertain outcome. Selenium is used only for ChatGPT.
 - Add Quick submit, double-Backspace navigation, and empty count fields that accept their displayed default on Enter. Form questions can be opened on demand without leaving answer selection.
 - Show one sample response before submitting from the guided workflow. Review or edit through a local browser editor with shared validation and protection for submitted and uncertain rows. Export remaining responses or resume an interrupted submission.

@@ -1,10 +1,10 @@
 # Small Selenium runtimes
 
-Selenium opens ChatGPT for text generation. Form inspection and submission use direct HTTP. Form media is listed for the user to review. Add relevant visual details to the extra instructions if they affect the answers.
+Selenium runs ChatGPT for text generation in a headless private browser by default. Form inspection and submission use direct HTTP. Form media is listed for the user to review. Add relevant visual details to the extra instructions if they affect the answers.
 
 Native Windows x64, macOS Intel/Apple Silicon and Linux glibc x64/ARM64 wheels include a private, hash-locked subset of Selenium 4.51.0. Each includes the same Python import closure and exactly one matching Selenium Manager. macOS wheels retain only their native architecture from upstream's universal executable. Linux executables are statically linked. Portable fallback wheels retain official Selenium for other platforms.
 
-The subset keeps Chrome, Edge, Firefox, waits, element controls, exceptions, scripts, certificates and proxies. It removes other OS/CPU binaries, unsupported browser adapters, generated DevTools code and unused BiDi/CDP connections. Trio, WebSocket and their unused dependencies are not installed. Driver/browser downloads and caches remain separate from the package. AI generation needs a graphical desktop; HTTP submission does not.
+The subset keeps Chrome, Edge, Firefox, waits, element controls, exceptions, scripts, certificates and proxies. It removes other OS/CPU binaries, unsupported browser adapters, generated DevTools code and unused BiDi/CDP connections. Trio, WebSocket and their unused dependencies are not installed. Driver/browser downloads and caches remain separate from the package. Headless AI generation needs no graphical desktop. If sign-in or verification is needed before any prompt is sent, the interactive wizard offers to open a fresh visible private session; that fallback needs a desktop and manual interaction. Noninteractive runs stop instead.
 
 The subset lives in GFormBot's private namespace so it can coexist with official Selenium. Upstream license headers, LICENSE, NOTICE and Manager third-party notices are retained.
 
@@ -33,7 +33,7 @@ python tools/check_wheel.py dist
 
 The recipe checks the upstream wheel SHA-256 before selecting the import closure, applying narrow namespace/protocol patches and recording every output hash. Review the recipe when changing upstream versions; do not hand-edit generated files. The source archive includes all native managers; wheel builds select one, preserve executable permissions and write a matching manifest. Installing from source needs no separate Selenium-source download on supported systems.
 
-Native wheel targets are Windows x64, macOS 10.12+ Intel, macOS 11+ Apple Silicon, and Linux glibc 2.17+ x64/ARM64. Browser and Python support may require newer OS versions. Other architectures and libc implementations use the upstream fallback. CI builds and installs wheels on all five targets and runs the bundled Manager. Browser availability and a graphical desktop still determine whether ChatGPT generation can run.
+Native wheel targets are Windows x64, macOS 10.12+ Intel, macOS 11+ Apple Silicon, and Linux glibc 2.17+ x64/ARM64. Browser and Python support may require newer OS versions. Other architectures and libc implementations use the upstream fallback. CI builds and installs wheels on all five targets and runs the bundled Manager. ChatGPT generation requires a supported installed browser and driver even in headless mode. Only the optional visible sign-in/verification fallback requires a graphical desktop.
 
 To compare two clean environments built with the same Python and dependency versions:
 

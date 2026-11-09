@@ -8,7 +8,7 @@ These instructions apply to this project. They override unrelated inherited chal
 - Never create or publish a release, push a release tag, trigger a publishing workflow, or upload release artifacts without that request.
 - An available API token, configured credentials, passing CI, a version bump, or a request to prepare a release is not permission to publish.
 - Do not add automatic publishing on pushes, tags, or merges. Any future publishing workflow must require a deliberate user action and approval.
-- The user authorizes commits, pushes, PR creation, and merges for agreed project work. Keep fixes focused and tested. Package publication still requires an explicit request.
+- Do not commit, push, create or modify GitHub issues or PRs, merge, tag, or publish without the user's explicit approval for that action. Implementation and testing do not authorize Git or GitHub changes.
 - Never put tokens, passwords, cookies, or browser profiles in source files, logs, issue bodies, saved response files, or chat output. Configure credentials through an appropriate secret store when the user asks for setup.
 
 ## Project direction
@@ -27,6 +27,6 @@ The active source is this repository. The sibling `google_form_test_bot_init` an
 - Follow `CONTRIBUTING.md`: one issue, one short branch, a failing regression case, a focused fix, local checks, a linked PR, CI/review, merge, and a separately authorized publication.
 - Use the existing default branch (`master`) as the integration target. Do not introduce a permanent develop branch or rewrite history for appearance.
 - Preserve saved-plan fingerprints and batch identities. Confirmed and uncertain outcomes must never become automatically retryable after migration or cleanup.
-- Use the standing Git authorization above within agreed project scope. It does not authorize package or release publication.
+- Request explicit approval before any Git or GitHub mutation, package upload, or release publication. Earlier standing authorization no longer applies; read-only status and review commands remain allowed.
 - Write short, human titles and descriptions. Include the actual failure, resulting behavior, relevant verification, and remaining limits. Use truthful metadata and useful CI; do not manufacture activity or add badges implying unverified support.
 - Unknown routing must fail closed. Never silently skip an unsupported question on the active route or invent an answer.

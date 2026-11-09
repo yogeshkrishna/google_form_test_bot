@@ -464,7 +464,7 @@ def _generate_responses(
     except ValueError as exc:
         raise GenerationError(str(exc)) from exc
     if browser not in ("chrome", "firefox", "edge", "auto"):
-        raise GenerationError("ChatGPT generation needs a visible chrome, firefox, edge, or auto browser.")
+        raise GenerationError("ChatGPT generation needs chrome, firefox, edge, or auto.")
     if not config.questions:
         raise GenerationError("There are no questions to generate answers for.")
     if not isinstance(instructions, str) or len(instructions) > 10_000:
