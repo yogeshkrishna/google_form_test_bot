@@ -7,7 +7,7 @@ Supports public forms that accept anonymous responses. Google-account sign-in an
 ## Install
 
 ```powershell
-python -m pip install "git+https://github.com/yogeshkrishna/google_form_test_bot.git@fix/guided-submission"
+python -m pip install "git+https://github.com/yogeshkrishna/google_form_test_bot.git"
 python -m gformbot
 ```
 
@@ -153,7 +153,7 @@ python -m twine check dist/*
 Set `GFORMBOT_BROWSER_TESTS=1` for optional visible-browser fixtures on a graphical desktop. These exercise a local test server without Google submissions or live AI.
 Set `GFORMBOT_TEST_BROWSER=edge` or `firefox` to run the same fixtures against that installed browser.
 
-CI is configured to check Windows/Ubuntu on Python 3.10, 3.12, 3.13, and 3.14, with Python 3.12 checks on macOS Intel/Apple Silicon and Linux ARM64. It builds each native wheel, checks its manager executable and smoke-tests installation outside the checkout. Browser compatibility jobs are not part of CI. Build artifacts are uploaded without publishing packages or creating releases.
+CI checks Windows and Ubuntu on Python 3.10, 3.12, 3.13, and 3.14, with Python 3.12 checks on macOS Intel, Apple Silicon, and Linux ARM64. It builds and smoke-tests each native wheel outside the checkout. Local ChatGPT adapter fixtures run in Chrome on Ubuntu and in Chrome, Edge, and Firefox on Windows. Build artifacts are retained in CI for inspection.
 
 ## License
 
