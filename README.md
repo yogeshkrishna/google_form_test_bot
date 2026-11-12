@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/gformbot-art/02-readme-hero.svg" width="880" alt="GFormBot: test your Google Forms before they go live.">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/3f8dc86096e547b1e8037495461458d30358e04b/docs/assets/gformbot-art/02-readme-hero.svg" width="880" alt="GFormBot: test your Google Forms before they go live.">
 </p>
 
 <h1 align="center">Test your Google Forms before they go live.</h1>
@@ -21,7 +21,7 @@
 You built a workshop signup form. Will both session choices work? Can someone leave the notes blank? Give GFormBot a few example rows and check the batch before sending it.
 
 <p align="center">
-  <img src="docs/assets/gformbot-art/05-terminal-demo.gif" width="880" alt="Offline demo: prepare three workshop rows and save a response plan without submitting.">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/3f8dc86096e547b1e8037495461458d30358e04b/docs/assets/gformbot-art/05-terminal-demo.gif" width="880" alt="Offline demo: prepare three workshop rows and save a response plan without submitting.">
 </p>
 
 The demo runs the real `prepare` command against an offline form fixture. It checks three rows and saves a response plan without submitting.
@@ -29,24 +29,22 @@ The demo runs the real `prepare` command against an offline form fixture. It che
 ## Get started
 
 <p align="center">
-  <img src="docs/assets/gformbot-art/11-quick-start.svg" width="880" alt="Install GFormBot, open the guided menu, and review a first batch.">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/3f8dc86096e547b1e8037495461458d30358e04b/docs/assets/gformbot-art/11-quick-start.svg" width="880" alt="Install GFormBot, open the guided menu, and review a first batch.">
 </p>
 
 ### 1. Install GFormBot
 
-The features on this page are in the **GitHub build**. Check the [PyPI release history](https://pypi.org/project/gformbot/#history) before installing with `python -m pip install gformbot`.
-
-With [Python 3.10 or newer](https://www.python.org/downloads/) and [Git](https://git-scm.com/install/) installed, run these commands in PowerShell or Terminal.
+With [Python 3.10 or newer](https://www.python.org/downloads/) installed, run these commands in PowerShell or Terminal.
 
 ```bash
-python -m pip install "git+https://github.com/yogeshkrishna/google_form_test_bot.git"
+python -m pip install --upgrade gformbot
 python -m gformbot --version
 ```
 
 If your Python command is `python3` on macOS or Linux, or `py` on Windows, use that in both lines. Running GFormBot through the same Python you used to install it also works when the short `gformbot` command is missing from PATH.
 
 <details>
-<summary><strong>Installing without Git</strong></summary>
+<summary><strong>Installing from source</strong></summary>
 
 [Download the source ZIP](https://github.com/yogeshkrishna/google_form_test_bot/archive/refs/heads/master.zip), extract it, and open a terminal in the extracted folder containing `pyproject.toml`. Run `python -m pip install .` followed by `python -m gformbot --version`.
 
@@ -71,7 +69,7 @@ Once the sample appears, choose **Review or edit responses** to open the local e
 ## Three ways to get answers
 
 <p align="center">
-  <img src="docs/assets/gformbot-art/06-workflow-infographic.svg" width="880" alt="Inspect a form, choose an answer source, check responses, and save or submit.">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/3f8dc86096e547b1e8037495461458d30358e04b/docs/assets/gformbot-art/06-workflow-infographic.svg" width="880" alt="Inspect a form, choose an answer source, check responses, and save or submit.">
 </p>
 
 | Answer source | What it does | When to use it |
@@ -114,7 +112,7 @@ python -m gformbot generate "FORM_URL" --data gformbot-responses.json
 ## Built for forms with more than one path
 
 <p align="center">
-  <img src="docs/assets/gformbot-art/10-feature-overview.svg" width="880" alt="Validate answers, review and edit, and resume a batch.">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/3f8dc86096e547b1e8037495461458d30358e04b/docs/assets/gformbot-art/10-feature-overview.svg" width="880" alt="Validate answers, review and edit, and resume a batch.">
 </p>
 
 **Follow the route each answer picks.** If “Evening” goes to a different section, GFormBot checks the questions on that route. It handles skipped sections and early submission. A looping or unclear route stops with an error.
@@ -128,7 +126,7 @@ python -m gformbot generate "FORM_URL" --data gformbot-responses.json
 ## What forms work?
 
 <p align="center">
-  <img src="docs/assets/gformbot-art/13-supported-forms.svg" width="880" alt="Supported question families include text, choices, ratings, dates, grids and sections.">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/3f8dc86096e547b1e8037495461458d30358e04b/docs/assets/gformbot-art/13-supported-forms.svg" width="880" alt="Supported question families include text, choices, ratings, dates, grids and sections.">
 </p>
 
 GFormBot supports **public respondent forms that accept anonymous answers**. Use it for testing surveys, signup forms, questionnaires, and spreadsheet workflows you have permission to test.
@@ -143,7 +141,7 @@ GFormBot supports **public respondent forms that accept anonymous answers**. Use
 | **Sections** | Branching, skipped sections, early submission, descriptions, and instructions |
 
 <p align="center">
-  <img src="docs/assets/gformbot-art/14-limitations.svg" width="880" alt="Login-required forms, file uploads, and unsupported controls are outside supported execution.">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/3f8dc86096e547b1e8037495461458d30358e04b/docs/assets/gformbot-art/14-limitations.svg" width="880" alt="Login-required forms, file uploads, and unsupported controls are outside supported execution.">
 </p>
 
 Forms requiring a Google login, verified account email, or one response per account cannot be submitted. File-upload questions, unknown validation rules, and unsupported controls on the chosen route stop execution. Images and videos appear in form inspection for you to review. Put any relevant observations in **Extra instructions** if AI needs them.
@@ -202,7 +200,7 @@ Policies can also fix exact values, allow specific choices, set route-specific v
 ### AI availability and privacy
 
 <p align="center">
-  <img src="docs/assets/gformbot-art/15-privacy.svg" width="880" alt="AI mode can send form details to a service; plans and logs are local files.">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/3f8dc86096e547b1e8037495461458d30358e04b/docs/assets/gformbot-art/15-privacy.svg" width="880" alt="AI mode can send form details to a service; plans and logs are local files.">
 </p>
 
 AI mode uses ChatGPT’s unofficial guest service over HTTPS. Guest access can be limited or unavailable. **CSV and saved-plan workflows work without AI.** The form content, your instructions, and guide examples may leave your device in AI mode. Use fictional data and review anything you share. Form images and videos stay in inspection.
@@ -212,7 +210,7 @@ Saved plans, AI drafts, configuration, and run logs are local files. They can co
 ## Command reference
 
 <p align="center">
-  <img src="docs/assets/gformbot-art/12-architecture.svg" width="880" alt="Form inspection, answer sources, validation, and a response plan.">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/3f8dc86096e547b1e8037495461458d30358e04b/docs/assets/gformbot-art/12-architecture.svg" width="880" alt="Form inspection, answer sources, validation, and a response plan.">
 </p>
 
 | I want to… | Run |
@@ -247,7 +245,7 @@ Add `--help` after a command for its flags. `-n` accepts 1–500 and uses the sa
 ---
 
 <p align="center">
-  <img src="docs/assets/gformbot-art/16-footer.svg" width="880" alt="Get started, contribute, report an issue, or read the security policy.">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/3f8dc86096e547b1e8037495461458d30358e04b/docs/assets/gformbot-art/16-footer.svg" width="880" alt="Get started, contribute, report an issue, or read the security policy.">
 </p>
 
 **Ready to test a form?** [Install GFormBot](#get-started) and start with one response.
