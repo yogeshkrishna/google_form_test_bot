@@ -125,7 +125,10 @@ def contact_problem(kind, value) -> str | None:
             or domain.rsplit(".", 1)[-1] in _RESERVED_TLDS
             or local in {"dummy", "placeholder", "yourname", "test", "someone"}
         ):
-            return "Use a natural address at an appropriate mail provider or organization."
+            return (
+                "Use a natural address at an appropriate mail provider or organization. "
+                "For a reserved test domain, set email_domain and name_from in a quality policy."
+            )
         if domain in _GMAIL_DOMAINS:
             handle = local.partition("+")[0].replace(".", "")
             if not re.fullmatch(r"[a-z0-9]{6,30}", handle) or handle in {"postmaster", "abuse"}:

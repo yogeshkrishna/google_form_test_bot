@@ -187,11 +187,16 @@ def test_existing_artifacts_are_not_overwritten(config, tmp_path):
 
 
 def setup_execution(config, monkeypatch):
-    state = SimpleNamespace(calls=[], logs=[], clients=0, closed_clients=0)
+    state = SimpleNamespace(calls=[], logs=[], log_metadata=[], clients=0, closed_clients=0)
 
     monkeypatch.setattr(inspector, "inspect_form", lambda url: config)
     monkeypatch.setattr(logger, "validate_log_path", lambda *args: None)
-    monkeypatch.setattr(logger, "log_result", lambda *args: state.logs.append(args))
+
+    def record_log(*args, **metadata):
+        state.logs.append(args)
+        state.log_metadata.append(metadata)
+
+    monkeypatch.setattr(logger, "log_result", record_log)
 
     class Client:
         def __init__(self, config):
@@ -202,10 +207,6 @@ def setup_execution(config, monkeypatch):
 
         def __exit__(self, *args):
             state.closed_clients += 1
-
-        def validate(self, answer, **kwargs):
-            state.calls.append(dict(answer))
-            return True, "checked"
 
         def submit(self, answer, before_submit=None, **kwargs):
             if before_submit:
@@ -224,6 +225,7 @@ def test_batch_submits_exact_answers_with_one_http_client(config, monkeypatch):
     cli._run_submit(config, answers=profiles())
     assert state.clients == state.closed_clients == 1
     assert state.calls == profiles()
+    assert state.log_metadata == [{"form_title": config.form_title}] * len(profiles())
 
 
 def test_false_result_stops_with_honest_count(config, monkeypatch):
@@ -248,6 +250,7 @@ def test_uncertain_submit_is_logged_once_and_never_retried(config, monkeypatch):
         cli._run_submit(config, answers=profiles())
     assert len(state.calls) == len(state.logs) == 1
     assert state.logs[0][3] is False
+    assert state.log_metadata[0]["uncertain"] is True
 
 
 def test_log_preflight_happens_before_http_client(config, monkeypatch):

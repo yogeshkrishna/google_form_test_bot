@@ -30,8 +30,16 @@ def remember(path):
         atomic_json(target, sorted(paths))
 
 
+def candidates():
+    """Find saved paths and mark which are known response plans before reading them."""
+    paths = {
+        p.resolve(): p.name.startswith("gformbot-responses")
+        for p in Path.cwd().glob("*.json")
+        if p.is_file() and not p.is_symlink()
+    }
+    paths.update((p.resolve(), True) for p in _remembered() if p.is_file() and not p.is_symlink())
+    return paths
+
+
 def available():
-    """List existing candidates without reading unrelated directories recursively."""
-    paths = {p.resolve() for p in _remembered() if p.is_file() and not p.is_symlink()}
-    paths.update(p.resolve() for p in Path.cwd().glob("*.json") if p.is_file() and not p.is_symlink())
-    return sorted(paths)
+    return sorted(candidates())

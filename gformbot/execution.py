@@ -23,15 +23,23 @@ class Runner:
     def original(self, index):
         return self.session.ids[index - 1] if self.session else index
 
-    def log(self, index, ok, message):
+    def log(self, index, ok, message, *, uncertain=False):
         from .logger import log_result
 
         context = {"batch_id": self.session.identity, "form_url": self.config.url} if self.session else {}
+        if uncertain:
+            context["uncertain"] = True
         log_result(
-            self.config.log_file, self.original(index), self.answers[index - 1], ok, message, **context
+            self.config.log_file,
+            self.original(index),
+            self.answers[index - 1],
+            ok,
+            message,
+            form_title=self.config.form_title,
+            **context,
         )
 
-    def run(self, *, submit=True, compact=False):
+    def run(self, *, compact=False):
         from .access import require_public_form
         from .config import validate_config
         from .generator import validate_answer
@@ -47,21 +55,20 @@ class Runner:
                 raise ValueError("Response count does not match prepared answers.")
             validate_log_path(c.log_file)
             require_public_form(c)
-            return self._http(submit=submit, compact=compact)
+            return self._http(compact=compact)
         finally:
             self.followups.show(self.ui)
 
-    def _http(self, *, submit, compact=False):
+    def _http(self, *, compact=False):
         from .access import SubmissionRejectedError, SubmissionUncertainError
         from .config import clean_path
         from .transport import Client
 
         c, ui = self.config, self.ui
-        mode = "submitted" if submit else "checked"
         if not compact:
-            ui._section("Submitting responses" if submit else "Checking prepared requests")
+            ui._section("Submitting responses")
         completed = 0
-        if submit and self.session:
+        if self.session:
             self.session.start()
             c._plan_digest = self.session.digest
         with Client(c) as client:
@@ -73,41 +80,36 @@ class Runner:
 
                     try:
                         options = {"observe": observe}
-                        if submit:
-                            if self.session:
-                                options["before_submit"] = lambda i=index: self.session.before_submit(i)
-                            ok, message = client.submit(answer, **options)
-                        else:
-                            ok, message = client.validate(answer, **options)
+                        if self.session:
+                            options["before_submit"] = lambda i=index: self.session.before_submit(i)
+                        ok, message = client.submit(answer, **options)
                         if not ok:
                             raise SubmissionRejectedError(message)
                     except SubmissionUncertainError as exc:
                         if self.session:
                             self.session.failed(index, uncertain=True)
-                        self.log(index, False, str(exc))
+                        self.log(index, False, str(exc), uncertain=True)
                         raise ValueError(
                             f"Response {self.original(index)} is uncertain. Check the form before retrying: {exc}"
                         ) from exc
                     except SubmissionRejectedError as exc:
-                        if self.session and submit:
+                        if self.session:
                             self.session.failed(index, uncertain=False)
                         self.log(index, False, str(exc))
                         raise ValueError(f"Response {self.original(index)} was rejected: {exc}") from exc
-                    if submit and self.session:
+                    if self.session:
                         self.session.confirm(index)
                         c._plan_digest = self.session.digest
                     completed += 1
                     self.log(index, True, message)
-                    ui._info(f"[{completed}/{len(self.answers)}] Response {self.original(index)} {mode}")
-                    if submit and index < len(self.answers) and c.max_delay:
+                    ui._info(f"[{completed}/{len(self.answers)}] Response {self.original(index)} submitted")
+                    if index < len(self.answers) and c.max_delay:
                         time.sleep(random.uniform(c.min_delay, c.max_delay))
                 except Exception as exc:
                     raise ValueError(
-                        f"Response {self.original(index)} failed after {completed}/{len(self.answers)} {mode}: {exc}"
+                        f"Response {self.original(index)} failed after {completed}/{len(self.answers)} submitted: {exc}"
                     ) from exc
-        ui._info(f"Finished: {completed}/{len(self.answers)} {mode}. Log: {clean_path(c.log_file).resolve()}")
-        if not submit:
-            ui._info(
-                "Requests validated locally against the current form. Nothing was sent; answers stay saved."
-            )
-        return submit
+        ui._info(
+            f"Finished: {completed}/{len(self.answers)} submitted. Log: {clean_path(c.log_file).resolve()}"
+        )
+        return True

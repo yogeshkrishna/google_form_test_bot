@@ -75,7 +75,7 @@ def interactive_input(stream=_DEFAULT_STREAM):
     """Check the current input, or an explicit stream, for a usable console.
 
     Windows reports character devices such as NUL as TTYs too. Requiring a
-    console mode prevents redirected input from enabling prompts or browsers.
+    console mode keeps redirected input on the numbered prompt path.
     """
     if stream is _DEFAULT_STREAM:
         stream = getattr(sys, "stdin", None)
