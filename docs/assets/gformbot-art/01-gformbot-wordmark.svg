@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="180" viewBox="0 0 840 180" role="img" aria-labelledby="title desc">
+<title id="title">GFormBot wordmark</title>
+<desc id="desc">A paper form icon beside the GFormBot name.</desc>
+<g transform="translate(22 22)">
+<rect x="0" y="0" width="136" height="136" rx="26" fill="#3157C8"/>
+<path d="M39 25h43l21 21v66a9 9 0 0 1-9 9H42a9 9 0 0 1-9-9V34a9 9 0 0 1 6-9Z" fill="#F7F4EC"/>
+<path d="M82 25v19a3 3 0 0 0 3 3h18" fill="none" stroke="#3157C8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M50 58h36M50 72h29M50 86h22" fill="none" stroke="#252A31" stroke-width="4" stroke-linecap="round"/>
+<circle cx="91" cy="91" r="18" fill="#D47B6C"/>
+<path d="m82 91 6 6 12-14" fill="none" stroke="#FFFDF8" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+<text x="191" y="100" fill="#252A31" font-family="Georgia, 'Times New Roman', serif" font-size="62" font-weight="700" letter-spacing="-1.8">GFormBot</text>
+<path d="M194 120h62" stroke="#3157C8" stroke-width="3" stroke-linecap="round"/>
+<text x="274" y="128" fill="#686B6D" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" letter-spacing="2.6">TEST BEFORE LAUNCH</text>
+</svg>
