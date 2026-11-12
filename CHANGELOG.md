@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.4.1
 
 - Pause automatic submission when AI flags an answer and require confirmation after review.
 - Open ready and interrupted responses from Saved batches. View recent results, full answers, and follow-up instructions under More options.
 - Clarify email policy errors, validate preview files, and reject conflicting config flags.
+- Use stable artwork URLs so the README images load on GitHub and PyPI.
 
 ## 0.4.0
 
