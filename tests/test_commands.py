@@ -1,6 +1,7 @@
-"""Public command contracts, using local data and mocked browser/AI boundaries."""
+"""Public command contracts, using local data and mocked network boundaries."""
 
 import copy
+import importlib.util
 import json
 import os
 from datetime import datetime
@@ -10,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from click.testing import CliRunner
 
-from gformbot import browser, cli, generator
+from gformbot import cli, generator
 from gformbot.config import QuestionConfig, RunConfig, config_to_dict, save_config
 from gformbot.state import Journal, batch_id
 
@@ -85,20 +86,23 @@ def test_public_help_has_only_the_streamlined_commands():
     assert all(name in result.output for name in ("generate", "prepare", "preview", "doctor"))
 
 
-def test_doctor_http_execution_needs_no_browser(monkeypatch):
-    monkeypatch.setattr(browser, "available_browsers", lambda: [])
+def test_doctor_http_execution_reports_local_requirements():
     informational = invoke("doctor")
     assert informational.exit_code == 0
-    assert "None detected" in informational.output
+    assert "Direct HTTP" in informational.output
+    assert "HTTP client" in informational.output
     strict = invoke("doctor", "--check")
     assert strict.exit_code == 0, strict.exception
 
 
-def test_doctor_strict_check_accepts_available_browser(monkeypatch):
-    monkeypatch.setattr(browser, "available_browsers", lambda: ["chrome"])
-    monkeypatch.setattr(browser, "detect_default_browser", lambda: "chrome")
+def test_doctor_strict_check_requires_tls_certificates(monkeypatch):
+    find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util, "find_spec", lambda name: None if name == "certifi" else find_spec(name)
+    )
     result = invoke("doctor", "--check")
-    assert result.exit_code == 0, result.exception
+    assert result.exit_code == 1
+    assert "TLS certificates (certifi)" in result.output
 
 
 @pytest.mark.parametrize("name", ["inspect", "fill", "run", "batches", "generation"])
@@ -123,7 +127,7 @@ def test_generate_defaults_to_one_response_and_submission(commands):
     assert commands.inspected[0][1].get("display") is False
 
 
-def test_generate_passes_message_reference_count_and_browser(commands, tmp_path):
+def test_generate_passes_message_reference_and_count(commands, tmp_path):
     reference = generator.write_csv(commands.config, profiles(), tmp_path / "reference.csv")
     result = invoke(
         "generate",
@@ -134,14 +138,10 @@ def test_generate_passes_message_reference_count_and_browser(commands, tmp_path)
         "University students",
         "--like",
         str(reference),
-        "--browser",
-        "firefox",
     )
     assert result.exit_code == 0, result.exception
-    config, rows, message, options = commands.generated[0]
+    config, rows, message, _ = commands.generated[0]
     assert config.count == 3 and rows == profiles() and message == "University students"
-    assert config.browser == "firefox"
-    assert commands.filled[0][0].browser == "firefox"
 
 
 def test_retired_halt_flag_is_rejected_before_execution(commands):

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from gformbot import ai, cli
+from gformbot import ai, chatgpt_http, cli
 from gformbot.artifacts import digest
 from gformbot.config import config_from_dict, config_from_schema, config_to_dict
 from gformbot.generator import load_reference, prepare_responses, validate_answer, write_csv
@@ -208,12 +208,8 @@ def test_ai_generates_a_branching_batch_in_one_request(monkeypatch):
     config = config_from_schema(schema())
     requests = []
 
-    class Driver:
-        def quit(self):
-            pass
-
-    def chat(driver, messages, output_schema, *args, **kwargs):
-        requests.append(json.loads(messages[1]["content"]))
+    def chat(self, messages, *, timeout):
+        requests.append(json.loads(messages[-1]["content"]))
         return "\n".join(
             json.dumps({"profile_id": i, "answers": row})
             for i, row in enumerate(
@@ -221,8 +217,7 @@ def test_ai_generates_a_branching_batch_in_one_request(monkeypatch):
             )
         )
 
-    monkeypatch.setattr(ai, "_open_chat", lambda *args: Driver())
-    monkeypatch.setattr(ai, "_chat", chat)
+    monkeypatch.setattr(chatgpt_http.Client, "ask", chat)
     rows = ai.generate_responses(config, 2)
     assert len(requests) == 1 and len(rows) == 2
     assert requests[0]["routing"] == {

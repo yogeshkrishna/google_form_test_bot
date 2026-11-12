@@ -1,2 +1,0 @@
-# The generated manifest verifies exact upstream-derived bytes on every platform.
-gformbot/_vendor/selenium/** -text -whitespace linguist-vendored

@@ -295,7 +295,7 @@ def test_changed_or_unrecognized_snapshot_stops_before_post_and_closes_pool(monk
     assert pool.cleared
 
 
-def test_supplied_csv_full_cli_imports_no_browser_or_selenium(tmp_path):
+def test_supplied_csv_full_cli_runs_without_ai_or_browser_automation(tmp_path):
     script = textwrap.dedent("""
         import importlib.abc
         import json
@@ -304,7 +304,7 @@ def test_supplied_csv_full_cli_imports_no_browser_or_selenium(tmp_path):
         from io import BytesIO
         from pathlib import Path
 
-        forbidden = ("selenium", "gformbot.browser", "gformbot.selenium_runtime", "gformbot._vendor.selenium", "gformbot.chatgpt")
+        forbidden = ("selenium", "gformbot.browser", "gformbot.selenium_runtime", "gformbot._vendor.selenium", "gformbot.chatgpt", "gformbot.chatgpt_http")
         class Guard(importlib.abc.MetaPathFinder):
             def find_spec(self, fullname, path=None, target=None):
                 if any(fullname == name or fullname.startswith(name + ".") for name in forbidden):
@@ -328,7 +328,7 @@ def test_supplied_csv_full_cli_imports_no_browser_or_selenium(tmp_path):
             return 200, {}, document if method == "GET" else '<div class="vHW8K">Recorded</div>'
         transport.Client._request = request
         cli._ask_confirm = lambda *a, **kw: (_ for _ in ()).throw(AssertionError("Unexpected Yes prompt"))
-        cli._ask_select = lambda *a, **kw: (_ for _ in ()).throw(AssertionError("Unexpected browser or review menu"))
+        cli._ask_select = lambda *a, **kw: (_ for _ in ()).throw(AssertionError("Unexpected review menu"))
         data = Path("supplied.csv")
         data.write_text("Q1\\nExact imported profile\\n", encoding="utf-8")
         before = data.read_bytes()

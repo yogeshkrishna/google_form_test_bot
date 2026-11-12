@@ -16,7 +16,6 @@ def batch():
     config = RunConfig(
         "https://docs.google.com/forms/d/e/test/viewform",
         "Review form",
-        browser="chrome",
         count=2,
         min_delay=0,
         max_delay=0,

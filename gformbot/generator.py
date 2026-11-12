@@ -1,4 +1,4 @@
-"""Prepare and validate complete response profiles before opening a browser."""
+"""Prepare and validate complete response profiles before submission."""
 
 from __future__ import annotations
 
@@ -272,10 +272,11 @@ def validate_answer(
                 value = ""
             elif q.qtype in CHOICE_TYPES and value not in q.options:
                 raise ValueError(f"{label}: {value!r} is not an exact option.")
-            if value and q.qtype == "date":
-                value, _ = parse_date(q, value)
-            if value and q.qtype in ("time", "duration"):
-                value = parse_time(q, value)
+            if value and q.qtype in ("date", "time", "duration"):
+                try:
+                    value = parse_date(q, value)[0] if q.qtype == "date" else parse_time(q, value)
+                except ValueError as exc:
+                    raise ValueError(f"Q{q.index}: {exc}") from exc
             if value and q.qtype in ("text", "textarea"):
                 try:
                     validate_text(q, value)

@@ -224,7 +224,6 @@ def test_relative_pool_path_resolves_against_config_directory(tmp_path, monkeypa
         ("max_delay", float("nan")),
         ("min_delay", -1),
         ("max_delay", 0),
-        ("browser", "bad"),
     ],
 )
 def test_bad_run_settings_fail_early(attribute, value):
@@ -271,7 +270,6 @@ def test_malformed_question_shapes_are_rejected_before_execution(attribute, valu
         ("sections", "A"),
         ("unsupported", "bad"),
         ("pool_column_map", []),
-        ("browser", []),
         ("log_file", None),
         ("instructions", [{"title": "Missing fields"}]),
     ],
@@ -295,7 +293,7 @@ def test_invalid_fixed_values_and_text_pool_fail_during_config_validation():
 
 
 @pytest.mark.parametrize("value", ["first\nsecond", "first\rsecond", "first\r\nsecond"])
-def test_single_line_text_rejects_line_breaks_before_browser(value):
+def test_single_line_text_rejects_line_breaks_before_submission(value):
     c = config()
     with pytest.raises(ValueError, match="single-line"):
         validate_answer(c, {1: "Study", 2: ["Parks"], 3: value})

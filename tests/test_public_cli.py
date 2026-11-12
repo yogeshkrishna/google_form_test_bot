@@ -3,12 +3,12 @@
 import pytest
 from click.testing import CliRunner
 
-from gformbot import browser, cli, inspector
+from gformbot import cli, inspector
 from gformbot.config import QuestionConfig, RunConfig
 
 
 @pytest.mark.parametrize("command", ["generate", "prepare"])
-@pytest.mark.parametrize("flag", ["--sign-in", "--allow-uploads"])
+@pytest.mark.parametrize("flag", ["--sign-in", "--allow-uploads", "--browser=chrome"])
 def test_retired_account_and_file_flags_fail_before_network(command, flag, monkeypatch):
     monkeypatch.setattr(cli, "_run_inspect", lambda *a, **kw: pytest.fail("No form access expected"))
     result = CliRunner().invoke(cli.cli, [command, "https://example.invalid", flag])
@@ -19,14 +19,13 @@ def test_retired_account_and_file_flags_fail_before_network(command, flag, monke
 @pytest.mark.parametrize(
     "restriction", [{"requires_signin": True}, {"one_response": True}, {"email_collection": "verified"}]
 )
-def test_inspection_rejects_account_bound_forms_without_opening_browser(restriction, monkeypatch):
+def test_inspection_rejects_account_bound_forms(restriction, monkeypatch):
     config = RunConfig(
         "https://docs.google.com/forms/d/e/test/viewform",
         questions=[QuestionConfig(1, "Answer", "text", True)],
         **restriction,
     )
     monkeypatch.setattr(inspector, "inspect_form", lambda *a, **kw: config)
-    monkeypatch.setattr(browser, "get_driver", lambda *a, **kw: pytest.fail("No sign-in browser"))
     with pytest.raises(ValueError, match="Only public forms"):
         cli._run_inspect(config.url, display=False)
 
@@ -55,8 +54,7 @@ def test_missing_config_points_to_available_command(tmp_path):
     assert "prepare" in cli.cli.commands
 
 
-def test_doctor_http_check_succeeds_without_browser(monkeypatch):
-    monkeypatch.setattr(browser, "available_browsers", lambda: [])
+def test_doctor_http_check_succeeds_without_browser():
     result = CliRunner().invoke(cli.cli, ["doctor", "--check"])
     assert result.exit_code == 0, result.exception
     assert "Direct HTTP" in result.output

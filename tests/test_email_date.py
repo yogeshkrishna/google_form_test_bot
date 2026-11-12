@@ -4,7 +4,7 @@ import re
 import pytest
 from test_inspector import URL, document, item
 
-from gformbot import ai, inspector
+from gformbot import ai, chatgpt_http, inspector
 from gformbot.config import QuestionConfig, RunConfig, config_from_schema, load_config, save_config
 from gformbot.generator import load_reference, validate_answer, write_csv
 
@@ -113,16 +113,15 @@ def test_ai_date_and_email_constraints_correct_invalid_answers(monkeypatch):
     )
     calls = []
 
-    def chat(driver, messages, schema, timeout, **kwargs):
-        calls.append((json.loads(messages[-1]["content"]), schema))
+    def chat(self, messages, *, timeout):
+        calls.append(json.loads(messages[-1]["content"]))
         return next(contents)
 
-    monkeypatch.setattr(ai, "_chat", chat)
-    monkeypatch.setattr(ai, "_open_chat", lambda browser: type("Driver", (), {"quit": lambda self: None})())
+    monkeypatch.setattr(chatgpt_http.Client, "ask", chat)
     assert ai.generate_responses(config(), 1) == [{1: "profile@example.com", 2: "2026-10-12 14:30"}]
     assert len(calls) == 2
-    assert "corrections" in calls[1][0]
-    fields = calls[0][1]["properties"]
+    assert "corrections" in calls[1]
+    fields = calls[0]["answer_schema"]["properties"]
     assert re.fullmatch(fields["1"]["pattern"], "profile@example.com")
     assert not re.fullmatch(fields["1"]["pattern"], "bad")
     assert re.fullmatch(fields["2"]["pattern"], "2026-10-12 14:30")

@@ -39,26 +39,17 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: python -m pip install ".[dev]"
-      - run: python -m pytest -q -m "not browser"
+      - run: python -m pytest -q
       - name: Lint
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         run: python -m ruff check .
       - name: Formatting
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         run: python -m ruff format --check .
-      - name: Verify pinned vendor recipe
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
-        run: python tools/vendor_selenium.py --check
 
-  distributions:
-    name: Build and install wheel / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-15-intel, macos-15]
-    env:
-      PYTHONDONTWRITEBYTECODE: "1"
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
@@ -77,6 +68,34 @@ jobs:
         run: |
           python -m build --wheel --outdir reproduced
           python -c "from pathlib import Path; wheels=list(Path('dist').glob('*.whl')); assert all(p.read_bytes() == (Path('reproduced')/p.name).read_bytes() for p in wheels); print('Wheel bytes reproduce exactly')"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  distributions:
+    name: Build and install wheel / ${{ matrix.os }}
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-15-intel, macos-15]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: distributions
+          path: dist
       - name: Smoke-test the installed wheel outside the checkout
         shell: bash
         run: |
@@ -95,8 +114,6 @@ jobs:
           cp -R tests "$RUNNER_TEMP/gformbot-wheel-tests"
           cd "$RUNNER_TEMP"
           "$WHEEL_PYTHON" -m pip check
-          "$WHEEL_PYTHON" -c "import importlib.util; from gformbot.selenium_runtime import PACKAGE, webdriver; assert PACKAGE == 'gformbot._vendor.selenium'; assert importlib.util.find_spec('selenium') is None; assert importlib.util.find_spec('typing_extensions') is None; assert all(getattr(webdriver, name) for name in ('Chrome', 'Edge', 'Firefox'))"
-          "$WHEEL_PYTHON" -c "import os, subprocess; from gformbot._vendor.selenium.webdriver.common.selenium_manager import SeleniumManager; path = SeleniumManager._get_binary(); assert os.access(path, os.X_OK); subprocess.run([str(path), '--version'], check=True, timeout=15)"
           "$WHEEL_ENTRY" --version
           # The module command also works when the launcher directory is not on PATH.
           PATH="" "$WHEEL_PYTHON" -m gformbot --version
@@ -104,47 +121,21 @@ jobs:
           for command in generate prepare preview doctor config log; do
             "$WHEEL_PYTHON" -m gformbot "$command" --help
           done
+          "$WHEEL_PYTHON" -m gformbot doctor --check
           "$WHEEL_PYTHON" -m pip install pytest
-          "$WHEEL_PYTHON" -m pytest -q gformbot-wheel-tests/test_transport.py gformbot-wheel-tests/test_editor.py
+          "$WHEEL_PYTHON" -m pytest -q gformbot-wheel-tests/test_transport.py gformbot-wheel-tests/test_editor.py gformbot-wheel-tests/test_chatgpt_http.py gformbot-wheel-tests/test_generation_recovery.py
+      - name: Smoke-test the source archive outside the checkout
+        shell: bash
+        run: |
+          SOURCE_FILE="$(python -c "from pathlib import Path; print(next(Path('dist').glob('*.tar.gz')).resolve())")"
+          python -m venv "$RUNNER_TEMP/gformbot-source"
           if [ "$RUNNER_OS" = "Windows" ]; then
-            "$WHEEL_PYTHON" -m pip install selenium==4.51.0
-            "$WHEEL_PYTHON" -c "from selenium.common.exceptions import WebDriverException as official; from gformbot.selenium_runtime import WebDriverException as bundled; assert official is not bundled; from selenium import webdriver; assert webdriver.Chrome.__module__.startswith('selenium.')"
-            "$WHEEL_PYTHON" -m pip uninstall -y gformbot
-            "$WHEEL_PYTHON" -c "import importlib.util, selenium; assert importlib.util.find_spec('gformbot') is None; assert selenium.__version__ == '4.51.0'"
-            "$WHEEL_PYTHON" -m pip install --no-deps "$WHEEL_FILE"
-            "$WHEEL_PYTHON" -m pip check
+            SOURCE_PYTHON="$RUNNER_TEMP/gformbot-source/Scripts/python.exe"
+          else
+            SOURCE_PYTHON="$RUNNER_TEMP/gformbot-source/bin/python"
           fi
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: distributions-${{ matrix.os }}
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 14
-
-  browser:
-    name: Local ${{ matrix.browser }} / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {os: ubuntu-latest, browser: chrome}
-          - {os: windows-latest, browser: chrome}
-          - {os: windows-latest, browser: edge}
-          - {os: windows-latest, browser: firefox}
-    env:
-      PYTHONDONTWRITEBYTECODE: "1"
-      GFORMBOT_BROWSER_TESTS: "1"
-      GFORMBOT_TEST_BROWSER: ${{ matrix.browser }}
-      SE_AVOID_STATS: "true"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - run: python -m pip install ".[dev]"
-      - name: Check ChatGPT adapter against a local fixture
-        run: python -m pytest -q -m browser tests/test_chatgpt.py
+          cd "$RUNNER_TEMP"
+          "$SOURCE_PYTHON" -m pip install "$SOURCE_FILE"
+          "$SOURCE_PYTHON" -m pip check
+          "$SOURCE_PYTHON" -m gformbot --version
+          "$SOURCE_PYTHON" -m gformbot doctor --check

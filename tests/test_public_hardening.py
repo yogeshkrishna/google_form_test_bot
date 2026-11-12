@@ -9,7 +9,7 @@ import pytest
 from test_inspector import URL, document, item
 from test_routing import branch_items
 
-from gformbot import ai
+from gformbot import ai, chatgpt_http
 from gformbot.config import (
     QuestionConfig,
     RunConfig,
@@ -125,9 +125,9 @@ def test_config_replace_failure_preserves_previous_file_and_cleans_temp(tmp_path
     "setting", [{"requires_signin": True}, {"one_response": True}, {"email_collection": "verified"}]
 )
 @pytest.mark.parametrize("complete", [False, True])
-def test_ai_rejects_account_restrictions_before_opening_model(setting, complete, monkeypatch):
+def test_ai_rejects_account_restrictions_before_requesting_model(setting, complete, monkeypatch):
     config = RunConfig(URL, questions=[QuestionConfig(1, "Name", "text")], **setting)
-    monkeypatch.setattr(ai, "_open_chat", lambda *a: pytest.fail("Restricted form must not open AI"))
+    monkeypatch.setattr(chatgpt_http.Client, "ask", lambda *a, **k: pytest.fail("Restricted form reached AI"))
     with pytest.raises(ValueError, match="requires Google sign-in"):
         if complete:
             ai.complete_responses(config, [{1: "Fictional"}])
@@ -169,9 +169,11 @@ def test_legacy_public_defaults_preserve_fingerprint_but_upload_plans_stop():
     config = RunConfig(URL, questions=[QuestionConfig(1, "Name", "text")])
     payload = config_to_dict(config)
     payload["questions"][0].update(upload_types=[], upload_max_files=1, upload_max_size=0)
+    payload["run_settings"].update(browser="chrome-background", headless=True)
     restored = config_from_dict(payload)
     assert schema_fingerprint(restored) == schema_fingerprint(config)
     assert "upload_types" not in config_to_dict(restored)["questions"][0]
+    assert "browser" not in config_to_dict(restored)["run_settings"]
     payload["questions"][0]["type"] = "upload"
     with pytest.raises(ValueError, match="File uploads are not supported"):
         config_from_dict(payload)
@@ -181,13 +183,12 @@ def test_retry_corrections_do_not_echo_arbitrary_error_details(monkeypatch):
     secret = r"C:\Users\Someone\Private\customer.pdf"
     config = RunConfig(URL, questions=[QuestionConfig(1, "Name", "text", True)])
     calls = []
-    monkeypatch.setattr(ai, "_open_chat", lambda *_: type("Driver", (), {"quit": lambda self: None})())
 
-    def chat(driver, messages, *args, **kwargs):
+    def chat(self, messages, *, timeout):
         calls.append(json.loads(messages[-1]["content"]))
         return '{"profile_id":1,"answers":{"1":"Test"}}'
 
-    monkeypatch.setattr(ai, "_chat", chat)
+    monkeypatch.setattr(chatgpt_http.Client, "ask", chat)
     real = ai._validate_batch
 
     def validate(*args, **kwargs):
