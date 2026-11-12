@@ -115,7 +115,7 @@ python -m gformbot generate "FORM_URL" --data gformbot-responses.json
 
 **Know what Google confirmed.** GFormBot records a submission as confirmed after Google returns a completion page. It shows the completion message and follow-up links when available. Use `log --followups` to find them later.
 
-**Pick up after an interruption.** Choose **Continue response batch** to reopen an unfinished submission. GFormBot skips confirmed rows. If the connection drops after a request was sent and the outcome is unclear, check your form’s Responses tab before deciding whether to retry.
+**Pick up where you left off.** Choose **Saved batches** to open prepared answers or resume an interrupted submission. GFormBot skips confirmed rows. If the connection drops after a request was sent and the outcome is unclear, check your form’s Responses tab before deciding whether to retry.
 
 ## What forms work?
 
@@ -160,7 +160,9 @@ python -m gformbot prepare "FORM_URL" -n 5 -m "Write fictional workshop signups.
 
 GFormBot adjusts the size of each AI request to fit the job. Large forms are split into groups of questions, with relevant earlier answers carried forward. Each completed response goes through form validation. The tool can ask the model to correct specific invalid answers and review whether related answers agree. It also checks that generated contact fields look plausible and stay distinct within the batch. Review the results for meaning and accuracy before using them.
 
-GFormBot saves accepted work as generation progresses. If a connection or service limit interrupts the run, use the **printed `prepare --resume` command** to continue the draft. Submission recovery is separate and lives under **Continue response batch**.
+GFormBot saves accepted work as generation progresses. If a connection or service limit interrupts the run, use the **printed `prepare --resume` command** to continue the draft. Submission recovery lives under **Saved batches**.
+
+If AI flags an answer for review, Quick submit pauses at the batch menu. Review or edit the responses there and confirm the warnings before sending. The `generate` command saves a flagged batch for review in the wizard.
 
 <details>
 <summary><strong>Set exact rules for your test data</strong></summary>
@@ -177,7 +179,7 @@ Pass `--quality policy.json` to `prepare` or `generate` when you need more contr
 }
 ```
 
-Policies can also fix exact values, allow specific choices, set route-specific values, request choice coverage, link related questions for review, or supply evidence you gathered from the form.
+Policies can also fix exact values, allow specific choices, set route-specific values, request choice coverage, link related questions for review, or supply evidence you gathered from the form. Pair `email_domain` with `name_from` so the generator knows which answer supplies the name. Use that pair for a reserved test domain such as `example.com`.
 
 </details>
 
@@ -200,6 +202,7 @@ Saved plans, AI drafts, configuration, and run logs are local files. They can co
 | Resume AI generation | `python -m gformbot prepare "FORM_URL" --resume "DRAFT_PATH"` |
 | Check setup | `python -m gformbot doctor --check` |
 | See recent run results | `python -m gformbot log --last 20` |
+| See full response details | `python -m gformbot log --details` |
 | Find form directions and completion links | `python -m gformbot log --followups` |
 | View or edit configuration | `python -m gformbot config --show` / `python -m gformbot config --edit` |
 
@@ -212,7 +215,8 @@ Add `--help` after a command for its flags. `-n` accepts 1–500 and uses the sa
 - **File picker missing?** The wizard’s file picker needs a graphical desktop and Python’s Tk support. On Linux this may require `python3-tk`. Commands can take paths directly.
 - **Want to go back one step?** Press Backspace twice. In a text field, both presses need to start with the field empty.
 - **Only need to see the questions?** Choose **More options → View a form's questions**.
-- **Using a headless machine?** Run the commands with explicit paths. Inspection, generation, and submission use HTTPS without Selenium or browser drivers. The visual response editor opens in your default browser.
+- **Want to see what happened?** Choose **More options → View recent activity** for a summary, response details, and form instructions.
+- **Working without a desktop?** Run the commands with explicit paths. Inspection, generation, and submission use HTTPS. The optional visual response editor uses your default browser.
 
 </details>
 

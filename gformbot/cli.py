@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import uuid
-from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -582,16 +581,38 @@ def _finish_plan(path, expected_digest, keep_files=False):
 
 
 def _next_action(count):
+    label = "Submit 1 response" if count == 1 else f"Submit {count} responses"
     return _ask_select(
         "What next?",
         [
-            _choice("submit", f"Submit {count} responses"),
+            _choice("submit", label),
             _choice("edit", "Review or edit responses"),
             _choice("export", "Export remaining responses as CSV"),
             _choice("back", "Back to start"),
         ],
         default="submit",
     )
+
+
+def _quality_warnings(payload, pending):
+    warnings = payload.get("quality_warnings", [])
+    if not isinstance(warnings, list) or any(
+        not isinstance(item, dict)
+        or type(item.get("response")) is not int
+        or not 1 <= item["response"] <= len(payload["responses"])
+        or type(item.get("question")) is not int
+        or not isinstance(item.get("reason"), str)
+        for item in warnings
+    ):
+        raise ValueError("The saved AI quality warnings are invalid. Prepare a new batch.")
+    return [item for item in warnings if item["response"] in pending]
+
+
+def _show_quality_warnings(warnings):
+    if warnings:
+        console.print(Text(f"AI flagged {len(warnings)} answer(s) for review.", style="yellow"))
+        for item in warnings:
+            _info(f"Response {item['response']}, Q{item['question']}: {item['reason']}")
 
 
 def _load_plan(path):
@@ -624,6 +645,9 @@ def _load_plan(path):
         )
         config._outcomes = journal_states
         config._submission_started = payload.get("submission_started") is True
+        config._quality_warnings = _quality_warnings(
+            payload, set(range(1, len(answers) + 1)) - set(config._submitted_indices)
+        )
         if not Path(config.log_file).is_absolute():
             config.log_file = str(clean_path(path).resolve().parent / config.log_file)
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -659,6 +683,16 @@ def _track_plan(config, answers, path, expected_digest, *, interactive=None):
         raise ValueError(
             "Every response in this batch was already confirmed submitted. Return to Start or create a new batch."
         )
+    warnings = _quality_warnings(payload, set(session.ids))
+    if warnings:
+        if interactive is False:
+            raise ValueError(
+                "This batch has AI quality warnings and was kept. "
+                "Open Saved batches in the wizard to review it before submitting."
+            )
+        _show_quality_warnings(warnings)
+        if not _ask_confirm("Submit these answers after reviewing the warnings?"):
+            raise PromptBack()
     config.count = len(session.ids)
     config._submitted_indices = sorted(session.confirmed)
     config._session = session
@@ -709,6 +743,9 @@ def _pending_preview(config, answers):
     if remaining:
         index, row = remaining[0]
         _show_answer(row, config, index, sample=True)
+    _show_quality_warnings(
+        [warning for warning in getattr(config, "_quality_warnings", []) if warning["response"] not in done]
+    )
 
 
 def _edit_batch(config, answers, path):
@@ -760,20 +797,26 @@ def _manage_batch(config, answers, path, *, keep_files=False):
         action = _next_action(len(answers) - len(done))
         if action == "back":
             _info(f"Answers kept: {clean_path(path).resolve()}")
-            _info(
-                "Continue a started batch from Continue response batch; otherwise choose Start a new form > Use my own answers > Open saved responses."
-            )
+            _info("Open Saved batches from Start to continue.")
             return
         if action == "export":
             from .generator import write_csv
 
             target = _available_path("gformbot-export.csv")
             done = set(getattr(config, "_submitted_indices", []))
-            write_csv(config, [row for i, row in enumerate(answers, 1) if i not in done], target)
+            try:
+                write_csv(config, [row for i, row in enumerate(answers, 1) if i not in done], target)
+            except (OSError, ValueError) as exc:
+                _info(f"Could not export responses: {exc}")
+                continue
             _info(f"Export saved: {target.resolve()}")
             continue
         if action == "edit":
-            config, answers, path = _edit_batch(config, answers, path)
+            try:
+                config, answers, path = _edit_batch(config, answers, path)
+            except (OSError, ValueError) as exc:
+                _info(f"Could not review responses: {exc}")
+                continue
             _pending_preview(config, answers)
             continue
         try:
@@ -781,12 +824,21 @@ def _manage_batch(config, answers, path, *, keep_files=False):
         except PromptBack:
             config, answers = _load_plan(path)
             continue
+        except (OSError, ValueError) as exc:
+            _info(f"Could not submit this batch: {exc}")
+            _info("Open Saved batches from Start to continue.")
+            return
         if not remaining:
             _info("All responses are confirmed submitted.")
             _finish_plan(path, config._plan_digest, keep_files=keep_files)
             return
-        save_config(config, DEFAULT_CONFIG_NAME)
-        finished = _run_submit(config, answers=remaining)
+        try:
+            save_config(config, DEFAULT_CONFIG_NAME)
+            finished = _run_submit(config, answers=remaining)
+        except (OSError, ValueError) as exc:
+            _info(f"Could not finish submission: {exc}")
+            _info("Open Saved batches from Start to continue.")
+            return
         _finish_plan(path, config._plan_digest, keep_files=keep_files or finished is False)
         return
 
@@ -828,12 +880,16 @@ class SavedPreview:
 
 def _saved_batches(config=None, *, started_only=False):
     from .inspector import schema_fingerprint
-    from .previews import available
+    from .previews import candidates
 
     matches, unreadable = [], 0
-    for path in available():
+    for path, known in candidates().items():
         try:
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError, RecursionError):
+            unreadable += known
+            continue
+        try:
             if not isinstance(payload, dict) or payload.get("kind") != "gformbot-run":
                 continue
             saved, answers = _load_plan(path)
@@ -862,10 +918,18 @@ def _batch_label(batch):
         for index, state in saved._outcomes.items()
     )
     remaining = saved.count - len(confirmed) - uncertain
-    status = f"{len(confirmed)}/{saved.count} submitted"
     if uncertain:
-        status += f" · {uncertain} needs checking"
-    return f"{saved.form_title or 'Untitled form'} | {status} · {remaining} remaining | {batch.path.name}"
+        status = f"Needs checking ({uncertain})"
+    elif saved._submission_started or saved._outcomes or confirmed:
+        status = "Interrupted"
+    else:
+        status = "Ready to submit"
+    if getattr(saved, "_quality_warnings", []):
+        status += " · AI review needed"
+    return (
+        f"{saved.form_title or 'Untitled form'} | {status} · {remaining} ready "
+        f"· {len(confirmed)}/{saved.count} submitted | {batch.path.name}"
+    )
 
 
 def _select_saved_preview(config=None, *, started_only=False):
@@ -880,11 +944,11 @@ def _select_saved_preview(config=None, *, started_only=False):
         if not choices:
             _info(
                 "No unfinished response batches found."
-                if started_only
+                if config is None
                 else "No matching saved responses found. Save some responses first, or open a CSV."
             )
         choices += [_choice("refresh", "Refresh saved responses"), _choice("back", "Back")]
-        selected = _ask_select("Continue response batch" if started_only else "Saved responses", choices)
+        selected = _ask_select("Saved batches" if config is None else "Saved responses", choices)
         if selected == "refresh":
             continue
         if selected == "back":
@@ -909,6 +973,7 @@ def _prepare_source(config, source):
     from .access import require_public_form
 
     require_public_form(config)
+    config._quality_warnings = []
     if source in {"fresh", "reference"}:
         steps = [lambda _: _reference_prompt(config, required=True)] if source == "reference" else []
         *reference, instructions = prompt_steps(
@@ -1059,9 +1124,11 @@ def _wizard():
     _print_banner()
     _info("Arrow keys to choose, Enter to select, Backspace twice to go back.")
     while True:
-        choices = [_choice("quick", "Quick submit"), _choice("new", "Start a new form")]
-        if _saved_batches(started_only=True)[0]:
-            choices.append(_choice("saved", "Continue response batch"))
+        choices = [
+            _choice("quick", "Quick submit"),
+            _choice("new", "Start a new form"),
+            _choice("saved", "Saved batches"),
+        ]
         try:
             task = _ask_select(
                 "Start",
@@ -1083,7 +1150,7 @@ def _wizard():
 
 
 def _resume_batch():
-    while selected := _select_saved_preview(started_only=True):
+    while selected := _select_saved_preview():
         try:
             _manage_batch(selected.config, selected.answers, selected.path)
         except PromptBack:
@@ -1097,12 +1164,14 @@ def _quick_reference():
             return _select_csv("Choose reference CSV")
         except (PromptBack, FileSelectionCancelled):
             pass
+        except (OSError, ValueError) as exc:
+            _info(f"Could not open the CSV picker: {exc}")
     return None
 
 
 def _quick_submit():
     _section("Quick submit")
-    _info("GFormBot will generate and submit responses automatically after the last prompt.")
+    _info("Clean batches submit automatically. If AI flags an answer, you can review it first.")
     url, count, message, like = prompt_steps(
         lambda _: _url_prompt(completed=True),
         lambda _: _ask_number("Number of responses", completed=True),
@@ -1110,7 +1179,7 @@ def _quick_submit():
         lambda _: _quick_reference(),
     )
     try:
-        _submit_command(url, count, message, like, None)
+        _submit_command(url, count, message, like, None, guided=True)
     except ValueError as exc:
         console.print(Text(f"Quick submit could not finish: {exc}", style="yellow"))
 
@@ -1122,6 +1191,7 @@ def _more_options():
             [
                 _choice("inspect", "View a form's questions"),
                 _choice("doctor", "Check setup"),
+                _choice("activity", "View recent activity"),
                 _choice("back", "Back"),
             ],
         )
@@ -1136,6 +1206,13 @@ def _more_options():
                 console.print(Text(str(exc), style="yellow"))
         elif task == "doctor":
             doctor.callback()
+        elif task == "activity":
+            try:
+                _activity_menu()
+            except PromptBack:
+                continue
+            except (OSError, ValueError) as exc:
+                _info(f"Could not read recent activity: {exc}")
 
 
 def _new_batch_wizard():
@@ -1201,7 +1278,7 @@ def _form_choices(config):
         except FileSelectionCancelled:
             _info("No file chosen. Choose another way to get answers.")
             continue
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             _info(f"Could not prepare responses: {exc}")
             _info("Choose another way to get answers and try again.")
             continue
@@ -1360,7 +1437,7 @@ def generate(url, count, message, like, data, date_order=None, quality=None):
     _submit_command(url, count, message, like, data, date_order, quality=quality)
 
 
-def _submit_command(url, count, message, like, data, date_order=None, **options):
+def _submit_command(url, count, message, like, data, date_order=None, *, guided=False, **options):
     from .artifacts import digest
 
     config, answers, path, owned = _command_answers(
@@ -1372,6 +1449,10 @@ def _submit_command(url, count, message, like, data, date_order=None, **options)
         date_order,
         **options,
     )
+    if guided and getattr(config, "_quality_warnings", []):
+        _info("Quick submit paused. Review the flagged answers before sending.")
+        _manage_batch(config, answers, path, keep_files=not owned)
+        return
     remaining = _track_plan(config, answers, path, digest(path), interactive=False)
     finished = _run_submit(config, answers=remaining, compact=True)
     _finish_plan(path, config._plan_digest, keep_files=not owned or finished is False)
@@ -1440,6 +1521,7 @@ def preview(file):
         path = clean_path(file).resolve()
         if path.suffix.lower() != ".json":
             raise ValueError("Choose a saved JSON file.")
+        _load_plan(path)
     else:
         records = []
         for candidate in available():
@@ -1511,6 +1593,8 @@ def doctor(check=False):
 @click.option("--edit", is_flag=True)
 def config_cmd(config_path, show, edit):
     """View or edit a saved form configuration."""
+    if show and edit:
+        raise click.UsageError("Choose either --show or --edit.")
     path = clean_path(config_path)
     if not path.is_file():
         raise ValueError(
@@ -1530,35 +1614,144 @@ def config_cmd(config_path, show, edit):
         console.print(Syntax(path.read_text(encoding="utf-8"), "yaml", word_wrap=True))
 
 
+def _read_activity(log_path, last):
+    from .logger import recent_results
+
+    path = clean_path(log_path)
+    try:
+        rows, skipped = recent_results(path, last)
+    except FileNotFoundError:
+        _info("No run log yet.")
+        return []
+    except csv.Error as exc:
+        raise ValueError(f"Could not parse the run log: {exc}") from exc
+    if skipped:
+        _info(f"Skipped {skipped} incomplete log row(s).")
+    if not rows:
+        _info("The run log is empty.")
+    return rows
+
+
+def _result_status(row):
+    if row["status"] == "OK":
+        return "Success", "green"
+    if row["status"] == "UNCERTAIN":
+        return "Needs checking", "yellow"
+    if row["status"] == "ERROR":
+        return "Needs checking" if "uncertain" in row["message"].lower() else "Failed", "yellow"
+    return row["status"], ""
+
+
+def _activity_summary(rows):
+    from .logger import result_label, result_time
+
+    if not rows:
+        return
+    if console.width < 65:
+        _section("Recent activity")
+        for row in rows:
+            status, style = _result_status(row)
+            console.print(Text(f"{status} · Response {row['run']}", style=style))
+            console.print(Text(f"{result_time(row)} · {result_label(row)}"))
+        return
+    table = Table(title="Recent activity", header_style="bold cyan")
+    table.add_column("Time (local)", no_wrap=True)
+    table.add_column("Form", ratio=1)
+    table.add_column("Response", justify="right")
+    table.add_column("Result")
+    for row in rows:
+        status, style = _result_status(row)
+        table.add_row(
+            Text(result_time(row)), Text(result_label(row)), Text(row["run"]), Text(status, style=style)
+        )
+    console.print(table)
+
+
+def _activity_details(row):
+    from .logger import result_label, result_time
+
+    status, style = _result_status(row)
+    _section(f"{result_label(row)} · Response {row['run']}")
+    console.print(Text(f"{result_time(row)} · {status}", style=style))
+    for label, key in (("Result", "message"), ("Batch", "batch_id"), ("Form link", "form_url")):
+        if row.get(key):
+            console.print(Text(f"{label}: {row[key]}"))
+    try:
+        answers = json.loads(row["answers"])
+    except (ValueError, RecursionError):
+        answers = row["answers"]
+    if isinstance(answers, dict):
+        table = Table.grid(padding=(0, 1))
+        table.add_column(style="cyan", no_wrap=True)
+        table.add_column()
+        for key, answer in answers.items():
+            value = answer if isinstance(answer, str) else json.dumps(answer, ensure_ascii=False)
+            table.add_row(Text(f"Q{key}"), Text(value or "(blank)"))
+        console.print(table)
+    else:
+        console.print(Text(row["answers"]))
+
+
+def _activity_followups(log_path, last):
+    from .followups import display
+    from .state import Journal
+
+    display(Journal("").followups(log_path=log_path, last=last), _run_ui(), full=True)
+
+
+def _activity_menu():
+    from .logger import result_label, result_time
+
+    path, last = "gformbot-runs.csv", 20
+    rows = _read_activity(path, last)
+    _activity_summary(rows)
+    while True:
+        choices = [_choice("details", "View response details")] if rows else []
+        choice = _ask_select(
+            "Recent activity",
+            choices + [_choice("followups", "Form instructions and links"), _choice("back", "Back")],
+        )
+        if choice == "back":
+            return
+        if choice == "followups":
+            _activity_followups(path, last)
+            continue
+        try:
+            index = _ask_select(
+                "Which result?",
+                [
+                    _choice(
+                        i,
+                        f"{result_time(row)} · {result_label(row)} · Response {row['run']} · {_result_status(row)[0]}",
+                    )
+                    for i, row in enumerate(rows)
+                ]
+                + [_choice("back", "Back")],
+            )
+        except PromptBack:
+            continue
+        if index != "back":
+            _activity_details(rows[index])
+
+
 @cli.command()
 @click.argument("log_path", default="gformbot-runs.csv")
 @click.option("-n", "--last", default=20, type=click.IntRange(1, 500))
 @click.option("--followups", is_flag=True, help="Show saved form instructions and links.")
-def log(log_path, last, followups):
-    """Show recent run results, including complete response data."""
+@click.option("--details", is_flag=True, help="Include full answers and result details.")
+def log(log_path, last, followups, details):
+    """Show recent run results, newest first."""
+    if followups and details:
+        raise click.UsageError("Choose either --followups or --details.")
     if followups:
-        from .followups import display
-        from .state import Journal
-
-        display(Journal("").followups(log_path=log_path, last=last), _run_ui(), full=True)
+        _activity_followups(log_path, last)
         return
-    path = clean_path(log_path)
-    if not path.exists():
-        _info("No run log yet.")
-        return
-    with path.open(encoding="utf-8", newline="") as handle:
-        reader = csv.reader(handle)
-        header = next(reader, None)
-        data = deque(reader, maxlen=last)
-    if not header:
-        _info("The run log is empty.")
-        return
-    table = Table(header_style="bold cyan")
-    for column in header:
-        table.add_column(Text(column))
-    for row in data:
-        table.add_row(*(Text(value) for value in row))
-    console.print(table)
+    rows = _read_activity(log_path, last)
+    if details:
+        for row in rows:
+            _activity_details(row)
+    else:
+        _activity_summary(rows)
 
 
 def main():

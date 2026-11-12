@@ -190,6 +190,7 @@ def test_planned_coverage_is_seeded_weighted_and_preserves_presets():
         ({"fields": {"Q1": {"approved": [" "], "min_digits": 10}}}, "nonblank"),
         ({"fields": {"Q1": {"exact": "A", "approved": ["B"]}}}, "at most one source"),
         ({"fields": {"Q1": {"min_digits": True}}}, "min_digits"),
+        ({"fields": {"Q1": {"email_domain": "example.com"}}}, "Q1 email_domain requires name_from"),
         ({"fields": {"Q1": {"email_domain": "bad/domain", "name_from": "Q2"}}}, "valid test email domain"),
         ({"dependencies": {"Q1": ["Q1"]}}, "different|other question"),
         ({"facts": ["1", "Q1"]}, "duplicate"),

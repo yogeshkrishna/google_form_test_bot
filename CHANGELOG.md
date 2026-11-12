@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Pause automatic submission when AI flags an answer and require confirmation after review.
+- Open ready and interrupted responses from Saved batches. View recent results, full answers, and follow-up instructions under More options.
+- Clarify email policy errors, validate preview files, and reject conflicting config flags.
+
 ## 0.4.0
 
 - Generate and review answers with ChatGPT over HTTPS. Use adaptive batches and route-aware question groups, carry relevant earlier answers forward, and correct invalid fields or contradictory answers in place.

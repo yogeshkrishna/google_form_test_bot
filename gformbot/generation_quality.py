@@ -263,7 +263,12 @@ class Quality:
                 or not re.fullmatch(EMAIL_PATTERN, f"test@{domain}")
             ):
                 raise ValueError(f"Q{key} needs a valid test email domain.")
-            name_key = self._key(result.get("name_from"))
+            if result.get("name_from") is None:
+                raise ValueError(
+                    f"Q{key} email_domain requires name_from. Set it to the question number "
+                    "that supplies the respondent's name."
+                )
+            name_key = self._key(result["name_from"])
             if name_key == key or self.questions[name_key].qtype not in {"text", "textarea"}:
                 raise ValueError(f"Q{key} name_from must name a different text question.")
             result["name_from"] = name_key

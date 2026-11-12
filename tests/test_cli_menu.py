@@ -1,4 +1,4 @@
-"""The start menu separates submission recovery from deliberate saved-answer reuse."""
+"""The start menu opens ready and interrupted saved batches."""
 
 import json
 
@@ -35,7 +35,7 @@ def batch_files(tmp_path, monkeypatch):
     return create
 
 
-def test_start_menu_hides_continue_for_unstarted_saved_answers(batch_files, monkeypatch):
+def test_start_menu_offers_saved_batches_for_unstarted_answers(batch_files, monkeypatch):
     batch_files()
     seen = []
     monkeypatch.setattr(cli, "_print_banner", lambda: None)
@@ -43,7 +43,7 @@ def test_start_menu_hides_continue_for_unstarted_saved_answers(batch_files, monk
         cli, "_ask_select", lambda message, choices, **kw: seen.extend(c.name for c in choices) or "exit"
     )
     cli._wizard()
-    assert seen == ["Quick submit", "Start a new form", "More options", "Exit"]
+    assert seen == ["Quick submit", "Start a new form", "Saved batches", "More options", "Exit"]
 
 
 @pytest.mark.parametrize(
@@ -70,7 +70,7 @@ def test_started_batch_is_available_without_regeneration(batch_files, monkeypatc
         cli, "_generate", lambda *a, **kw: pytest.fail("Continuing submission must not regenerate answers")
     )
     cli._wizard()
-    assert "Continue response batch" in menus[0]
+    assert "Saved batches" in menus[0]
     assert managed[0][1] == [{1: f"Exact answer {i}"} for i in range(50)]
     assert managed[0][3] == {}
 
@@ -80,8 +80,8 @@ def test_recovery_labels_separate_uncertain_from_safe_remaining(batch_files):
     matches, _ = cli._saved_batches(started_only=True)
     label = cli._batch_label(matches[0][1])
     assert "35/50 submitted" in label
-    assert "1 needs checking" in label
-    assert "14 remaining" in label
+    assert "Needs checking (1)" in label
+    assert "14 ready" in label
 
 
 def test_fully_submitted_and_legacy_ai_files_are_not_recovery_jobs(batch_files, tmp_path):
@@ -126,7 +126,10 @@ def test_more_options_contains_inspection_setup_and_back(monkeypatch):
     monkeypatch.setattr(cli, "_run_inspect", lambda url: calls.append(("inspect", url)))
     monkeypatch.setattr(cli.doctor, "callback", lambda: calls.append(("doctor",)))
     cli._wizard()
-    assert choices_seen[1] == ("More options", ["View a form's questions", "Check setup", "Back"])
+    assert choices_seen[1] == (
+        "More options",
+        ["View a form's questions", "Check setup", "View recent activity", "Back"],
+    )
     assert calls == [("inspect", "FORM_URL"), ("doctor",)]
 
 
@@ -153,9 +156,9 @@ def test_quick_submit_backtracks_between_fields_before_submitting(monkeypatch):
     monkeypatch.setattr(cli, "_ask_number", lambda *a, **kw: next(counts))
     monkeypatch.setattr(cli, "_ask_text", instructions)
     monkeypatch.setattr(cli, "_ask_confirm", lambda *a, **kw: False)
-    monkeypatch.setattr(cli, "_submit_command", lambda *a: submitted.append(a))
+    monkeypatch.setattr(cli, "_submit_command", lambda *a, **kw: submitted.append((a, kw)))
     cli._quick_submit()
-    assert submitted == ["back", ("FORM_URL", 7, "Fictional profiles", None, None)]
+    assert submitted == ["back", (("FORM_URL", 7, "Fictional profiles", None, None), {"guided": True})]
 
 
 def test_view_questions_returns_to_answer_sources(monkeypatch):

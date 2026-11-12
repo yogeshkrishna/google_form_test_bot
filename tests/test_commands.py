@@ -127,6 +127,32 @@ def test_generate_defaults_to_one_response_and_submission(commands):
     assert commands.inspected[0][1].get("display") is False
 
 
+@pytest.mark.parametrize("confirm", [False, True])
+def test_quick_submit_pauses_for_review(commands, monkeypatch, confirm):
+    def flagged(config, *args, **kwargs):
+        config._quality_warnings = [{"response": 1, "question": 2, "reason": "Check the answer."}]
+        return profiles()[:1]
+
+    actions = iter(["submit", "back"])
+    monkeypatch.setattr(cli, "_generate", flagged)
+    monkeypatch.setattr(cli, "_next_action", lambda count: next(actions))
+    monkeypatch.setattr(cli, "_ask_confirm", lambda *a, **kw: confirm)
+    cli._submit_command(commands.config.url, 1, "", None, None, guided=True)
+    assert len(commands.filled) == int(confirm)
+    if not confirm:
+        assert Path("gformbot-responses.json").is_file()
+
+
+def test_generate_keeps_warned_plan_for_interactive_review(commands, tmp_path):
+    path = saved_plan(commands, tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["quality_warnings"] = [{"response": 1, "question": 2, "reason": "Check the answer."}]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = invoke("generate", commands.config.url, "--data", str(path))
+    assert result.exit_code != 0 and "AI quality warnings" in str(result.exception)
+    assert not commands.filled and path.is_file()
+
+
 def test_generate_passes_message_reference_and_count(commands, tmp_path):
     reference = generator.write_csv(commands.config, profiles(), tmp_path / "reference.csv")
     result = invoke(
@@ -383,6 +409,40 @@ def test_preview_explicit_plan_opens_default_app_without_execution(commands, tmp
     assert result.exit_code == 0, result.exception
     assert [p.resolve() for p in commands.opened] == [path.resolve()]
     assert not commands.inspected and not commands.generated and not commands.filled
+
+
+def test_preview_refuses_non_plan_json(commands, tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text("{}", encoding="utf-8")
+    result = invoke("preview", str(path))
+    assert result.exit_code != 0 and "Unknown response plan format" in str(result.exception)
+    assert not commands.opened
+
+
+def test_config_refuses_conflicting_actions():
+    result = invoke("config", "--show", "--edit")
+    assert result.exit_code == 2 and "Choose either --show or --edit" in result.output
+
+
+def test_recent_activity_shows_uncertainty_and_hides_answers_by_default(commands):
+    from gformbot.logger import log_result
+
+    log_result(
+        "gformbot-runs.csv",
+        1,
+        {2: "Test response detail"},
+        False,
+        "Confirmation page unavailable",
+        form_title="Command fixture",
+        uncertain=True,
+    )
+    summary = invoke("log")
+    assert summary.exit_code == 0, summary.exception
+    assert "Needs checking" in summary.output
+    assert "Test response detail" not in summary.output
+    detail = invoke("log", "--details")
+    assert detail.exit_code == 0, detail.exception
+    assert "Test response detail" in detail.output
 
 
 def test_preview_without_saved_files_returns_without_menu(commands):
