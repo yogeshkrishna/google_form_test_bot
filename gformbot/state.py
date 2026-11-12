@@ -203,7 +203,7 @@ class Journal:
             )
 
 
-def atomic_json(path: Path, payload: dict):
+def atomic_json(path: Path, payload: dict, *, compact=False):
     """Flush before replacement so a process interruption keeps a valid document."""
     import os
     import tempfile
@@ -212,7 +212,13 @@ def atomic_json(path: Path, payload: dict):
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
             temporary = Path(handle.name)
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            json.dump(
+                payload,
+                handle,
+                ensure_ascii=False,
+                indent=None if compact else 2,
+                separators=(",", ":") if compact else None,
+            )
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())

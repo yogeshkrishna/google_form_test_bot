@@ -447,27 +447,25 @@ def _reference_prompt(config, required=False):
 
 
 def _generate(config, reference=None, instructions="", **options):
-    from .ai import complete_responses, generate_responses
+    from .ai import GenerationError
+    from .chatgpt_http import ChatHTTPError
+    from .generation import Generation
 
-    partials = options.pop("partials", None)
-    options.pop("compact", None)
-    progress = options.pop("progress", lambda done, total: _info(f"Generating responses: {done}/{total}"))
-    options.setdefault("browser", config.browser)
-    options.setdefault("attention", _ask_text if interactive_input() else None)
+    options.setdefault("progress", lambda done, total: _info(f"Creating answers: {done}/{total} saved"))
+    options.setdefault("status", _info)
+    options.setdefault(
+        "on_wait", lambda seconds: _info(f"ChatGPT is slowing requests. Waiting {seconds:.1f}s.")
+    )
+    job = Generation(config, reference, instructions, **options)
     _info(
-        "Generating with ChatGPT in a private headless browser. Form context, instructions, "
-        "and reference examples will be sent as text."
+        "Generating with ChatGPT over HTTPS. Form context, instructions, and reference examples will be sent as text."
     )
-    generate = generate_responses if partials is None else complete_responses
-    request = config.count if partials is None else partials
-    return generate(
-        config,
-        request,
-        reference=reference,
-        instructions=instructions,
-        progress=progress,
-        **options,
-    )
+    try:
+        return job.run()
+    except (GenerationError, ChatHTTPError) as exc:
+        if isinstance(exc, ChatHTTPError) or exc.provider_error is not None:
+            _info("To continue with your own answers, use --data with a CSV or saved response JSON.")
+        raise
 
 
 def _configure_weights(config):
@@ -520,15 +518,21 @@ def _save_plan(config, answers, path=None, source="prepared", *, cleanup_on_succ
         raise ValueError("A plan cannot overwrite the source CSV.")
     from .artifacts import describe
 
+    draft = getattr(config, "_generation_draft", None)
     payload = {
         "schema_version": 2 if config.media or any(q.allow_other for q in config.questions) else 1,
         "kind": "gformbot-run",
         "created_at": datetime.now().astimezone().isoformat(),
         "form_fingerprint": schema_fingerprint(config),
         "config": config_to_dict(config),
-        "batch_id": uuid.uuid4().hex,
+        "batch_id": draft.identity if draft is not None else uuid.uuid4().hex,
         "source": source,
         "repairs": getattr(config, "_repairs", []),
+        **(
+            {"quality_warnings": config._quality_warnings}
+            if getattr(config, "_quality_warnings", None)
+            else {}
+        ),
         "responses": answers,
         "cleanup_on_success": cleanup_on_success,
         "temporary_files": describe(
@@ -548,6 +552,12 @@ def _save_plan(config, answers, path=None, source="prepared", *, cleanup_on_succ
                 continue
             atomic_json(target, payload)
             break
+    if draft is not None:
+        try:
+            draft.finish()
+        except (OSError, ValueError) as exc:
+            _info(f"Could not remove the finished generation draft: {exc}")
+        config._generation_draft = None
     from .previews import remember
 
     try:
@@ -1100,7 +1110,7 @@ def _quick_submit():
         lambda _: _quick_reference(),
     )
     try:
-        _submit_command(url, count, message, like, None, None)
+        _submit_command(url, count, message, like, None)
     except ValueError as exc:
         console.print(Text(f"Quick submit could not finish: {exc}", style="yellow"))
 
@@ -1251,9 +1261,9 @@ def _response_options(function):
             help="Use complete CSV rows or saved response JSON instead of AI.",
         ),
         click.option(
-            "--browser",
-            type=click.Choice(["auto", "chrome", "firefox", "edge"]),
-            help="Browser for ChatGPT generation only.",
+            "--quality",
+            type=click.Path(exists=True, dir_okay=False),
+            help="JSON policy for exact fields, context, contact values and review.",
         ),
     ]
     for option in reversed(options):
@@ -1267,17 +1277,17 @@ def _command_answers(
     message,
     like,
     data,
-    browser,
     date_order=None,
     *,
     cleanup_on_success=True,
+    quality=None,
 ):
     """Reuse the wizard's preparation path without its tables and questions."""
     from .generator import load_reference, prepare_responses
     from .inspector import schema_fingerprint
 
-    if data and (like or message.strip()):
-        raise ValueError("--data uses your exact answers; choose it without --like or -m.")
+    if data and (like or message.strip() or quality):
+        raise ValueError("--data uses your exact answers; do not combine it with AI generation options.")
     if like and clean_path(like).suffix.lower() != ".csv":
         raise ValueError("--like needs a CSV file.")
     if data and clean_path(data).suffix.lower() not in {".csv", ".json"}:
@@ -1310,7 +1320,6 @@ def _command_answers(
         config.requires_signin = current.requires_signin
         config.one_response = current.one_response
         config.email_collection = current.email_collection
-        config.browser = browser or config.browser
         save_config(config, DEFAULT_CONFIG_NAME)
         return config, answers, clean_path(data), False
     if count is not None:
@@ -1322,14 +1331,18 @@ def _command_answers(
         config.pool_column_map = {}
         for question in config.questions:
             question.pool_column = None
-    config.browser = browser or config.browser
     config.pool_file = str(clean_path(data).resolve()) if data else None
     validate_config(config)
     if data:
         answers = prepare_responses(config, load_reference(config, data), ordered=True)
     else:
         reference = load_reference(config, like) if like else None
-        answers = _generate(config, reference, message, progress=None, compact=True)
+        answers = _generate(
+            config,
+            reference,
+            message,
+            policy=_quality_policy(quality),
+        )
     path = _save_plan(
         config,
         answers,
@@ -1342,20 +1355,12 @@ def _command_answers(
 
 @cli.command()
 @_response_options
-def generate(
-    url,
-    count,
-    message,
-    like,
-    data,
-    browser,
-    date_order=None,
-):
+def generate(url, count, message, like, data, date_order=None, quality=None):
     """Generate answers and submit them automatically over HTTP."""
-    _submit_command(url, count, message, like, data, browser, date_order)
+    _submit_command(url, count, message, like, data, date_order, quality=quality)
 
 
-def _submit_command(url, count, message, like, data, browser, date_order=None):
+def _submit_command(url, count, message, like, data, date_order=None, **options):
     from .artifacts import digest
 
     config, answers, path, owned = _command_answers(
@@ -1364,8 +1369,8 @@ def _submit_command(url, count, message, like, data, browser, date_order=None):
         message,
         like,
         data,
-        browser,
         date_order,
+        **options,
     )
     remaining = _track_plan(config, answers, path, digest(path), interactive=False)
     finished = _run_submit(config, answers=remaining, compact=True)
@@ -1374,19 +1379,55 @@ def _submit_command(url, count, message, like, data, browser, date_order=None):
 
 @cli.command()
 @_response_options
-def prepare(url, count, message, like, data, browser, date_order=None):
+@click.option("--resume", type=click.Path(exists=True, dir_okay=False), help="Continue a saved AI draft.")
+def prepare(url, count, message, like, data, date_order=None, resume=None, quality=None):
     """Create and save response JSON without filling or submitting the form."""
-    _, _, path, _ = _command_answers(
-        url,
-        count,
-        message,
-        like,
-        data,
-        browser,
-        date_order,
-        cleanup_on_success=False,
-    )
+    if resume is not None:
+        if count is not None or message or like or data or date_order:
+            raise ValueError(
+                "--resume uses the saved generation settings. --quality may only add evidence or placeholders."
+            )
+        path = _resume_generation(url, resume, evidence=_quality_policy(quality))
+    else:
+        _, _, path, _ = _command_answers(
+            url,
+            count,
+            message,
+            like,
+            data,
+            date_order,
+            cleanup_on_success=False,
+            quality=quality,
+        )
     _info(f'Ready. Open with: gformbot preview "{path.resolve()}"')
+
+
+def _quality_policy(path):
+    if path is None:
+        return None
+    value = json.loads(clean_path(path).read_text(encoding="utf-8-sig"))
+    if not isinstance(value, dict):
+        raise ValueError("The quality policy must be a JSON object.")
+    return value
+
+
+def _resume_generation(url, resume, *, evidence=None):
+    from .ai_draft import Draft
+    from .locking import file_lock
+
+    current = _run_inspect(url, display=False)
+    path = clean_path(resume).absolute()
+    with file_lock(path.with_name(path.name + ".resume")):
+        draft = Draft.load(path, current)
+        answers = _generate(
+            draft.config,
+            draft.reference,
+            draft.instructions,
+            partials=draft.partials,
+            draft=draft,
+            evidence=evidence,
+        )
+        return _save_plan(draft.config, answers, source="prepare", cleanup_on_success=False)
 
 
 @cli.command()
@@ -1433,38 +1474,32 @@ def preview(file):
 @cli.command()
 @click.option("--check", is_flag=True, help="Return an error if a required local prerequisite is missing.")
 def doctor(check=False):
-    """Check local prerequisites without launching a browser or making requests."""
+    """Check local prerequisites offline."""
     import importlib.util
-
-    from .browser import available_browsers, detect_default_browser
 
     table = Table(title="Setup", header_style="bold cyan")
     table.add_column("Check")
     table.add_column("Result")
     table.add_row("Python", sys.version.split()[0])
-    installed = available_browsers()
-    table.add_row("Execution", "Direct HTTP; no browser needed for supplied answers")
-    table.add_row(
-        "Browsers found", ", ".join(installed) or "None detected (needed for ChatGPT generation only)"
-    )
-    table.add_row("Default browser", detect_default_browser() if installed else "Unavailable")
-    from .selenium_runtime import PACKAGE
-
+    table.add_row("Execution", "Direct HTTP")
     missing = []
-    for module in ("urllib3", "selenium", "tkinter", "pyperclip"):
-        present = importlib.util.find_spec(PACKAGE if module == "selenium" else module) is not None
-        if module == "urllib3" and not present:
-            missing.append("HTTP support (urllib3)")
+    for module, label, required in (
+        ("urllib3", "HTTP client", True),
+        ("certifi", "TLS certificates", True),
+        ("tkinter", "File picker", False),
+        ("pyperclip", "Clipboard", False),
+    ):
+        present = importlib.util.find_spec(module) is not None
+        if required and not present:
+            missing.append(f"{label} ({module})")
         table.add_row(
-            module,
-            ("Available (included)" if module == "selenium" and PACKAGE != "selenium" else "Available")
-            if present
-            else "Missing" + (" (optional)" if module != "urllib3" else ""),
+            label,
+            "Available" if present else "Missing" if required else "Missing (optional)",
         )
-    table.add_row("Output folder", "Writable" if os.access(Path.cwd(), os.W_OK) else "Not writable")
-    table.add_row("Driver", "Needed for ChatGPT generation only; resolved on first browser use")
+    writable = os.access(Path.cwd(), os.W_OK)
+    table.add_row("Output folder", "Writable" if writable else "Not writable")
     console.print(table)
-    if check and (missing or not os.access(Path.cwd(), os.W_OK)):
+    if check and (missing or not writable):
         raise click.ClickException(
             "Setup incomplete: " + ", ".join(missing or ["a writable output folder"]) + "."
         )

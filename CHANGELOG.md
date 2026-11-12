@@ -1,15 +1,16 @@
 # Changelog
 
-## 0.4.0 (unpublished)
+## 0.4.0
 
-- Run ChatGPT headless by default with the installed Chromium browser's desktop user-agent. Offer a minimized private session for manual sign-in or verification only before sending the first prompt, and report browser-verification blocks explicitly.
-- Submit public anonymous forms over HTTP. Verify the receipt before recording a success. Keep exact saved responses, skip confirmed submissions, and ask before retrying an uncertain outcome. Selenium is used only for ChatGPT.
+- Generate and review answers with ChatGPT over HTTPS. Use adaptive batches and route-aware question groups, carry relevant earlier answers forward, and correct invalid fields or contradictory answers in place.
+- Save validated work locally for `prepare --resume`. Preserve compatible older drafts and honor bounded waits for temporary throttling.
+- Submit public anonymous forms over HTTPS. Verify the receipt, skip confirmed submissions, and ask before retrying an uncertain outcome.
 - Add Quick submit, double-Backspace navigation, and empty count fields that accept their displayed default on Enter. Form questions can be opened on demand without leaving answer selection.
 - Show one sample response before submitting from the guided workflow. Review or edit through a local browser editor with shared validation and protection for submitted and uncertain rows. Export remaining responses or resume an interrupted submission.
-- Generate with ChatGPT using adaptive batches, individual JSON records, and bounded corrections. Redact known private links and keep image and video metadata in inspection only. Remove cross-session AI checkpoints.
+- Generate distinct contact details in realistic local or international formats. Redact known private links and keep media metadata in form inspection.
 - Support branching and early submission, text and number rules, dates and times, both grid types, ratings, typed email and explicit Other answers. Reject unsupported questions on the chosen route, account restrictions and file uploads.
 - Capture form directions and completion links, retain prepared files and legacy batch progress, and fix concurrent log and config writes. Add CSV date order and clearer diagnostics.
-- Build native wheels for Windows x64, macOS Intel/Apple Silicon, and Linux glibc x64/ARM64 with a small private Selenium subset. Keep a portable fallback. Test console and module launchers outside the checkout.
+- Ship a universal Python wheel. Remove Selenium, browser drivers, and the `--browser` option. Test installed console and module launchers outside the checkout.
 
 ## 0.3.1
 

@@ -5,7 +5,7 @@ from copy import deepcopy
 
 import pytest
 
-from gformbot import ai
+from gformbot import ai, chatgpt_http
 from gformbot.config import QuestionConfig, RunConfig, config_to_dict
 from gformbot.inspector import schema_fingerprint
 
@@ -16,25 +16,21 @@ PUBLIC = "https://chat.whatsapp.com/PublicInvite"
 
 
 def capture_chat(monkeypatch, replies):
-    class Driver:
-        def quit(self):
-            pass
-
     calls = []
     replies = iter(replies)
-    monkeypatch.setattr(ai, "_open_chat", lambda *_: Driver())
 
-    def chat(driver, messages, schema, *args, **kwargs):
+    def chat(self, messages, *, timeout):
+        task = json.loads(messages[-1]["content"])
         calls.append(
             {
                 "messages": deepcopy(messages),
-                "schema": deepcopy(schema),
-                "task": json.loads(messages[-1]["content"]),
+                "schema": task.get("answer_schema"),
+                "task": task,
             }
         )
         return json.dumps({"profile_id": calls[-1]["task"]["profile_numbers"][0], "answers": next(replies)})
 
-    monkeypatch.setattr(ai, "_chat", chat)
+    monkeypatch.setattr(chatgpt_http.Client, "ask", chat)
     return calls
 
 

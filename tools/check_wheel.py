@@ -1,72 +1,76 @@
-"""Check platform runtime contents and dependency contracts in a built wheel."""
+"""Check the universal wheel and source archive before installation."""
 
 import argparse
-import hashlib
-import json
-import struct
+import re
+import tarfile
 import zipfile
 from email.parser import BytesParser
 from pathlib import Path
 
-MANAGERS = {
-    "win_amd64": "windows/selenium-manager.exe",
-    "macosx_10_12_x86_64": "macos/selenium-manager",
-    "macosx_11_0_arm64": "macos/selenium-manager",
-    "manylinux_2_17_x86_64": "linux-x86_64/selenium-manager",
-    "manylinux_2_17_aarch64": "linux-arm64/selenium-manager",
+_REQUIRED = {"gformbot/chatgpt_http.py", "gformbot/editor.html", "gformbot/transport.py"}
+_RETIRED = {
+    "gformbot/browser.py",
+    "gformbot/chatgpt.py",
+    "gformbot/filler.py",
+    "gformbot/selenium_runtime.py",
+    "setup.py",
 }
+_EXCLUDED_PREFIXES = (".work/", ".venv/", "gformbot/_vendor/", "selenium/", "tests/", "tools/")
+_BINARY_SUFFIXES = (".dll", ".dylib", ".exe", ".pyc", ".pyd", ".so", "/selenium-manager")
 
 
-def check(path):
+def _check_files(names, required=_REQUIRED):
+    if len(names) != len(set(names)):
+        raise ValueError("Archive contains duplicate entries.")
+    if missing := required - set(names):
+        raise ValueError(f"Archive is missing required files: {', '.join(sorted(missing))}.")
+    for name in names:
+        if name in _RETIRED or name.startswith(_EXCLUDED_PREFIXES) or name.endswith(_BINARY_SUFFIXES):
+            raise ValueError(f"Archive contains a retired, private, or generated file: {name}.")
+
+
+def _wheel_metadata(archive, filename):
+    (name,) = [n for n in archive.namelist() if n.endswith(f".dist-info/{filename}")]
+    return BytesParser().parsebytes(archive.read(name))
+
+
+def check_wheel(path):
     with zipfile.ZipFile(path) as archive:
-        names = archive.namelist()
-        if len(names) != len(set(names)):
-            raise ValueError("Wheel contains duplicate archive entries.")
-        if "gformbot/editor.html" not in names:
-            raise ValueError("Wheel is missing the local response editor.")
-        if "gformbot/filler.py" in names:
-            raise ValueError("Wheel still contains the retired Selenium form filler.")
-        metadata = BytesParser().parsebytes(
-            archive.read(next(n for n in names if n.endswith(".dist-info/METADATA")))
-        )
-        requires = metadata.get_all("Requires-Dist", [])
-        target = path.stem.rsplit("-", 1)[-1]
-        prefix = "gformbot/_vendor/selenium/"
-        bundled = {n.removeprefix(prefix): archive.read(n) for n in names if n.startswith(prefix)}
-        if target in MANAGERS:
-            manifest = json.loads(bundled.pop("manifest.json"))
-            actual = {name: hashlib.sha256(value).hexdigest() for name, value in bundled.items()}
-            if actual != manifest["files"] or manifest.get("platform") != target:
-                raise ValueError("Wheel does not contain its exact audited Selenium subset.")
-            manager = "webdriver/common/" + MANAGERS[target]
-            binaries = {
-                name for name in bundled if Path(name).name in {"selenium-manager", "selenium-manager.exe"}
-            }
-            if binaries != {manager}:
-                raise ValueError("Wheel must contain exactly its own native Manager.")
-            data = bundled[manager]
-            if target.startswith("macosx"):
-                expected = 0x0100000C if target.endswith("arm64") else 0x01000007
-                if data[:4] != b"\xcf\xfa\xed\xfe" or struct.unpack_from("<I", data, 4)[0] != expected:
-                    raise ValueError("Mac Manager is not the expected thin Mach-O architecture.")
-            elif target.startswith("manylinux"):
-                expected = 183 if target.endswith("aarch64") else 62
-                if data[:4] != b"\x7fELF" or struct.unpack_from("<H", data, 18)[0] != expected:
-                    raise ValueError("Linux Manager has the wrong ELF architecture.")
-            elif data[:2] != b"MZ":
-                raise ValueError("Windows Manager is not a PE executable.")
-            if (
-                not target.startswith("win")
-                and not archive.getinfo(prefix + manager).external_attr >> 16 & 0o111
-            ):
-                raise ValueError("Native Manager is not marked executable in the wheel.")
-            if any(r.lower().startswith(("selenium", "trio", "websocket")) for r in requires):
-                raise ValueError("Subset wheel still requires the full protocol stack.")
-        elif bundled or not any(r.lower().startswith("selenium") for r in requires):
-            raise ValueError("Portable wheels must retain official Selenium and omit private assets.")
-        if any(n.startswith("selenium/") or n.startswith(".work/") or n.endswith(".pyc") for n in names):
-            raise ValueError("Wheel contains conflicting or generated files.")
-    print(f"Verified {path.name}: {path.stat().st_size:,} bytes.")
+        _check_files(archive.namelist())
+        wheel = _wheel_metadata(archive, "WHEEL")
+        if (
+            not path.name.endswith("-py3-none-any.whl")
+            or wheel.get_all("Tag") != ["py3-none-any"]
+            or wheel.get("Root-Is-Purelib", "").lower() != "true"
+        ):
+            raise ValueError("Expected one universal pure-Python wheel.")
+        metadata = _wheel_metadata(archive, "METADATA")
+        if set(metadata.get_all("License-File", [])) != {"LICENSE", "LICENSE-chatgpt-protocol"}:
+            raise ValueError("Wheel is missing the project license or the protocol notice.")
+        requirements = metadata.get_all("Requires-Dist", [])
+        names = {re.split(r"[\s\[<>=!~;]", value, maxsplit=1)[0].lower() for value in requirements}
+        if not {"urllib3", "certifi"} <= names:
+            raise ValueError("Wheel is missing HTTPS requirements.")
+        if names & {"selenium", "pysocks", "trio", "trio-websocket", "websocket-client"} or any(
+            re.match(r"urllib3\s*\[", value, re.I) for value in requirements
+        ):
+            raise ValueError("Wheel still includes browser-transport requirements.")
+
+
+def check_sdist(path):
+    prefix = path.name.removesuffix(".tar.gz") + "/"
+    with tarfile.open(path, "r:gz") as archive:
+        names = []
+        for entry in archive:
+            if entry.isdir():
+                continue
+            if not entry.isfile() or not entry.name.startswith(prefix):
+                raise ValueError(f"Source archive contains an unexpected entry: {entry.name}.")
+            names.append(entry.name.removeprefix(prefix))
+    _check_files(
+        names,
+        _REQUIRED | {"pyproject.toml", "LICENSE", "LICENSE-chatgpt-protocol", "README.md", "SECURITY.md"},
+    )
 
 
 if __name__ == "__main__":
@@ -74,7 +78,9 @@ if __name__ == "__main__":
     parser.add_argument("directory", type=Path)
     args = parser.parse_args()
     wheels = list(args.directory.glob("*.whl"))
-    if not wheels:
-        raise SystemExit("No wheels found.")
-    for path in wheels:
+    sdists = list(args.directory.glob("*.tar.gz"))
+    if len(wheels) != 1 or len(sdists) != 1:
+        raise SystemExit("Expected exactly one wheel and one source archive.")
+    for path, check in ((wheels[0], check_wheel), (sdists[0], check_sdist)):
         check(path)
+        print(f"Verified {path.name}: {path.stat().st_size:,} bytes.")

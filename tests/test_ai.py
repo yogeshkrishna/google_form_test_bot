@@ -1,20 +1,16 @@
-"""The browser adapter preserves complete profiles and fails explicitly."""
+"""HTTPS generation preserves complete profiles and fails explicitly."""
 
 import json
 
 import pytest
 
 from gformbot import ai
+from gformbot.chatgpt_http import ChatHTTPError, Client
 from gformbot.config import QuestionConfig, RunConfig
 
 
 @pytest.fixture
-def config(monkeypatch):
-    class Driver:
-        def quit(self):
-            pass
-
-    monkeypatch.setattr(ai, "_open_chat", lambda browser: Driver())
+def config():
     return RunConfig(
         url="https://docs.google.com/forms/d/e/test/viewform",
         form_title="Example survey",
@@ -46,8 +42,9 @@ def mock_chat(monkeypatch, contents):
     calls = []
     iterator = iter(contents)
 
-    def chat(driver, messages, schema, timeout, **kwargs):
-        calls.append({"schema": schema, "task": json.loads(messages[-1]["content"])})
+    def ask(client, messages, *, timeout):
+        task = json.loads(messages[-1]["content"])
+        calls.append({"client": client, "schema": task["answer_schema"], "task": task})
         content = next(iterator)
         if isinstance(content, list):
             return "\n".join(
@@ -56,7 +53,7 @@ def mock_chat(monkeypatch, contents):
             )
         return content
 
-    monkeypatch.setattr(ai, "_chat", chat)
+    monkeypatch.setattr(Client, "ask", ask)
     return calls
 
 
@@ -71,7 +68,7 @@ def test_batches_complete_profiles_and_progress(config, monkeypatch):
     assert rows[0][2] == ["Read, write"]
     assert rows[0][4] == ""
     assert [call["task"]["profile_numbers"] for call in calls] == [[1, 2], [3]]
-    assert calls[0]["schema"] and calls[1]["schema"] is None
+    assert calls[0]["schema"] == calls[1]["schema"]
     assert progress == [(2, 3), (3, 3)]
 
 
@@ -132,52 +129,44 @@ def test_invalid_parameters_make_no_request(config, monkeypatch, arguments):
     def unexpected(*args, **kwargs):
         pytest.fail("Invalid input must be rejected before opening ChatGPT")
 
-    monkeypatch.setattr(ai, "_chat", unexpected)
+    monkeypatch.setattr(Client, "ask", unexpected)
     with pytest.raises(ai.GenerationError):
         ai.generate_responses(config, **arguments)
 
 
 def test_invalid_reference_makes_no_request(config, monkeypatch):
-    monkeypatch.setattr(ai, "_chat", lambda *args: pytest.fail("Invalid reference reached model"))
+    monkeypatch.setattr(Client, "ask", lambda *args: pytest.fail("Invalid reference reached model"))
     with pytest.raises(ValueError):
         ai.generate_responses(config, 1, reference=[{1: "wrong"}])
 
 
 def test_unsupported_form_makes_no_request(config, monkeypatch):
     config.unsupported = ["File upload"]
-    monkeypatch.setattr(ai, "_chat", lambda *args: pytest.fail("Unsupported form reached model"))
+    monkeypatch.setattr(Client, "ask", lambda *args: pytest.fail("Unsupported form reached model"))
     with pytest.raises(ai.GenerationError, match="File upload"):
         ai.generate_responses(config, 1)
 
 
-def test_batches_and_corrections_reuse_one_private_browser(monkeypatch, config):
-    opened, closed = [], []
-
-    class Driver:
-        def quit(self):
-            closed.append(True)
-
-    def open_chat(browser):
-        opened.append(browser)
-        return Driver()
-
-    monkeypatch.setattr(ai, "_open_chat", open_chat)
+def test_batches_and_corrections_reuse_one_client(monkeypatch, config):
+    closed = []
+    monkeypatch.setattr(Client, "close", lambda client: closed.append(client))
     calls = mock_chat(monkeypatch, [reply(profile(), profile("bad")), reply(profile("B")), reply(profile())])
     assert len(ai.generate_responses(config, 3, batch_size=2)) == 3
-    assert len(calls) == 3 and opened == ["chrome"] and closed == [True]
+    assert len(calls) == 3 and len(closed) == 1
+    assert all(call["client"] is closed[0] for call in calls)
 
 
 @pytest.mark.parametrize(
-    "message", ["ChatGPT usage limit reached", "ChatGPT requires sign-in", "ChatGPT timed out"]
+    "message", ["ChatGPT usage limit reached", "ChatGPT denied access", "ChatGPT needs verification"]
 )
 def test_actionable_transport_errors_stop_immediately(config, monkeypatch, message):
     calls = []
 
     def fail(*args, **kwargs):
         calls.append(1)
-        raise ai.ChatGPTError(message)
+        raise ChatHTTPError(message)
 
-    monkeypatch.setattr(ai, "_chat", fail)
+    monkeypatch.setattr(Client, "ask", fail)
     with pytest.raises(ai.GenerationError, match=message):
         ai.generate_responses(config, 1)
     assert len(calls) == 1
@@ -187,7 +176,7 @@ def test_keyboard_interrupt_propagates(config, monkeypatch):
     def cancel(*args, **kwargs):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(ai, "_chat", cancel)
+    monkeypatch.setattr(Client, "ask", cancel)
     with pytest.raises(KeyboardInterrupt):
         ai.generate_responses(config, 1)
 
@@ -228,7 +217,7 @@ def test_bad_compact_option_ids_are_corrected(config, monkeypatch, value):
 
 @pytest.mark.parametrize("partial", [{99: "Unknown"}, {1: "Invalid option"}, {2: ["Run", "Run"]}])
 def test_invalid_preselected_answers_make_no_request(config, monkeypatch, partial):
-    monkeypatch.setattr(ai, "_chat", lambda *args: pytest.fail("Invalid preselected answer reached model"))
+    monkeypatch.setattr(Client, "ask", lambda *args: pytest.fail("Invalid preselected answer reached model"))
     with pytest.raises(ValueError):
         ai.complete_responses(config, [partial])
 
@@ -246,26 +235,8 @@ def test_plain_json_code_fence_is_accepted(config, monkeypatch):
     assert ai.generate_responses(config, 1)[0][1] == "A"
 
 
-def test_unsupported_browser_stops_before_launch(config, monkeypatch):
-    monkeypatch.setattr(ai, "_open_chat", lambda *args: pytest.fail("No browser should open"))
-    with pytest.raises(ai.GenerationError, match="browser|chrome"):
-        ai.generate_responses(config, 1, browser="unsupported")
-
-
-def test_browser_cleanup_failure_does_not_discard_generation(config, monkeypatch, tmp_path):
-    class Driver:
-        def quit(self):
-            raise ai.WebDriverException("Browser already closed")
-
-    monkeypatch.setattr(ai, "_open_chat", lambda *a: Driver())
-    mock_chat(monkeypatch, [reply(profile())])
-    assert len(ai.generate_responses(config, 1)) == 1
-
-
-def test_conflicting_fixed_and_preselected_answer_fails_before_browser(config, monkeypatch, tmp_path):
+def test_conflicting_fixed_and_preselected_answer_fails_before_request(config, monkeypatch):
     config.questions[0].fixed_value = "B"
-    monkeypatch.setattr(
-        ai, "_open_chat", lambda *a: pytest.fail("Conflicting presets must fail before opening")
-    )
+    monkeypatch.setattr(Client, "ask", lambda *a: pytest.fail("Conflicting presets reached the model"))
     with pytest.raises(ai.GenerationError, match="conflict"):
         ai.complete_responses(config, [{1: "A"}])

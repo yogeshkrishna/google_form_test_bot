@@ -7,9 +7,10 @@ name = "gformbot"
 version = "0.4.0"
 description = "Generate, prepare, and submit Google Forms responses with ChatGPT or supplied data."
 readme = "README.md"
-license = "Apache-2.0"
+license = "Apache-2.0 AND MIT"
+license-files = ["LICENSE", "LICENSE-chatgpt-protocol"]
 authors = [{ name = "yogeshkrishna" }]
-keywords = ["google-forms", "automation", "selenium", "cli", "bot"]
+keywords = ["google-forms", "automation", "http", "cli", "bot"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -20,11 +21,18 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
-    "Topic :: Internet :: WWW/HTTP :: Browsers",
+    "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: Testing",
 ]
 requires-python = ">=3.10"
-dynamic = ["dependencies"]
+dependencies = [
+    "click>=8.1,<9",
+    "pyyaml>=6.0,<7",
+    "rich>=13.0,<16",
+    "InquirerPy>=0.3.4,<0.4",
+    "certifi>=2026.2.25",
+    "urllib3>=2.6.3,<3",
+]
 
 [project.optional-dependencies]
 clipboard = ["pyperclip"]
@@ -43,14 +51,19 @@ Repository = "https://github.com/yogeshkrishna/google_form_test_bot"
 [project.scripts]
 gformbot = "gformbot:main"
 
+[tool.setuptools]
+packages = ["gformbot"]
+include-package-data = false
+
+[tool.setuptools.package-data]
+gformbot = ["editor.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["browser: opens a local browser session"]
 
 [tool.ruff]
 target-version = "py310"
 line-length = 110
-extend-exclude = ["gformbot/_vendor"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "UP", "B"]

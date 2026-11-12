@@ -62,7 +62,6 @@ class RunConfig:
     csv_date_order: str | None = None
     questions: list[QuestionConfig] = field(default_factory=list)
     count: int = 1
-    browser: str = "auto"
     min_delay: float = 0.25
     max_delay: float = 0.75
     max_runs: int = 500
@@ -108,13 +107,6 @@ def validate_config(config: RunConfig) -> None:
         or not 1 <= config.count <= config.max_runs
     ):
         raise ValueError(f"Response count must be between 1 and {config.max_runs}.")
-    if not isinstance(config.browser, str) or config.browser not in {
-        "auto",
-        "chrome",
-        "firefox",
-        "edge",
-    }:
-        raise ValueError("Browser must be auto, chrome, firefox or edge.")
     for name in ("form_title", "form_description", "confirmation_text"):
         if not isinstance(getattr(config, name), str):
             raise ValueError(f"{name} must be text.")
@@ -337,7 +329,6 @@ def config_to_dict(config: RunConfig) -> dict:
         q["type"] = q.pop("qtype")
     setting_names = (
         "count",
-        "browser",
         "min_delay",
         "max_delay",
         "max_runs",
@@ -367,10 +358,16 @@ def config_from_dict(value: dict) -> RunConfig:
             raise ValueError(f"The retired {name} setting must be true or false.")
     for name in ("page_delay_min", "page_delay_max"):
         data.pop(name, None)
-    if data.get("browser") == "headless":
-        data["browser"] = "auto"
-    if isinstance(data.get("browser"), str) and data["browser"] in {"auto-background", "chrome-background"}:
-        data["browser"] = data["browser"].removesuffix("-background")
+    if "browser" in data and data.pop("browser") not in (
+        "auto",
+        "chrome",
+        "firefox",
+        "edge",
+        "headless",
+        "auto-background",
+        "chrome-background",
+    ):
+        raise ValueError("Invalid retired browser setting.")
     questions = data.pop("questions", [])
     if not isinstance(questions, list):
         raise ValueError("questions must be a list.")

@@ -6,7 +6,7 @@ __version__ = "0.4.0"
 
 
 def main():
-    """Keep version checks independent of optional UI and browser imports."""
+    """Keep version checks independent of UI imports."""
     import sys
 
     if sys.argv[1:] == ["--version"]:

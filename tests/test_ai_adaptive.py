@@ -1,23 +1,18 @@
-"""Adaptive generation keeps independently validated profiles in one bounded conversation."""
+"""Adaptive HTTPS generation keeps independently validated profiles across requests."""
 
 import json
 
 import pytest
 
 from gformbot import ai
+from gformbot.chatgpt_http import ChatHTTPError, Client
 from gformbot.config import QuestionConfig, RunConfig
 
 
 @pytest.fixture
 def config(monkeypatch):
-    closed, opened = [], []
-
-    class Driver:
-        def quit(self):
-            closed.append(True)
-
-    monkeypatch.setattr(ai, "_open_chat", lambda browser: opened.append(browser) or Driver())
-    monkeypatch.setattr(ai, "_new_chat", lambda driver: None)
+    closed = []
+    monkeypatch.setattr(Client, "close", lambda client: closed.append(client))
     value = RunConfig(
         "https://docs.google.com/forms/d/e/adaptive/viewform",
         questions=[
@@ -25,7 +20,7 @@ def config(monkeypatch):
             QuestionConfig(2, "Reason", "text", True),
         ],
     )
-    value._closed, value._opened = closed, opened
+    value._closed = closed
     return value
 
 
@@ -36,24 +31,23 @@ def record(identity, choice=1, reason="A useful fictional answer"):
 def install_chat(monkeypatch, handler):
     calls = []
 
-    def chat(driver, messages, schema, timeout, **kwargs):
+    def ask(client, messages, *, timeout):
         task = json.loads(messages[-1]["content"])
         calls.append(task)
         return handler(task, len(calls))
 
-    monkeypatch.setattr(ai, "_chat", chat)
+    monkeypatch.setattr(Client, "ask", ask)
     return calls
 
 
-def test_hundred_short_profiles_take_five_requests_and_context_is_not_repeated(config, monkeypatch):
+def test_hundred_short_profiles_take_five_self_contained_requests(config, monkeypatch):
     calls = install_chat(monkeypatch, lambda task, _: "\n".join(record(i) for i in task["profile_numbers"]))
     progress = []
     rows = ai.generate_responses(config, 100, progress=lambda *values: progress.append(values))
     assert len(rows) == 100 and len(calls) == 5
-    assert calls[0]["questions"] and calls[0]["answer_schema"]
-    assert all("questions" not in task and "answer_schema" not in task for task in calls[1:])
+    assert all(task["questions"] and task["answer_schema"] for task in calls)
     assert progress == [(20, 100), (40, 100), (60, 100), (80, 100), (100, 100)]
-    assert config._opened == ["chrome"] and config._closed == [True]
+    assert len(config._closed) == 1
 
 
 def test_truncated_record_retains_preceding_profiles_and_halves_batch(config, monkeypatch):
@@ -99,19 +93,19 @@ def test_bad_content_has_bounded_corrections_and_no_random_fallback(config, monk
     calls = install_chat(monkeypatch, lambda *args: "not JSON")
     with pytest.raises(ai.GenerationError, match="after 3 attempts"):
         ai.generate_responses(config, 1)
-    assert len(calls) == 3 and config._closed == [True]
+    assert len(calls) == 3 and len(config._closed) == 1
 
 
 def test_timeout_salvages_independent_complete_records_without_resending(config, monkeypatch):
     def fail(*args):
-        raise ai.ChatGPTError("Interrupted", partial_content=record(1) + '\n{"profile_id":2')
+        raise ChatHTTPError("Interrupted", partial_content=record(1) + '\n{"profile_id":2')
 
     calls = install_chat(monkeypatch, fail)
     with pytest.raises(ai.GenerationError, match="Interrupted") as failure:
         ai.generate_responses(config, 3)
     assert failure.value.completed == 1 and failure.value.requested == 3
     assert failure.value.partial_responses == [{1: "A", 2: "A useful fictional answer"}]
-    assert len(calls) == 1 and config._closed == [True]
+    assert len(calls) == 1 and len(config._closed) == 1
 
 
 def test_estimator_distinguishes_choice_text_constraints_and_long_instructions(config):
@@ -122,9 +116,9 @@ def test_estimator_distinguishes_choice_text_constraints_and_long_instructions(c
     assert ai._estimate_profile_size(text, reference=[{1: "x" * 2000}]) > ai._estimate_profile_size(text)
 
 
-def test_oversized_context_fails_before_browser(config, monkeypatch):
+def test_oversized_context_fails_before_request(config, monkeypatch):
     config.questions[0].description = "x" * 181_000
-    monkeypatch.setattr(ai, "_open_chat", lambda *args: pytest.fail("Oversized context opened browser"))
+    monkeypatch.setattr(Client, "ask", lambda *args, **kwargs: pytest.fail("Oversized context was sent"))
     with pytest.raises(ai.GenerationError, match="context is too large"):
         ai.generate_responses(config, 1)
 
@@ -139,18 +133,6 @@ def test_growth_uses_observed_output_size(config, monkeypatch):
     assert max(task["response_count"] for task in calls) <= 20
 
 
-def test_conversation_renews_before_context_growth_becomes_excessive(config, monkeypatch):
-    config.form_description = "x" * 155_000
-    resets = []
-    monkeypatch.setattr(ai, "_new_chat", lambda driver: resets.append(True))
-    calls = install_chat(
-        monkeypatch, lambda task, _: "\n".join(record(i, reason="x" * 1100) for i in task["profile_numbers"])
-    )
-    ai.generate_responses(config, 60)
-    assert resets
-    assert sum("questions" in task for task in calls) == len(resets) + 1
-
-
 def test_duplicate_answer_json_keys_are_not_silently_overwritten(config):
     valid, _, incomplete = ai._validate_records(
         config, '{"profile_id":1,"answers":{"1":1,"1":2,"2":"answer"}}', [1]
@@ -158,10 +140,10 @@ def test_duplicate_answer_json_keys_are_not_silently_overwritten(config):
     assert not valid and incomplete
 
 
-def test_later_website_failure_retains_earlier_complete_profiles(config, monkeypatch):
+def test_later_https_failure_retains_earlier_complete_profiles(config, monkeypatch):
     def response(task, turn):
         if turn == 2:
-            raise ai.ChatGPTError("Network interrupted")
+            raise ChatHTTPError("Network interrupted")
         return "\n".join(record(i, reason=f"Profile {i}") for i in task["profile_numbers"])
 
     calls = install_chat(monkeypatch, response)
@@ -170,22 +152,6 @@ def test_later_website_failure_retains_earlier_complete_profiles(config, monkeyp
     assert failure.value.completed == 20 and len(failure.value.partial_responses) == 20
     assert len(calls) == 2
     assert failure.value.partial_responses[-1][2] == "Profile 20"
-
-
-def test_context_renewal_failure_preserves_accepted_profiles(config, monkeypatch):
-    config.form_description = "x" * 170_000
-
-    def renewal(driver):
-        raise ai.ChatGPTError("New conversation unavailable")
-
-    monkeypatch.setattr(ai, "_new_chat", renewal)
-    calls = install_chat(
-        monkeypatch, lambda task, _: "\n".join(record(i, reason="x" * 1100) for i in task["profile_numbers"])
-    )
-    with pytest.raises(ai.GenerationError, match="New conversation unavailable") as failure:
-        ai.generate_responses(config, 30)
-    assert failure.value.completed == 20 and len(failure.value.partial_responses) == 20
-    assert len(calls) == 1 and config._closed == [True]
 
 
 def test_known_preset_output_size_shrinks_before_sending(config, monkeypatch):
@@ -198,33 +164,31 @@ def test_known_preset_output_size_shrinks_before_sending(config, monkeypatch):
     assert len(rows) == 10
     assert calls[0]["response_count"] <= 2
     assert all(task["response_count"] <= 2 for task in calls)
-    assert config._opened == ["chrome"]
+    assert len(config._closed) == 1
 
 
 def test_large_partial_prompt_is_checked_in_addition_to_shared_context(config, monkeypatch):
-    config.form_description = "x" * 173_000
+    config.form_description = "x" * 15_000
     monkeypatch.setattr(
-        ai, "_open_chat", lambda *args: pytest.fail("Oversized complete prompt opened browser")
+        Client, "ask", lambda *args, **kwargs: pytest.fail("Oversized complete prompt was sent")
     )
-    with pytest.raises(ai.GenerationError, match="single response's prompt"):
-        ai.complete_responses(config, [{2: "x" * 5000}])
+    with pytest.raises(ai.GenerationError, match="HTTPS prompt budget"):
+        ai.complete_responses(config, [{2: "x" * 19_000}])
 
 
-def test_known_oversized_single_answer_fails_before_browser(config, monkeypatch):
-    monkeypatch.setattr(ai, "_open_chat", lambda *args: pytest.fail("Oversized reply opened browser"))
+def test_known_oversized_single_answer_fails_before_request(config, monkeypatch):
+    monkeypatch.setattr(Client, "ask", lambda *args, **kwargs: pytest.fail("Oversized reply was requested"))
     with pytest.raises(ai.GenerationError, match="single response's prompt"):
         ai.generate_responses(config, 1, instructions="Write 5000 words per answer")
 
 
-def test_outgoing_followup_bytes_trigger_context_renewal(config, monkeypatch):
-    config.form_description = "x" * 144_000
+def test_outgoing_request_bytes_shrink_the_batch(config, monkeypatch):
+    config.form_description = "x" * 15_000
     partials = [{2: "x" * 9000} for _ in range(4)]
-    resets = []
-    monkeypatch.setattr(ai, "_new_chat", lambda driver: resets.append(True))
     calls = install_chat(
         monkeypatch,
         lambda task, _: "\n".join(record(i, reason=partials[i - 1][2]) for i in task["profile_numbers"]),
     )
     assert len(ai.complete_responses(config, partials)) == 4
-    assert resets
-    assert sum("questions" in task for task in calls) == len(resets) + 1
+    assert len(calls) == 4
+    assert all(task["response_count"] == 1 for task in calls)

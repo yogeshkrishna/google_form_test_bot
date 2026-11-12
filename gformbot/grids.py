@@ -3,6 +3,15 @@
 import random
 
 
+class GridColumnConflict(ValueError):
+    """A unique column was selected in two rows of the same grid."""
+
+    def __init__(self, title: str, option: str, row_indices: tuple[int, int]):
+        super().__init__(f"Grid {title!r}: column {option!r} is selected in more than one row.")
+        self.option = option
+        self.row_indices = row_indices
+
+
 def parse_grid(item, offset, page):
     from .inspector import QuestionSchema, _get
 
@@ -128,9 +137,7 @@ def validate_columns(config, answer, active):
                 continue
             key = (q.item_id, option)
             if key in used:
-                raise ValueError(
-                    f"Grid {q.grid_title!r}: column {option!r} is selected in more than one row."
-                )
+                raise GridColumnConflict(q.grid_title, option, (used[key], q.index))
             used[key] = q.index
 
 

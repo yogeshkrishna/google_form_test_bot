@@ -1,4 +1,5 @@
 prune tests
+prune tools
 prune .work
 prune .venv
 prune reproduced
@@ -6,8 +7,4 @@ exclude FINDINGS*.md response_pool.csv bot_log.csv
 exclude gformbot*.csv gformbot*.yaml gformbot*.json gformbot*.lock
 include CHANGELOG.md
 include SECURITY.md
-include docs/selenium-runtime.md
-recursive-include tools *.py
 include gformbot/editor.html
-recursive-include gformbot/_vendor *.py *.js *.exe *.txt *.json LICENSE NOTICE
-recursive-include gformbot/_vendor selenium-manager

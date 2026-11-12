@@ -7,6 +7,7 @@ from test_inspector import URL, document
 
 from gformbot.config import config_from_dict, config_from_schema, config_to_dict, validate_config
 from gformbot.generator import load_reference, prepare_responses, validate_answer, write_csv
+from gformbot.grids import GridColumnConflict
 from gformbot.inspector import parse_form_html, schema_fingerprint
 
 
@@ -56,8 +57,10 @@ def test_grid_csv_and_json_exact_roundtrip(checkbox, tmp_path):
 def test_grid_column_uniqueness_required_rows_and_random(checkbox):
     config = grids(checkbox, unique=True)
     answer = {q.index: [q.options[0]] if checkbox else q.options[0] for q in config.questions}
-    with pytest.raises(ValueError, match="column"):
+    with pytest.raises(GridColumnConflict, match="column") as conflict:
         validate_answer(config, answer)
+    assert conflict.value.row_indices == (1, 2)
+    assert conflict.value.option == config.questions[0].options[0]
     with pytest.raises(ValueError, match="required|at least"):
         validate_answer(config, {})
     config.count = 30

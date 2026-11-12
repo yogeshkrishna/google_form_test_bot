@@ -85,14 +85,17 @@ def test_recovery_labels_separate_uncertain_from_safe_remaining(batch_files):
 
 
 def test_fully_submitted_and_legacy_ai_files_are_not_recovery_jobs(batch_files, tmp_path):
+    from gformbot.ai_draft import Draft
+
     batch_files(count=2, confirmed=2)
     old_job = tmp_path / "gformbot-generation.json"
     data = '{"kind":"gformbot-generation","responses":[null]}'
     old_job.write_text(data, encoding="utf-8")
     previews.remember(old_job)
     assert cli._saved_batches(started_only=True) == ([], 0)
+    with pytest.raises(ValueError, match="Choose a GFormBot AI draft"):
+        Draft.load(old_job, RunConfig("https://docs.google.com/forms/d/e/test/viewform"))
     assert old_job.read_text(encoding="utf-8") == data
-    assert not hasattr(cli, "_resume_generation")
 
 
 def test_prepared_answers_remain_available_to_own_data(batch_files, monkeypatch):
@@ -152,7 +155,7 @@ def test_quick_submit_backtracks_between_fields_before_submitting(monkeypatch):
     monkeypatch.setattr(cli, "_ask_confirm", lambda *a, **kw: False)
     monkeypatch.setattr(cli, "_submit_command", lambda *a: submitted.append(a))
     cli._quick_submit()
-    assert submitted == ["back", ("FORM_URL", 7, "Fictional profiles", None, None, None)]
+    assert submitted == ["back", ("FORM_URL", 7, "Fictional profiles", None, None)]
 
 
 def test_view_questions_returns_to_answer_sources(monkeypatch):
