@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+<title id="title">GFormBot form workflow symbols</title>
+<desc id="desc">Six paper-inspired symbols for preparing, routing, validating, reviewing, resuming, and submitting form responses.</desc>
+<rect width="1200" height="760" rx="28" fill="#F7F4EC"/>
+<text x="54" y="67" fill="#686B6D" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" letter-spacing="2">FORM WORKFLOW / SYMBOL STUDY</text>
+<text x="54" y="118" fill="#252A31" font-family="Georgia, 'Times New Roman', serif" font-size="40" font-weight="700">A small visual language for the workflow</text>
+<g font-family="Arial, Helvetica, sans-serif">
+<g transform="translate(48 164)">
+<rect width="350" height="254" rx="18" fill="#FFFDF8" stroke="#D8D1C6" stroke-width="2"/>
+<g transform="translate(42 31)">
+<path d="M22 5h76l29 29v102a12 12 0 0 1-12 12H22a12 12 0 0 1-12-12V17A12 12 0 0 1 22 5Z" fill="#F7F4EC" stroke="#3157C8" stroke-width="3"/>
+<path d="M98 6v24a6 6 0 0 0 6 6h23" fill="none" stroke="#3157C8" stroke-width="3"/>
+<path d="M30 56h77M30 78h59" fill="none" stroke="#252A31" stroke-width="4" stroke-linecap="round"/>
+<rect x="29" y="94" width="92" height="16" rx="5" fill="#E4EAF8"/><circle cx="39" cy="102" r="3.5" fill="#D47B6C"/><path d="M51 102h52" stroke="#3157C8" stroke-width="3" stroke-linecap="round"/>
+<rect x="29" y="117" width="70" height="10" rx="5" fill="#E8E2D7"/>
+</g>
+<text x="190" y="212" fill="#252A31" font-size="23" font-weight="700">Prepare</text><text x="190" y="238" fill="#686B6D" font-size="15">CSV → response plan</text>
+</g>
+<g transform="translate(425 164)">
+<rect width="350" height="254" rx="18" fill="#FFFDF8" stroke="#D8D1C6" stroke-width="2"/>
+<g transform="translate(42 44)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+<path d="M32 8v31c0 14 14 18 27 18h37M59 57c0 18-14 25-27 25M96 57c0 18 14 25 27 25" stroke="#3157C8" stroke-width="4"/>
+<circle cx="32" cy="8" r="10" fill="#FFFDF8" stroke="#D47B6C" stroke-width="4"/><circle cx="96" cy="57" r="10" fill="#E4EAF8" stroke="#3157C8" stroke-width="4"/>
+<circle cx="32" cy="82" r="10" fill="#FFFDF8" stroke="#3157C8" stroke-width="4"/><circle cx="123" cy="82" r="10" fill="#FFFDF8" stroke="#3157C8" stroke-width="4"/>
+<path d="M107 110h35m-6-6 7 6-7 6" stroke="#D47B6C" stroke-width="3"/>
+</g>
+<text x="190" y="212" fill="#252A31" font-size="23" font-weight="700">Follow routes</text><text x="190" y="238" fill="#686B6D" font-size="15">Branching sections</text>
+</g>
+<g transform="translate(802 164)">
+<rect width="350" height="254" rx="18" fill="#FFFDF8" stroke="#D8D1C6" stroke-width="2"/>
+<g transform="translate(38 45)">
+<rect x="6" y="4" width="127" height="111" rx="13" fill="#F7F4EC" stroke="#3157C8" stroke-width="3"/>
+<path d="m26 34 7 7 13-15M26 68l7 7 13-15M26 99l7 7 13-15" fill="none" stroke="#D47B6C" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M61 35h53M61 69h45M61 100h39" fill="none" stroke="#252A31" stroke-width="3.5" stroke-linecap="round"/>
+<circle cx="127" cy="110" r="25" fill="#3157C8"/><path d="m115 110 8 8 16-19" fill="none" stroke="#FFFDF8" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+<text x="190" y="212" fill="#252A31" font-size="23" font-weight="700">Validate</text><text x="190" y="238" fill="#686B6D" font-size="15">Rules before sending</text>
+</g>
+<g transform="translate(48 446)">
+<rect width="350" height="254" rx="18" fill="#FFFDF8" stroke="#D8D1C6" stroke-width="2"/>
+<g transform="translate(40 36)">
+<rect x="4" y="8" width="119" height="115" rx="10" fill="#F7F4EC" stroke="#3157C8" stroke-width="3"/>
+<path d="M22 36h77M22 57h54M22 79h63" stroke="#252A31" stroke-width="3.5" stroke-linecap="round"/>
+<rect x="17" y="94" width="75" height="16" rx="4" fill="#F1E4DE"/>
+<path d="m91 104 38-38 13 13-38 38-17 5Z" fill="#D47B6C" stroke="#FFFDF8" stroke-width="2" stroke-linejoin="round"/><path d="m123 72 13 13" stroke="#FFFDF8" stroke-width="2"/>
+</g>
+<text x="190" y="212" fill="#252A31" font-size="23" font-weight="700">Review</text><text x="190" y="238" fill="#686B6D" font-size="15">Edit each response</text>
+</g>
+<g transform="translate(425 446)">
+<rect width="350" height="254" rx="18" fill="#FFFDF8" stroke="#D8D1C6" stroke-width="2"/>
+<g transform="translate(39 37)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+<path d="M25 15h82v96H25z" fill="#F7F4EC" stroke="#3157C8" stroke-width="3"/>
+<path d="M46 42h43M46 61h43M46 80h28" stroke="#252A31" stroke-width="3.5"/>
+<path d="M117 89a39 39 0 1 1-5-49" stroke="#D47B6C" stroke-width="4"/><path d="m106 29 8 13-15 1" stroke="#D47B6C" stroke-width="4"/><circle cx="117" cy="88" r="5" fill="#3157C8" stroke="none"/>
+</g>
+<text x="190" y="212" fill="#252A31" font-size="23" font-weight="700">Resume</text><text x="190" y="238" fill="#686B6D" font-size="15">Continue a saved batch</text>
+</g>
+<g transform="translate(802 446)">
+<rect width="350" height="254" rx="18" fill="#FFFDF8" stroke="#D8D1C6" stroke-width="2"/>
+<g transform="translate(37 43)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+<path d="M11 8h74v98H11z" fill="#F7F4EC" stroke="#3157C8" stroke-width="3"/>
+<path d="M26 31h43M26 50h32M26 69h25" stroke="#252A31" stroke-width="3.5"/>
+<path d="M84 78h52m-18-18 19 18-19 18" stroke="#D47B6C" stroke-width="5"/><path d="M91 108h28" stroke="#3157C8" stroke-width="3"/><circle cx="85" cy="78" r="6" fill="#3157C8" stroke="none"/>
+</g>
+<text x="190" y="212" fill="#252A31" font-size="23" font-weight="700">Submit</text><text x="190" y="238" fill="#686B6D" font-size="15">When you're ready</text>
+</g>
+</g>
+</svg>
