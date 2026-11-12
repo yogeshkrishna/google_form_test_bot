@@ -1,179 +1,225 @@
-# gformbot
+<p align="center">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/master/docs/assets/readme-hero.webp" width="880" alt="GFormBot">
+</p>
 
-Generate synthetic Google Forms responses, reuse complete answer profiles, and submit forms from your terminal.
+<h1 align="center">Test your Google Forms before they go live.</h1>
 
-Supports public forms that accept anonymous responses. Google-account sign-in and file-upload questions are not supported.
+<p align="center">
+  Create fictional responses or bring your own spreadsheet. GFormBot checks the answers, follows branching sections, and submits when you’re ready.
+</p>
 
-## Install
+<p align="center">
+  <strong><a href="#get-started">Install and get started →</a></strong>
+  &nbsp; · &nbsp; <a href="#see-it-in-action">Watch the demo</a>
+  &nbsp; · &nbsp; <a href="#what-forms-work">See supported forms</a>
+</p>
 
-```powershell
-python -m pip install --upgrade gformbot
+<p align="center"><sub>Windows · macOS · Linux &nbsp; | &nbsp; Python 3.10+</sub></p>
+
+## See it in action
+
+You built a workshop signup form. Will both session choices work? Can someone leave the notes blank? Give GFormBot a few example rows and check the batch before sending it.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/master/docs/assets/readme-prepare.gif" width="880" alt="An offline demo runs gformbot prepare with a three-row workshop CSV. The CLI saves gformbot-responses.json and prints the preview command. No submissions are made.">
+</p>
+
+The demo runs the real `prepare` command against an offline form fixture. It checks three rows and saves a response plan without submitting.
+
+## Get started
+
+### 1. Install GFormBot
+
+The features on this page are in the **GitHub build**. Check the [PyPI release history](https://pypi.org/project/gformbot/#history) before installing with `python -m pip install gformbot`.
+
+With [Python 3.10 or newer](https://www.python.org/downloads/) and [Git](https://git-scm.com/install/) installed, run these commands in PowerShell or Terminal.
+
+```bash
+python -m pip install "git+https://github.com/yogeshkrishna/google_form_test_bot.git"
+python -m gformbot --version
+```
+
+If your Python command is `python3` on macOS or Linux, or `py` on Windows, use that in both lines. Running GFormBot through the same Python you used to install it also works when the short `gformbot` command is missing from PATH.
+
+<details>
+<summary><strong>Installing without Git</strong></summary>
+
+[Download the source ZIP](https://github.com/yogeshkrishna/google_form_test_bot/archive/refs/heads/master.zip), extract it, and open a terminal in the extracted folder containing `pyproject.toml`. Run `python -m pip install .` followed by `python -m gformbot --version`.
+
+</details>
+
+### 2. Open the guided menu
+
+```bash
 python -m gformbot
 ```
 
-On macOS or Linux, use `python3` in both commands if that is your Python command. On Windows, use `py` in both if you use the Python launcher. Keeping the same interpreter for install and launch works even when the standalone `gformbot` command is missing from PATH.
+Use the arrow keys and Enter. Choose **Start a new form** and paste the **respondent link** you would share with someone answering the form. GFormBot accepts `forms.gle` links and full Google Forms responder URLs. Use a form you own or have permission to test. A test copy keeps sample responses out of your live spreadsheet.
 
-Version `0.4.0` requires Python 3.10 or newer. One platform-independent wheel serves Windows, macOS, and Linux. Form inspection, submission, and AI generation run over HTTPS. Check your installed version with `python -m gformbot --version`.
+Choose **View this form's questions** to see the sections, choices, and rules. For a first AI run, choose **Generate answers with AI** → **Create new fictional responses**, enter 1 for the count, and add instructions if you like. To try a run without AI, use the [three-row CSV example](#three-ways-to-get-answers) below.
 
-To install the current source from GitHub, use `python -m pip install "git+https://github.com/yogeshkrishna/google_form_test_bot.git"` with Git installed.
+### 3. Review, then submit
 
-The wizard's file picker opens after you press Enter. It needs a graphical desktop and Python's Tk support (`python3-tk` on Linux). Commands accept paths directly.
+Once the sample appears, choose **Review or edit responses** to open the local editor in your default browser. Search questions, move between responses, and fix any flagged answers. You can also export the remaining rows as a CSV. Choose **Submit N responses** when you want Google Forms to receive the batch.
 
-## Choose a workflow
+> **Quick submit** and the `generate` command send answers automatically. Choose **Start a new form** for a review step, or use `prepare` to save answers without sending any.
 
-**`generate` submits automatically over HTTPS.** It validates the exact prepared answers and selected route, sends only reached answers, and requires a Google confirmation before recording success. Use `prepare` to save answers for review or choose an action in the wizard.
+## Three ways to get answers
 
-| Command | Behavior |
-| --- | --- |
-| `gformbot` | Guided setup, answer sources, saved work, review, and execution choices. |
-| `gformbot generate URL` | Prepare answers and submit directly over HTTP. No form browser or manual Submit step. |
-| `gformbot prepare URL` | Prepare and save response JSON. AI preparation uses ChatGPT over HTTPS. |
-| `gformbot preview [FILE.json]` | Open a JSON file in your system's default app. Without a file, choose saved response plans, newest first. This command does not fill or submit. |
+<p align="center">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/master/docs/assets/readme-workflow.svg" width="880" alt="Choose AI, CSV, or random answers. Validate sections and rules. Review, edit, export, or submit.">
+</p>
 
-Public respondent URLs and `forms.gle` short links work. In the wizard, **View this form's questions** displays questions, choices, sections and rules, then returns to the answer choices.
+| Answer source | What it does | When to use it |
+| --- | --- | --- |
+| **Generate answers with AI** | Writes new fictional responses using the form’s wording, choices, rules, and your instructions. An optional guide CSV provides examples and choice patterns. | You want varied text answers or a realistic test batch. |
+| **Use my own answers** | Takes complete rows from a CSV or reopens a saved response plan. Each row’s answers stay together. | You already have examples, need repeatable tests, or want precise control. |
+| **Pick answers randomly** | Samples eligible choices and can use weights or patterns from existing rows. AI can help finish written or date answers on mixed forms. | You mainly need to exercise choice questions and branches. |
 
-The start menu opens with **Quick submit**, which asks for the link, count, optional instructions and an optional guide CSV, then generates and submits automatically. **Start a new form** offers more answer sources and a review step. Press Backspace twice to return one step in an interactive terminal. In a text field, both presses must start with the field empty. **Continue response batch** appears when an interrupted batch remains. **More options** contains form inspection and setup checks.
+Use **`--like guide.csv`** to guide new AI-written answers. Use **`--data answers.csv`** to work with the answers in the file. GFormBot preserves imported CSVs and saved plans supplied as input.
 
-Account-restricted forms, verified-account email collection and one-response-per-account forms stop before preparation or submission. Complete those forms manually or ask their owner for an anonymous test copy. Ordinary typed-email questions remain supported.
+<details>
+<summary><strong>Try the three-row workshop demo yourself</strong></summary>
 
-```bash
-# Prepare answers for later.
-gformbot prepare "FORM_URL" -n 10 -m "Varied fictional student profiles"
+Create a test form with two questions in this order. Make **Session** a required multiple-choice question with `Morning` and `Evening`, and make **Notes** an optional paragraph. Copy the following into `workshop.csv` in your terminal’s current folder.
 
-# View saved JSON in your default app.
-gformbot preview
-gformbot preview "gformbot-responses.json"
-
-# Submit supplied rows automatically without opening a form browser.
-gformbot generate "FORM_URL" --data "responses.csv" -n 5
-
-# Use saved JSON, including resumable saved work.
-gformbot generate "FORM_URL" --data "gformbot-responses.json"
-
-# Generate from reference patterns, then submit.
-gformbot generate "FORM_URL" -n 10 --like "reference.csv" -m "Include varied age groups"
+```csv
+Q1,Q2
+Morning,First workshop
+Evening,Bringing my laptop
+Morning,
 ```
 
-Both `generate` and `prepare` accept `-n` for the response count, `-m` / `--message` for instructions, `--like` for a guide CSV, and `--data` for supplied CSV or saved JSON. Without `-n`, the commands use a matching saved form configuration's count or one response when none matches. Saved JSON carries its own response data and progress.
+Run these commands with your responder link in place of `FORM_URL`.
 
-Use `--data` to execute supplied answers and `--like` to guide newly generated answers. Reference patterns and instructions guide generation; they do not establish statistical fidelity or semantic consistency.
+```bash
+python -m gformbot prepare "FORM_URL" --data workshop.csv -n 3
+python -m gformbot preview gformbot-responses.json
+```
 
-## Guided mode
+Use the filename printed by `prepare` in both commands if it differs from the example. `preview` opens the saved JSON in your system’s default app. For the visual editor, open the wizard, start the same form, and choose **Use my own answers → Open saved responses → Review or edit responses**.
 
-The wizard offers AI generation, your own data, or random choice answers. AI generation can create fresh fictional profiles or use an existing CSV as a guide. Both create new responses; a reference CSV is never appended to or overwritten. CSV import keeps complete rows together, with ordered, shuffled, or sampling-with-repetition choices.
+Run this command when you’re ready to send the three saved rows.
 
-Random mode supports multiple choice, checkboxes, dropdowns, and numeric scales. Automatic reference sampling keeps whole choice profiles together. Manual option weights are relative chances, not exact quotas. AI can complete written/date answers; optional unanswered fields can stay blank.
+```bash
+python -m gformbot generate "FORM_URL" --data gformbot-responses.json
+```
 
-After preparation, one compact sample response appears. Choose **Submit N responses**, **Review or edit responses**, **Export remaining responses as CSV**, or **Back to start**. N is the number not confirmed submitted. Choosing Submit is the submission instruction; there is no second confirmation or browser chooser. Answers are already saved and validation runs automatically before execution.
+</details>
 
-Review or edit opens a small local editor in your default browser. It offers response navigation, search, choice controls and validation beside invalid answers. Saved edits keep the same batch identity and response numbers. Confirmed or uncertain responses are read-only, and a stale execution cannot submit edited answers. Choose Done to return to the CLI, or press Ctrl+C in the terminal if the tab was closed.
+## Built for forms with more than one path
 
-## Saved work and recovery
+**Follow the route each answer picks.** If “Evening” goes to a different section, GFormBot checks the questions on that route. It handles skipped sections and early submission. A looping or unclear route stops with an error.
 
-Response JSON stores prepared answers and execution progress. Continue response batch lists interrupted submissions; saved answers that have not started remain available through Use my own answers. Interrupted AI generation prints a separate draft recovery command. Supplied JSON can be used through `--data`. `preview` opens these files for viewing; use the wizard or `generate --data` to continue work.
+**Catch bad answers before sending them.** Required questions, choice lists, checkbox counts, date formats, grid rules, and supported text and number rules use the same validation for CSV input, generated answers, and edits.
 
-A local submission journal records intent before a submission request and confirms it only after Google's completion page. Confirmed rows are skipped when work resumes. A request timeout or unrecognized outcome is uncertain and requires checking the form's responses before deciding whether to retry. Copied plans share their identity on the same machine. Duplicate protection depends on retaining the local journal.
+**Know what Google confirmed.** GFormBot records a submission as confirmed after Google returns a completion page. It shows the completion message and follow-up links when available. Use `log --followups` to find them later.
 
-Imported CSV/JSON files are never deleted. Files saved by `prepare` remain available. Temporary response JSON owned by the tool is removed only after every response is confirmed in the submission journal; unfinished or uncertain work stays saved. Older files with missing retention settings or ambiguous ownership (including legacy command output) stay saved. Using a saved file as `--data` preserves that input.
+**Pick up after an interruption.** Choose **Continue response batch** to reopen an unfinished submission. GFormBot skips confirmed rows. If the connection drops after a request was sent and the outcome is unclear, check your form’s Responses tab before deciding whether to retry.
 
-Run logs record submitted answers and outcomes.
+## What forms work?
 
-Form directions and link destinations are saved from the introduction, visited sections, question descriptions, and the confirmed completion screen. A short **Next steps** summary shows links and custom completion messages once. Read everything later with `gformbot log --followups`, or `gformbot log "custom-runs.csv" --followups` for a custom log. `--last` limits the number of responses shown. These notes stay in the local journal after temporary response files are cleaned up.
+GFormBot supports **public respondent forms that accept anonymous answers**. Use it for testing surveys, signup forms, questionnaires, and spreadsheet workflows you have permission to test.
 
-Completion messages are captured only after an HTTP confirmation. Internal request validation and manually reconciling an uncertain result do not create a completion observation. The tool never follows these links or performs outside actions. Public group invites are preserved; embedded URL credentials, account/edit-response links and known secret URL parameters are excluded or redacted. Redacted links may not work. Ordinary instruction text is retained without automatic secret detection.
+| Question family | Supported inputs |
+| --- | --- |
+| **Text** | Short answers, paragraphs, typed emails, numbers and ranges, character limits, and supported patterns |
+| **Choices** | Multiple choice, dropdowns, checkboxes, explicit **Other** text, and checkbox selection limits |
+| **Ratings** | Linear scales and icon ratings, including stars, hearts, and thumbs |
+| **Dates and times** | Dates with or without year or time, clock times, and durations |
+| **Grids** | Multiple-choice grids and checkbox grids, including required rows and column rules |
+| **Sections** | Branching, skipped sections, early submission, descriptions, and instructions |
 
-## AI generation
+Forms requiring a Google login, verified account email, or one response per account cannot be submitted. File-upload questions, unknown validation rules, and unsupported controls on the chosen route stop execution. Images and videos appear in form inspection for you to review. Put any relevant observations in **Extra instructions** if AI needs them.
 
-AI generation uses ChatGPT's undocumented Android guest service over HTTPS with a temporary session. The service can change, deny guest access, or impose usage limits. GFormBot reports access failures and retains accepted work in the generation draft. Resume when the service is available, or use `--data` with a CSV or a prepared response plan.
+<details>
+<summary><strong>CSV headers, checkboxes, grids, and dates</strong></summary>
 
-GFormBot sends a form-specific writing brief, original question text, options and rules, and reference choice frequencies with up to six examples. It tracks repeated patterns across the batch. Later groups carry relevant earlier answers and protected facts. Linked or evidence-dependent answers can receive a focused review and repair before the plan is saved. Ordinary form validation and model review cannot establish factual accuracy or representativeness.
+- Map columns by question title, `Q1` / `Q2`, or `entry.ID`. For a grid, use the row’s entry ID or the exported header `Question [Row]`.
+- Match choice labels as written on the form. Use a JSON array inside a quoted CSV cell for checkboxes whose labels include commas.
 
-Generation uses adaptive batches. Estimated answer sizes determine the initial count, then observed reply sizes adjust later batches. Each HTTPS request carries its own context. Large prompts use a more compact representation. GFormBot validates complete JSON records individually and requests bounded corrections for missing or invalid profiles.
+  ```csv
+  Q1,Q2
+  Student,"[""Roads, footpaths or crossings"",""Bus stops""]"
+  ```
 
-When a validation error can be isolated, the correction names the affected answer keys and rules. The model returns just those answers, and GFormBot validates the combined result before accepting the profile.
+- An explicit **Other** answer uses `{"choices":["Python"],"other":"Rust"}`. For a single-choice **Other** answer, leave `choices` empty. GFormBot reports unknown option labels for correction.
+- Use `YYYY-MM-DD` for dates and `YYYY-MM-DD HH:MM` for dates with times. For yearless dates, use `MM-DD` with an optional time. Set `--date-order mdy` or `--date-order dmy` if dates from Google’s CSV export are ambiguous.
+- Use `HH:MM` for clock times and `HH:MM:SS` for durations. Clock times have minute precision. Blank optional fields can stay blank.
+- Supported text validation includes contains/does-not-contain, length limits, email, URL format, and a subset of Google Forms regular expressions. Unknown patterns and rules get an explicit error.
 
-Large forms are generated in smaller question groups. Routing answers select a supported terminating path first. Grid rows stay together. Profiles regroup where possible after branches rejoin. Later groups receive relevant earlier answers and recent context; complete answers remain stored locally. Repeated context is shared, with at most two generation requests running together. A response is accepted only after the assembled profile passes the original form's validation. If ChatGPT signals a temporary slowdown before returning answers, both workers pause and generation continues one request at a time in the same session. The tool honors the server's wait time within a 60-second recovery budget. An exhausted allowance, an unexplained limit, or a longer requested wait stops generation and reports the available details.
+</details>
 
-AI generation saves each accepted reply locally before reporting saved progress. Simple forms save complete profiles, and partitioned forms save completed question groups. After an interruption, use the printed `gformbot prepare "FORM_URL" --resume "DRAFT_PATH"` command to continue missing work with the original response identities. Compatible drafts from the former browser mode resume over HTTPS, using question groups where needed. Drafts contain plaintext form context, instructions, reference data and answers. Changed forms and invalid drafts are rejected. Submission progress is tracked separately.
+## How AI generation works
 
-Generated contact fields use realistic formats and distinct values within each batch. Corrections keep the respondent's saved name and location in context. For exact test contacts, use an explicit quality policy or supply your own data. The reviewer checks relevant free-text answers against choices, dates and quantities on short forms as well as branching forms.
+GFormBot gives ChatGPT the form description, question wording, choices, rules, and your instructions. If you use a guide CSV, it can also send choice frequencies and up to six sample rows. Give it the context a person filling out your test form would need.
 
-`prepare` and `generate` accept `--quality POLICY.json` for exact requirements and extra context. This example derives the email in Q7 from the name in Q6, checks the phone in Q8, and reviews the answer in Q13 against Q1 and Q5. Use your own question numbers and test domain.
+```bash
+python -m gformbot prepare "FORM_URL" -n 5 -m "Write fictional workshop signups. Vary the session and use short notes only when they add something."
+```
+
+GFormBot adjusts the size of each AI request to fit the job. Large forms are split into groups of questions, with relevant earlier answers carried forward. Each completed response goes through form validation. The tool can ask the model to correct specific invalid answers and review whether related answers agree. It also checks that generated contact fields look plausible and stay distinct within the batch. Review the results for meaning and accuracy before using them.
+
+GFormBot saves accepted work as generation progresses. If a connection or service limit interrupts the run, use the **printed `prepare --resume` command** to continue the draft. Submission recovery is separate and lives under **Continue response batch**.
+
+<details>
+<summary><strong>Set exact rules for your test data</strong></summary>
+
+Pass `--quality policy.json` to `prepare` or `generate` when you need more control over AI answers. This example is for a form with a name in Q1, email in Q2, and phone in Q3.
 
 ```json
 {
-  "style": "Use natural order details and occasional short pickup notes.",
-  "facts": [1, 5, 6],
-  "dependencies": {"Q13": [1, 5]},
+  "style": "Use fictional workshop attendees and concise notes.",
   "fields": {
-    "Q7": {"email_domain": "bakery-test.example", "name_from": 6},
-    "Q8": {"min_digits": 10}
+    "Q2": {"email_domain": "workshop.example", "name_from": 1},
+    "Q3": {"min_digits": 10}
   }
 }
 ```
 
-Field policies also accept `exact`, an `approved` value list, or `route_values` keyed by a comma-separated route such as `"1,3,4"`. Use `coverage` for explicit coverage of eligible choice fields, or a guide CSV for existing response patterns. Supply observed facts with `"evidence": {"Q4": "The image shows a square."}`. For transport tests, `allow_placeholders` lists fields the user allows to use placeholder answers. Add evidence or placeholders to a saved draft by combining `--resume` with a policy file containing those keys.
+Policies can also fix exact values, allow specific choices, set route-specific values, request choice coverage, link related questions for review, or supply evidence you gathered from the form.
 
-Outgoing requests redact known secret URL parameters and omit embedded credentials, account links and edit-response links. Public invitation links remain available. Review ordinary instruction text for private details before sending it. Keep saved form metadata and answers in a private directory. Draft recovery uses files created by the current generation workflow.
+</details>
 
-## Data and form support
+### AI availability and privacy
 
-CSV columns map through question titles, `Q1` / `Q2` headers, or `entry.ID` identifiers. Review ambiguous or unmatched mappings in the wizard. Blank optional answers stay blank; missing required answers must be resolved. Reference CSVs also need complete valid profiles.
+AI mode uses ChatGPT’s unofficial guest service over HTTPS. Guest access can be limited or unavailable. **CSV and saved-plan workflows work without AI.** The form content, your instructions, and guide examples may leave your device in AI mode. Use fictional data and review anything you share. Form images and videos stay in inspection.
 
-Single-choice values use exact option labels. Checkbox JSON arrays preserve commas inside labels:
+Saved plans, AI drafts, configuration, and run logs are local files. They can contain answers and form details. Keep them in a private folder and retain the local submission journal if you need duplicate protection when resuming. GFormBot preserves plans saved with `prepare` and files you supply. It can clean up temporary plans it created once Google confirms the entire batch.
 
-```csv
-Q1,Q2
-Student,"[""Roads, footpaths or crossings"", ""Bus stops""]"
-```
+## Command reference
 
-Short text occupies one line; paragraphs may contain newlines. Number comparisons/ranges, whole numbers, text contains/does-not-contain, character limits, email and checkbox constraints share the same checks across CSV import, AI output, editing, and execution. Number answers retain their original text. Character limits count UTF-16 units as Google's client does, so an emoji can count as two characters. Checkbox repairs are explicit and recorded.
+| I want to… | Run |
+| --- | --- |
+| Open the guided menu | `python -m gformbot` |
+| Save answers for later | `python -m gformbot prepare "FORM_URL" -n 5` |
+| Prepare my CSV without sending it | `python -m gformbot prepare "FORM_URL" --data answers.csv -n 5` |
+| Open a saved JSON plan | `python -m gformbot preview "gformbot-responses.json"` |
+| Submit a saved plan | `python -m gformbot generate "FORM_URL" --data "gformbot-responses.json"` |
+| Generate with a guide and submit | `python -m gformbot generate "FORM_URL" --like guide.csv -n 5` |
+| Resume AI generation | `python -m gformbot prepare "FORM_URL" --resume "DRAFT_PATH"` |
+| Check setup | `python -m gformbot doctor --check` |
+| See recent run results | `python -m gformbot log --last 20` |
+| Find form directions and completion links | `python -m gformbot log --followups` |
+| View or edit configuration | `python -m gformbot config --show` / `python -m gformbot config --edit` |
 
-Pattern validation supports verified JavaScript-compatible syntax and all four Forms pattern operations. Checks run in one lazy background process with bounded waits and caches; no regex dependency is installed. Unverified syntax (including backreferences, named groups, lookbehind, inline flags, and `\S` inside character classes) stops explicitly. Patterns are limited to 4,096 characters including operation wrappers, and answers to one million UTF-16 units for pattern checks. URL-format rules are checked locally; Google's own validation remains authoritative. Unknown validation families stop explicitly. A valid filled page is not proof of submission.
+Add `--help` after a command for its flags. `-n` accepts 1–500 and uses the saved count or one response when omitted. A saved JSON plan carries its own remaining count. Use `-m` for AI instructions and `--like` for a guide CSV. `--data` uses your supplied answers.
 
-Dates use `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`; yearless questions use `MM-DD` with optional time. Google Forms CSV dates are normalized without changing the source. For ambiguous dates, `generate` and `prepare` accept `--date-order mdy` or `--date-order dmy`; the wizard asks you to choose. An explicit option overrides matching saved settings. Impossible dates and nonzero seconds are rejected.
+<details>
+<summary><strong>Setup and navigation tips</strong></summary>
 
-Clock time uses `HH:MM` (00:00–23:59); duration uses `HH:MM:SS` (hours 00–72, minutes/seconds 00–59). CSV clock values may include AM/PM or zero seconds; nonzero clock seconds are rejected rather than discarded. No timezone conversion is applied.
+- **Missing command after installation?** Run `python -m gformbot` with the same Python command you used to install it.
+- **File picker missing?** The wizard’s file picker needs a graphical desktop and Python’s Tk support. On Linux this may require `python3-tk`. Commands can take paths directly.
+- **Want to go back one step?** Press Backspace twice. In a text field, both presses need to start with the field empty.
+- **Only need to see the questions?** Choose **More options → View a form's questions**.
+- **Using a headless machine?** Run the commands with explicit paths. Inspection, generation, and submission use HTTPS without Selenium or browser drivers. The visual response editor opens in your default browser.
 
-Icon ratings (stars, hearts and thumbs) retain their question type and use exact numeric strings such as `"4"`; required, optional, import/export and choice-weight behavior matches other single-choice questions.
+</details>
 
-For an actual Other selection, use `{"choices": ["Python"], "other": "Rust"}` (radio: empty `choices`). Other counts as one checkbox selection. CSV cells use the same JSON object; unknown labels are never silently interpreted as Other. Ordinary strings/lists remain unchanged. Plans requiring Other use format 2; older plans retain their identities and progress.
+---
 
-Form inspection lists images and videos in form order for your reference. To use something you saw in the original form, type the relevant facts in **Extra instructions** or pass them with `-m`.
+**Ready to test a form?** [Install GFormBot](#get-started) and start with one response.
 
-Form submission does not interact with browser controls. HTTP execution validates routing and inspects the server response; unknown or conflicting server navigation metadata stops explicitly.
+[Changelog](https://github.com/yogeshkrishna/google_form_test_bot/blob/master/CHANGELOG.md) · [Contribute](https://github.com/yogeshkrishna/google_form_test_bot/blob/master/CONTRIBUTING.md) · [Report an issue](https://github.com/yogeshkrishna/google_form_test_bot/issues) · [Security](https://github.com/yogeshkrishna/google_form_test_bot/blob/master/SECURITY.md)
 
-File-upload questions are unsupported and never transfer files. Older plans containing prepared uploads cannot execute; their files and journal records are preserved. CSV/JSON import and export still work normally.
-
-Supported questions include short text, paragraphs, multiple choice, checkboxes, dropdowns, numeric scales, icon ratings, explicit Other answers, dates with optional year/time, clock time, duration, and both grid types. Grid rows use their entry IDs or Google CSV headers (`Question [Row]`); required rows and one-response-per-column rules are checked together. Section routing follows each response's choices, including skipped sections and early Submit. Only reached questions require answers; repeated sections stop with an error. Instruction blocks and section descriptions are retained as text. Unsupported controls and validation block their sections. A response can avoid those sections only when its complete route is understood; unclear routing and legacy unscoped compatibility findings still block the form. Generated routes respect fixed choices and positive weights while avoiding unsupported sections and loops. Closed or restricted forms retain unfinished work.
-
-## Other commands
-
-```bash
-gformbot config --show
-gformbot config --edit
-gformbot log --last 20
-gformbot log --followups
-gformbot doctor
-gformbot doctor --check
-gformbot --help
-gformbot --version
-```
-
-`doctor --check` exits unsuccessfully when a required local prerequisite is missing. Runtime errors go to stderr. Set `GFORMBOT_DEBUG=1` to retain a traceback when diagnosing a failure; avoid sharing logs containing private responses.
-
-## Development
-
-```bash
-python -m pip install -e ".[dev]"
-python -m ruff check .
-python -m pytest
-python -m build
-python -m twine check dist/*
-```
-
-CI runs offline tests on Windows, macOS, and Linux. It builds the wheel and source archive and smoke-tests installed commands outside the checkout. HTTP fixtures cover generation, routing, submission confirmation, and recovery without live requests.
-
-## License
-
-[Apache 2.0](LICENSE). The ChatGPT protocol adaptation includes a separate [MIT notice](LICENSE-chatgpt-protocol).
+[Apache 2.0 license](https://github.com/yogeshkrishna/google_form_test_bot/blob/master/LICENSE) · [MIT notice for the ChatGPT protocol adaptation](https://github.com/yogeshkrishna/google_form_test_bot/blob/master/LICENSE-chatgpt-protocol)
