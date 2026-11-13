@@ -2,21 +2,21 @@
   <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/master/readme/field-guide.webp" alt="GFormBot illustrated cover with a terminal and branching form cards" width="900">
 </p>
 
-<h1 align="center">Give your Google Form a dress rehearsal.</h1>
+<h1 align="center">Generate synthetic responses for your Google Form.</h1>
 
 <p align="center">
-  Run a few fictional signups through a new form, exercise a branch, or check that a spreadsheet receives the answers you expect. GFormBot prepares, checks, and submits test responses from your terminal.
+  Give GFormBot a form link, a response count, and a short description of the answers you want. It generates fictional responses with AI and submits the batch to your form.
 </p>
 
 <p align="center">
   <strong><a href="#install-and-run">Install and run →</a></strong>
-  &nbsp; · &nbsp; <a href="#try-it-with-two-rows">Try it with two rows</a>
+  &nbsp; · &nbsp; <a href="#quick-submit">Quick submit</a>
   &nbsp; · &nbsp; <a href="#supported-forms">Supported forms</a>
 </p>
 
 ## Install and run
 
-You’ll need **Python 3.10 or newer**, an internet connection, and a public Google Form you own or have permission to test. Open Terminal or PowerShell and run:
+You’ll need **Python 3.10 or newer**, an internet connection, and a public Google Form you own or have permission to use. Open Terminal or PowerShell and run:
 
 ```sh
 python -m pip install --upgrade gformbot
@@ -25,56 +25,38 @@ python -m gformbot
 
 Use `python3` on macOS or Linux, or `py` on Windows, if that’s how you normally run Python. Use the same interpreter for both lines. You can also run `gformbot` directly when the launcher is on your PATH.
 
-1. Select **Start a new form** with the arrow keys and Enter.
-2. Paste the link a respondent would open. Both `forms.gle` and full responder links work. **View this form's questions** shows the fields and choices before you prepare answers.
-3. Pick an answer source and start with one response. **Review or edit responses** opens a local editor. You can also export the remaining answers as CSV or go back and reopen them from **Saved batches**.
-4. When you’re ready to send the batch, choose **Submit 1 response** or **Submit N responses**. Check the result in Google Forms or its linked spreadsheet.
+## Quick submit
 
-**Want to rehearse without sending anything?** Use `prepare` as in the example below. **Quick submit** and `generate` send clean batches automatically.
+Want to submit a bunch of responses quickly?
+
+1. Select **Quick submit** with the arrow keys and Enter.
+2. Paste the link a respondent would open. Both `forms.gle` and full responder links work.
+3. Enter the response count and any instructions. You can also pick a guide CSV to show AI what kind of answers you want.
+4. GFormBot generates, validates, and submits the responses. If AI flags an answer, the wizard pauses for review.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/master/readme/workflow.svg" alt="Read the form, choose answers, review the batch, and submit over HTTPS" width="900">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/master/readme/terminal.svg" alt="Quick submit example with a form link, five fictional event registrations, and no guide CSV." width="900">
 </p>
 
-## Try it with two rows
-
-Create a test form that accepts anonymous responses. Add a required multiple-choice question named **Attendance** with `In person` and `Online` as choices, followed by a required short-answer question named **Comment**. Save these lines in a plain UTF-8 file named `answers.csv` in your working folder:
-
-```csv
-Q1,Q2
-In person,First visit
-Online,Joining remotely
-```
-
-Copy the responder link, replace `YOUR_RESPONDER_URL` below, and run:
+**Prefer one command?** Replace `YOUR_RESPONDER_URL` with your form link.
 
 ```sh
-python -m gformbot prepare "YOUR_RESPONDER_URL" --data answers.csv -n 2
-```
-
-GFormBot reads the form, checks both rows, and saves a JSON response plan. This command uses the CSV directly and sends zero responses. Use the path printed by `prepare` to open the plan:
-
-```sh
-python -m gformbot preview "gformbot-responses.json"
+python -m gformbot generate "YOUR_RESPONDER_URL" -n 5 -m "Vary the fictional signups."
 ```
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/master/readme/terminal.svg" alt="Offline CLI example. Preparing two CSV rows saves gformbot-responses.json and prints the preview command." width="900">
+  <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/master/readme/workflow.svg" alt="Read the form, choose answers, validate the batch, and submit over HTTPS." width="900">
 </p>
 
-When you’re ready to submit, select the plan under **Saved batches** or run the command below. Use the actual filename if yours has a numeric suffix.
-
-```sh
-python -m gformbot generate "YOUR_RESPONDER_URL" --data "gformbot-responses.json"
-```
+Choose **Start a new form** when you want to inspect questions, use your own answers, or review and edit the batch before sending it.
 
 ## Choose your answer source
 
 | In the wizard | Reach for it when… | What happens |
 | --- | --- | --- |
-| **Use my own answers** | You have known cases or need repeatable QA. | Imports complete CSV rows or opens a saved plan. You can read CSV rows in order, shuffle them, or sample with repeats. |
 | **Generate answers with AI** | You want a spread of fictional profiles, including written answers. | Uses the form’s questions and rules, your instructions, and an optional guide CSV. Larger forms are handled in groups, with related answers carried forward. |
-| **Pick answers randomly** | You want to exercise choices and routing. | Samples eligible choices. Use equal chances, patterns from a guide CSV, or weights you set. AI can fill remaining written and date fields if needed. |
+| **Use my own answers** | You already have a CSV or saved batch you want to submit. | Imports complete CSV rows or opens a saved plan. You can read CSV rows in order, shuffle them, or sample with repeats. |
+| **Pick answers randomly** | You want a mix of answers for choice-heavy forms. | Samples eligible choices. Use equal chances, patterns from a guide CSV, or weights you set. AI can fill remaining written and date fields if needed. |
 
 `--data` uses your supplied answers. `--like` uses a CSV as a guide for generating **new** answers. Scripted CSV imports read complete rows in order, so values from different people stay together. Review AI output for meaning before relying on it. A batch with AI quality warnings pauses for review before it can be submitted.
 
@@ -140,7 +122,7 @@ Run these after `python -m gformbot` or `gformbot`. Add `--help` after a command
 
 - **The terminal can’t find `gformbot`.** Run `python -m gformbot` with the same Python you used to install it.
 - **The file picker doesn’t open.** The wizard uses Tk and needs a desktop session. On Linux, install the Python Tk package for your distribution, or give `prepare` a path with `--data`.
-- **Google asks you to sign in.** Check the form’s publishing and access settings. Use a test copy that allows anonymous responses.
+- **Google asks you to sign in.** Check the form’s publishing and access settings. The form must accept anonymous responses.
 - **A CSV answer was rejected.** Check the row and field in the error, then match the form’s option labels or date format exactly.
 - **AI generation is unavailable.** The guest service can limit or deny access. Reopen the saved draft when it’s available or prepare answers from a CSV.
 - **Need to go back in the wizard?** Press Backspace twice. In a text field, clear it first.
@@ -149,7 +131,7 @@ Run these after `python -m gformbot` or `gformbot`. Add `--help` after a command
 
 Inspection and submission talk directly to Google over HTTPS. The visual response editor runs locally and opens in your default browser. AI mode uses ChatGPT’s unofficial guest service and can send form text, instructions, and guide examples. CSV and saved-plan workflows can run without AI.
 
-Plans, drafts, activity logs, and the submission journal are local files and may contain answers or form details. Use fictional data for testing and keep those files private. Use the form owner’s permission before sending test responses.
+Plans, drafts, activity logs, and the submission journal are local files and may contain answers or form details. Keep those files private and label synthetic responses when sharing results or combining them with real submissions.
 
 ## Project links
 
