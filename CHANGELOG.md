@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2
+
+- Lead the README and PyPI quickstart with Quick submit and synthetic response generation.
+
 ## 0.4.1
 
 - Pause automatic submission when AI flags an answer and require confirmation after review.
