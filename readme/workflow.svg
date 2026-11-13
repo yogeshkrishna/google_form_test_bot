@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="190" viewBox="0 0 900 190" role="img" aria-labelledby="title description">
   <title id="title">From form link to confirmed response</title>
-  <desc id="description">Read the form, choose answers, review the batch, then submit over HTTPS.</desc>
+  <desc id="description">Read the form, choose answers, validate the batch, then submit over HTTPS.</desc>
   <defs>
     <pattern id="paper-grid" width="14" height="14" patternUnits="userSpaceOnUse">
       <path d="M14 0H0V14" fill="none" stroke="#205949" stroke-opacity=".1"/>
@@ -36,13 +36,13 @@
     <g fill="#162a25" font-size="22" font-weight="700" letter-spacing="-.4">
       <text x="112.5" y="132">Read the form</text>
       <text x="337.5" y="132">Choose answers</text>
-      <text x="562.5" y="132">Review the batch</text>
+      <text x="562.5" y="132">Validate the batch</text>
       <text x="787.5" y="132">Submit over HTTPS</text>
     </g>
     <g fill="#315348" font-size="17">
       <text x="112.5" y="157">Questions and rules</text>
       <text x="337.5" y="157">AI, CSV, or random picks</text>
-      <text x="562.5" y="157">Edit, export, or save</text>
+      <text x="562.5" y="157">Check choices and rules</text>
       <text x="787.5" y="157">Check the receipt</text>
     </g>
   </g>
