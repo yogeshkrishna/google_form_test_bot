@@ -175,9 +175,11 @@ class Journal:
                 "INSERT OR IGNORE INTO batches(batch,content) VALUES(?,?)", (self.identity, signature)
             )
 
-    def edit(self, payload, index, answer, write):
+    def edit(self, payload, answers, write):
         """Serialize edits against submission claims; never reset response identities or outcomes."""
-        if type(index) is not int or not 1 <= index <= len(payload["responses"]):
+        if not answers or any(
+            type(index) is not int or not 1 <= index <= len(payload["responses"]) for index in answers
+        ):
             raise ValueError("Choose an existing response number.")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -186,13 +188,20 @@ class Journal:
             ).fetchone()
             if bound is not None and bound != (_content_digest(payload),):
                 raise ValueError("This batch changed. Reopen it before editing.")
-            previous = connection.execute(
-                "SELECT state FROM responses WHERE batch=? AND response=?", (self.identity, index)
-            ).fetchone()
-            if index in payload.get("submitted_indices", []) or previous not in (None, ("prepared",)):
-                raise ValueError("This response is submitted or needs checking and cannot be edited.")
+            protected = set(payload.get("submitted_indices", []))
+            protected.update(
+                index
+                for (index,) in connection.execute(
+                    "SELECT response FROM responses WHERE batch=? AND state != 'prepared'", (self.identity,)
+                )
+            )
+            if conflict := protected.intersection(answers):
+                raise ValueError(
+                    f"Response {min(conflict)} is submitted or needs checking and cannot be edited."
+                )
             changed = {**payload, "responses": list(payload["responses"])}
-            changed["responses"][index - 1] = {str(key): value for key, value in answer.items()}
+            for index, answer in answers.items():
+                changed["responses"][index - 1] = {str(key): value for key, value in answer.items()}
             changed["batch_id"] = payload.get("batch_id") or self.identity
             write(changed)
             # An interrupted commit after the atomic file write leaves a binding

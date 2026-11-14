@@ -89,50 +89,91 @@ def _sanitize(block, base):
     return {"text": text, "links": links}
 
 
+def _instruction_lines(text, links):
+    lines = [text] if text else []
+    for link in links:
+        if link not in text:
+            lines.append(link + (" [redacted; may not work]" if "REDACTED" in link else ""))
+    if "REDACTED" in text:
+        lines.append("Redacted links may not work.")
+    return lines
+
+
+def _details(records):
+    if not records:
+        return ["No saved form instructions yet."]
+    groups = defaultdict(lambda: defaultdict(set))
+    for record in records:
+        block = record["content"]
+        source = (record["batch"], record["title"], record["stage"], record["section"])
+        groups[block["text"], tuple(block["links"])][source].add(record["response"])
+    lines = ["Saved form instructions"]
+    for (text, links), sources in groups.items():
+        for (batch, title, stage, section), ids in sources.items():
+            numbers = ", ".join(map(str, sorted(ids)[:8])) + (f" ({len(ids)} total)" if len(ids) > 8 else "")
+            location = (
+                "After submission"
+                if stage == "confirmation"
+                else "Introduction"
+                if stage == "intro"
+                else f"Section {section}"
+            )
+            lines.append(f"{title} | Response {numbers} | {location} | batch {batch[:8]}")
+        lines.extend(_instruction_lines(text, links))
+    return lines
+
+
+def _response_scope(ids):
+    if len(ids) == 1:
+        return f"Response {next(iter(ids))}"
+    if len(ids) > 8:
+        return f"{len(ids)} responses"
+    return "Responses " + ", ".join(map(str, sorted(ids)))
+
+
+def _summary(records, log_path):
+    confirmations = defaultdict(set)
+    actions = defaultdict(lambda: defaultdict(set))
+    confirmed = set()
+    observed = set()
+    for record in records:
+        stage, response = record["stage"], record["response"]
+        observed.add(response)
+        text, links = record["content"]["text"], record["content"]["links"]
+        if stage == "confirmation":
+            confirmed.add(response)
+            if text and text.casefold().rstrip(".! ") != "your response has been recorded":
+                confirmations[text].add(response)
+            text = ""  # The confirmation text is already shown above its links.
+        if links:
+            section = record["section"] if stage == "section" else None
+            actions[text, tuple(links)][section].add(response)
+    lines = ["Confirmation message"] if confirmations else []
+    for text, ids in confirmations.items():
+        if ids != confirmed:
+            lines.append(_response_scope(ids))
+        lines.extend(_instruction_lines(text, ()))
+    if actions:
+        lines.append("Next steps")
+        for (text, links), sources in actions.items():
+            for section, ids in sources.items():
+                labels = [f"Section {section}"] if section is not None else []
+                if ids != observed:
+                    labels.append(_response_scope(ids))
+                if labels:
+                    lines.append(" · ".join(labels))
+            lines.extend(_instruction_lines(text, links))
+        command = "gformbot log --followups"
+        if log_path and str(log_path) != "gformbot-runs.csv":
+            command = f'gformbot log "{log_path}" --followups'
+        lines.append("Form instructions: " + command)
+    return lines
+
+
 def display(records, ui, *, full=False, warning="", log_path=None):
     """Group repeated directions and print literal text, safe on older Windows consoles."""
     try:
-        groups = {}
-        for record in records:
-            block = record["content"]
-            default = block["text"].strip().lower().rstrip(".! ") == "your response has been recorded"
-            if not full and not block["links"] and (record["stage"] != "confirmation" or default):
-                continue
-            key = json.dumps(block, sort_keys=True, ensure_ascii=False)
-            if key not in groups:
-                groups[key] = (block, defaultdict(set))
-            source = (record["batch"], record["title"], record["stage"], record["section"])
-            groups[key][1][source].add(record["response"])
-        lines = ["Next steps" if not full else "Saved form instructions"] if groups else []
-        for block, sources in groups.values():
-            for (batch, title, stage, section), ids in sources.items():
-                numbers = ", ".join(map(str, sorted(ids)[:8])) + (
-                    f" ({len(ids)} total)" if len(ids) > 8 else ""
-                )
-                location = (
-                    "After submission"
-                    if stage == "confirmation"
-                    else "Introduction"
-                    if stage == "intro"
-                    else f"Section {section}"
-                )
-                lines.append(
-                    f"{title} | Response {numbers} | {location}" + (f" | batch {batch[:8]}" if full else "")
-                )
-            if block["text"]:
-                lines.append(block["text"])
-            for link in block["links"]:
-                if link not in block["text"]:
-                    lines.append(link + (" [redacted; may not work]" if "REDACTED" in link else ""))
-            if "REDACTED" in block["text"]:
-                lines.append("Redacted links may not work.")
-        if records and not full:
-            command = "gformbot log --followups"
-            if log_path and str(log_path) != "gformbot-runs.csv":
-                command = f'gformbot log "{log_path}" --followups'
-            lines.append("Form instructions: " + command)
-        if full and not records:
-            lines.append("No saved form instructions yet.")
+        lines = _details(records) if full else _summary(records, log_path)
         if warning:
             lines.append(warning)
         if lines:

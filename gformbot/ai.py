@@ -993,7 +993,7 @@ def _generate_responses(
                 attempts[index] += 1
             try:
                 content = client.ask(messages, timeout=timeout)
-            except (ChatHTTPError, RuntimeError) as exc:
+            except (ChatHTTPError, RuntimeError, KeyboardInterrupt) as exc:
                 partial = getattr(exc, "partial_content", "")
                 if partial:
                     valid, _, _ = _validate_records(
@@ -1001,6 +1001,8 @@ def _generate_responses(
                     )
                     accept(valid)
                     completed = sum(row is not None for row in answers)
+                if isinstance(exc, KeyboardInterrupt):
+                    raise
                 if getattr(exc, "retryable", False):
                     for index in pending:
                         if answers[index] is None:

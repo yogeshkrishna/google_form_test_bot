@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3
+
+- Show the form introduction before the question table and open the preview automatically in Start a new form.
+- Show repeated confirmation messages once and highlight follow-up links after submission.
+- Resume interrupted AI generation and review from Saved batches, with progress and timestamps.
+- Edit multiple responses and save them together. Pick up links copied after the prompt opens and use a plain menu pointer.
+
 ## 0.4.2
 
 - Lead the README and PyPI quickstart with Quick submit and synthetic response generation.

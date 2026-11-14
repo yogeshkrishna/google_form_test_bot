@@ -48,7 +48,7 @@ python -m gformbot generate "YOUR_RESPONDER_URL" -n 5 -m "Vary the fictional sig
   <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/master/readme/workflow.svg" alt="Read the form, choose answers, validate the batch, and submit over HTTPS." width="900">
 </p>
 
-Choose **Start a new form** when you want to inspect questions, use your own answers, or review and edit the batch before sending it.
+Choose **Start a new form** to see the form introduction and questions before choosing where the answers come from. In **Review or edit responses**, move between responses and choose **Save and finish** to save your edits together.
 
 ## Choose your answer source
 
@@ -92,9 +92,9 @@ The form must be open to responses without Google sign-in. Account-verified emai
 | What you see | What to do |
 | --- | --- |
 | **Ready to submit** | Open the plan from **Saved batches** to review, export, or send it. |
-| **Interrupted** | Reopen the same plan to continue. Confirmed responses are skipped. |
-| **Needs checking** | Look in Google Forms or the linked sheet before choosing whether to retry. A lost connection can leave the result uncertain. |
-| **AI generation interrupted** | Run the printed `prepare --resume` command with the draft path. This resumes answer generation. |
+| **Submission interrupted** | Open **Saved batches** and choose the batch by its progress and date. Confirmed responses are skipped. |
+| **A response needs checking** | Look in Google Forms or the linked sheet before choosing whether to retry. A lost connection can leave the result uncertain. |
+| **AI generation or quality review interrupted** | Open **Saved batches** to pick up the saved AI draft. |
 | **Looking for a receipt or instructions?** | Open **More options → View recent activity** from the folder you ran the batch in, or use `log --followups`. |
 
 GFormBot tracks submission outcomes in a local journal. Keep the original plan and journal when resuming. Files supplied as input and plans made with `prepare` are preserved. Temporary plans created for submission can be cleaned up after Google confirms the entire batch.

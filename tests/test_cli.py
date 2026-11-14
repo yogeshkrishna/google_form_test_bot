@@ -266,17 +266,47 @@ def test_log_preflight_happens_before_http_client(config, monkeypatch):
 def test_form_table_shows_full_contents_and_literal_markup(config, monkeypatch):
     buffer = io.StringIO()
     monkeypatch.setattr(cli, "console", Console(file=buffer, width=220, color_system=None))
+    config.form_description = "Read the survey overview."
+    config.confirmation_text = "Thanks for submitting."
+    config.instructions = [
+        {"page": 1, "before_question": 1, "title": "Start here", "description": "Read the [first] note."},
+        {"page": 1, "before_question": 2, "title": "Later directions", "description": "Add a comment."},
+    ]
     q = config.questions[0]
     q.text = "Very long question " * 8
     q.description = "Question description [literal]"
     q.options = ["A very long option with commas, and brackets [bold]", "Another option"]
     cli._show_form(config)
     output = buffer.getvalue()
+    assert output.index("Survey") < output.index("Read the survey overview.") < output.index("Start here")
+    assert output.index("Read the [first] note.") < output.index("Question / description")
+    assert output.count("Start here") == 1
+    assert output.index("Very long question") < output.index("Later directions") < output.index("Comment")
+    assert "Thanks for submitting." not in output
     assert "Question description [literal]" in output
     assert "[bold]" in output and "Another option" in output
     assert "Required" in output and "Section 1" in output
     assert "Very long question" in output
     assert "…" not in output
+
+
+def test_start_new_form_shows_preview_before_asking_for_answers(config, monkeypatch):
+    events = []
+
+    def inspect(url, *, display=True):
+        assert url == config.url
+        events.append("inspect")
+        if display:
+            cli._show_form(config)
+        return config
+
+    monkeypatch.setattr(cli, "_url_prompt", lambda: config.url)
+    monkeypatch.setattr(cli, "_run_inspect", inspect)
+    monkeypatch.setattr(cli, "_show_form", lambda _: events.append("preview"))
+    monkeypatch.setattr(cli, "_form_choices", lambda _: events.append("choose answers"))
+
+    cli._new_batch_wizard()
+    assert events == ["inspect", "preview", "choose answers"]
 
 
 def test_explicit_new_url_does_not_reuse_default_config(config, monkeypatch, tmp_path):

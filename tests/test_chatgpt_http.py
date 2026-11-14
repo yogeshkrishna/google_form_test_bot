@@ -20,7 +20,7 @@ class Response:
 
     def read1(self, _size):
         chunk = next(self.chunks, b"")
-        if isinstance(chunk, Exception):
+        if isinstance(chunk, BaseException):
             raise chunk
         return chunk
 
@@ -164,6 +164,18 @@ def test_interrupted_generation_exposes_partial_output_without_replay(guest, end
 
     assert exc.value.partial_content == "complete record"
     assert exc.value.retryable
+    assert len(pool.calls) == 3
+    assert answer.closed and answer.released
+
+
+def test_keyboard_interrupt_keeps_buffered_stream_without_retry(guest):
+    answer = Response(event({"v": "complete record"}), KeyboardInterrupt(), content_type="text/event-stream")
+    client, pool = guest(Response(b'{"token":"setup-test"}'), Response(b'{"conduit_token":"test"}'), answer)
+
+    with pytest.raises(KeyboardInterrupt) as exc:
+        client.ask([{"role": "user", "content": "Task"}])
+
+    assert exc.value.partial_content == "complete record"
     assert len(pool.calls) == 3
     assert answer.closed and answer.released
 

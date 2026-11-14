@@ -537,6 +537,9 @@ def generate_partitioned(
             },
             provider_error=getattr(error, "provider_error", None),
         ) from error
+    except KeyboardInterrupt:
+        client.cancel()
+        raise
     finally:
         executor.shutdown(wait=True, cancel_futures=True)
         if own_client:

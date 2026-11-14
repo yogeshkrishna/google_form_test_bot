@@ -374,6 +374,13 @@ class Client:
                     # Retain the last line in case the event's blank separator arrives next.
                     last_newline = body.rfind(b"\n")
                     scan_from = max(scan_from, body.rfind(b"\n", scan_from, last_newline) + 1)
+        except KeyboardInterrupt as interrupt:
+            if streaming and body:
+                try:
+                    interrupt.partial_content = _parse_stream(body)
+                except ChatHTTPError as error:
+                    interrupt.partial_content = error.partial_content
+            raise
         except ChatHTTPError as error:
             failure = error
         except (urllib3.exceptions.TimeoutError, TimeoutError):

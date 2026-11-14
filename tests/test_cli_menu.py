@@ -55,6 +55,7 @@ def test_started_batch_is_available_without_regeneration(batch_files, monkeypatc
     assert len(selected) == 1 and selected[0][1].path == path.resolve()
     managed = []
     menus = []
+    messages = []
 
     def choose(message, choices, **kw):
         menus.append([choice.name for choice in choices])
@@ -63,25 +64,30 @@ def test_started_batch_is_available_without_regeneration(batch_files, monkeypatc
         return next(choice.value for choice in choices if isinstance(choice.value, cli.SavedPreview))
 
     monkeypatch.setattr(cli, "_ask_select", choose)
-    monkeypatch.setattr(
-        cli, "_manage_batch", lambda config, answers, path, **kw: managed.append((config, answers, path, kw))
-    )
+
+    def manage(config, answers, path, **kw):
+        assert messages[-1] == "Form: Survey"
+        managed.append((config, answers, path, kw))
+
+    monkeypatch.setattr(cli, "_info", messages.append)
+    monkeypatch.setattr(cli, "_manage_batch", manage)
     monkeypatch.setattr(
         cli, "_generate", lambda *a, **kw: pytest.fail("Continuing submission must not regenerate answers")
     )
     cli._wizard()
     assert "Saved batches" in menus[0]
+    assert all("Survey" not in label for label in menus[1])
     assert managed[0][1] == [{1: f"Exact answer {i}"} for i in range(50)]
     assert managed[0][3] == {}
 
 
-def test_recovery_labels_separate_uncertain_from_safe_remaining(batch_files):
+def test_recovery_labels_show_confirmed_progress_and_creation_time(batch_files):
     batch_files(confirmed=35, state="uncertain")
     matches, _ = cli._saved_batches(started_only=True)
-    label = cli._batch_label(matches[0][1])
-    assert "35/50 submitted" in label
-    assert "Needs checking (1)" in label
-    assert "14 ready" in label
+    created, batch = matches[0]
+    timestamp = cli.datetime.fromtimestamp(created)
+    assert cli._batch_label(batch, created) == f"35/50 submitted | {timestamp:%a, %d %b %Y %H:%M}"
+    assert batch.config._outcomes[36] == "uncertain"
 
 
 def test_fully_submitted_and_legacy_ai_files_are_not_recovery_jobs(batch_files, tmp_path):
@@ -172,6 +178,60 @@ def test_view_questions_returns_to_answer_sources(monkeypatch):
     monkeypatch.setattr(cli, "_manage_batch", lambda *a: None)
     cli._form_choices(config)
     assert displayed == [config]
+
+
+def test_menu_pointer_uses_plain_ascii(monkeypatch):
+    from InquirerPy import inquirer
+
+    monkeypatch.setattr(cli, "_INQUIRER", True)
+
+    def select(**kwargs):
+        assert kwargs["pointer"] == ">"
+
+    monkeypatch.setattr(inquirer, "select", select)
+    monkeypatch.setattr(cli, "run_prompt", lambda _: "saved")
+    assert cli._ask_select("Choose", [cli._choice("saved", "Saved batches")]) == "saved"
+
+
+@pytest.mark.parametrize("already_typing", [False, True])
+def test_form_link_copied_after_prompt_opens(monkeypatch, already_typing):
+    from asyncio import sleep
+
+    from InquirerPy import inquirer
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    copied = None
+    clipboard_link = "https://forms.gle/clipboard"
+    typed_link = "https://forms.gle/typed"
+    text = inquirer.text
+    monkeypatch.setattr(cli, "_INQUIRER", True)
+    monkeypatch.setattr(cli, "_clipboard_url", lambda: copied)
+
+    with create_pipe_input() as pipe:
+
+        def open_prompt(**kwargs):
+            prompt = text(**kwargs, input=pipe, output=DummyOutput())
+            session = prompt._session
+
+            async def copy_and_enter():
+                nonlocal copied
+                if already_typing:
+                    session.default_buffer.insert_text(typed_link)
+                copied = clipboard_link
+                for _ in range(40):
+                    await sleep(0.025)
+                    if session.default_buffer.text == clipboard_link:
+                        break
+                if not session.default_buffer.text:
+                    session.default_buffer.insert_text(typed_link)
+                pipe.send_text("\r")
+
+            session.app.pre_run_callables.append(lambda: session.app.create_background_task(copy_and_enter()))
+            return prompt
+
+        monkeypatch.setattr(inquirer, "text", open_prompt)
+        assert cli._url_prompt() == (typed_link if already_typing else clipboard_link)
 
 
 @pytest.mark.parametrize(("keys", "expected"), [("\r", 1), ("3\r", 3)])

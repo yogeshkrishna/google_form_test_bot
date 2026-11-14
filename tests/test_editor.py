@@ -35,7 +35,7 @@ def batch(tmp_path, monkeypatch):
 
 @contextmanager
 def running(c, answers, save=None, statuses=None):
-    with EditorServer(c, answers, save or (lambda i, row: row), statuses) as editor:
+    with EditorServer(c, answers, save or (lambda changes: None), statuses) as editor:
         thread = threading.Thread(target=editor.run)
         thread.start()
         try:
@@ -71,21 +71,22 @@ def test_local_editor_escapes_data_and_limits_access(batch):
         assert request(editor, Host="unrelated.invalid")[0] == 404
         assert request(editor, "../state")[0] == 404
         assert (
-            request(editor, "save", {"index": 1, "answers": answers[0]}, **{"Content-Type": "text/plain"})[0]
+            request(editor, "save", {"responses": {1: answers[0]}}, **{"Content-Type": "text/plain"})[0]
             == 403
         )
 
 
-def test_editor_validates_each_response_and_close_does_not_save(batch):
+def test_editor_validates_all_edits_then_saves_once_and_closes(batch):
     c, answers, _ = batch
     writes = []
-    with running(c, answers, lambda i, row: writes.append((i, row)) or row) as editor:
-        invalid = request(editor, "save", {"index": 1, "answers": {1: "B", 2: ""}})
-        assert invalid[0] == 400 and invalid[1]["question"] == 2 and writes == []
-        code, response, _ = request(editor, "save", {"index": 2, "answers": {1: "B", 2: "Updated"}})
-        assert code == 200 and response["answers"] == {"1": "B", "2": "Updated"}
-        assert writes == [(2, {1: "B", 2: "Updated"})]
-        assert answers[1][2] == "Original 1"
+    with running(c, answers, writes.append) as editor:
+        invalid = request(editor, "save", {"responses": {1: {2: "First edit"}, 2: {2: ""}}})
+        assert invalid[0] == 400 and invalid[1]["index"] == 2 and invalid[1]["question"] == 2
+        assert writes == [] and not editor.closed
+        code, result, _ = request(editor, "save", {"responses": {1: {2: "First edit"}, 2: {1: "B"}}})
+        assert code == 200 and result["saved"] == 2 and editor.closed
+        assert writes == [{1: {1: "A", 2: "First edit"}, 2: {1: "B", 2: "Original 1"}}]
+    with running(c, answers, writes.append) as editor:
         assert request(editor, "close", {})[0] == 200
         assert len(writes) == 1
 
@@ -97,7 +98,7 @@ def test_journal_failure_is_reported_without_losing_editor_answers(batch):
         raise sqlite3.OperationalError("database is locked")
 
     with running(c, answers, fail) as editor:
-        status, data, _ = request(editor, "save", {"index": 1, "answers": {1: "B", 2: "Updated"}})
+        status, data, _ = request(editor, "save", {"responses": {1: {1: "B", 2: "Updated"}}})
         assert status == 409 and "reopen the batch" in data["error"]
         assert request(editor, "response?index=1")[1]["answers"]["2"] == answers[0][2]
 
@@ -111,7 +112,8 @@ def test_protected_responses_are_read_only_including_status_changes(batch, state
     ) as editor:
         assert request(editor, "response?index=1")[1]["status"] == "ready"
         statuses[0] = state
-        assert request(editor, "save", {"index": 1, "answers": answers[0]})[0] == 409
+        code, data, _ = request(editor, "save", {"responses": {1: {1: "B"}, 2: {2: "New"}}})
+        assert code == 409 and data["index"] == 1 and not editor.closed
 
 
 def test_edit_preserves_identity_confirmations_and_uncertainty(batch, monkeypatch):
@@ -123,11 +125,12 @@ def test_edit_preserves_identity_confirmations_and_uncertainty(batch, monkeypatc
 
     def review(config, rows, save, statuses):
         assert statuses() == ["confirmed", "ready", "uncertain"]
-        save(2, {1: "B", 2: "Edited"})
         with pytest.raises(ValueError, match="cannot be edited"):
-            save(1, rows[0])
+            save({2: {1: "B", 2: "Do not save"}, 1: rows[0]})
         with pytest.raises(ValueError, match="cannot be edited"):
-            save(3, rows[2])
+            save({3: rows[2]})
+        assert json.loads(path.read_text()) == old
+        save({2: {1: "B", 2: "Edited"}})
 
     monkeypatch.setattr("gformbot.editor.review", review)
     config, rows, edited = cli._edit_batch(c, answers, path)
@@ -143,8 +146,10 @@ def test_stale_sender_and_copied_plan_cannot_claim_after_edit(batch, monkeypatch
     copied = tmp_path / "copy.json"
     atomic_json(copied, original)
     other = Session(copied, original, digest(copied))
-    monkeypatch.setattr("gformbot.editor.review", lambda c, rows, save, states: save(2, {1: "B", 2: "New"}))
-    cli._edit_batch(c, answers, path)
+    edits = {2: {1: "B", 2: "New"}, 3: {1: "A", 2: "Also new"}}
+    monkeypatch.setattr("gformbot.editor.review", lambda c, rows, save, states: save(edits))
+    _, rows, _ = cli._edit_batch(c, answers, path)
+    assert rows == [answers[0], edits[2], edits[3]]
     for session in (stale, other):
         with pytest.raises(ValueError, match="edited"):
             session.before_submit(1)
@@ -158,7 +163,7 @@ def test_submission_claim_before_edit_protects_the_row(batch, monkeypatch):
     session = Session(path, json.loads(path.read_text()), digest(path))
     session.before_submit(2)
     monkeypatch.setattr(
-        "gformbot.editor.review", lambda c, rows, save, states: save(2, {1: "B", 2: "Changed"})
+        "gformbot.editor.review", lambda c, rows, save, states: save({2: {1: "B", 2: "Changed"}})
     )
     with pytest.raises(ValueError, match="cannot be edited"):
         cli._edit_batch(c, answers, path)
@@ -175,7 +180,7 @@ def test_interrupted_edit_fails_closed_and_stale_start_cannot_overwrite_it(batch
         raise OSError("Interrupted before journal update")
 
     with pytest.raises(OSError, match="Interrupted"):
-        stale.journal.edit(payload, 1, {1: "B", 2: "Keep edited data"}, interrupted_write)
+        stale.journal.edit(payload, {1: {1: "B", 2: "Keep edited data"}}, interrupted_write)
     with pytest.raises(ValueError, match="edited after execution began"):
         Session(path, json.loads(path.read_text()), digest(path))
     with pytest.raises(ValueError, match="changed during execution"):
@@ -192,13 +197,13 @@ def test_editor_rejects_route_change_until_new_required_answers_are_supplied(tmp
     monkeypatch.chdir(tmp_path)
     c = config_from_schema(schema())
     original = validate_answer(c, {1: "Student", 2: "Math", 4: "Hi"})
-    with running(c, [original]) as editor:
-        status, data, _ = request(editor, "save", {"index": 1, "answers": {**original, 1: "Worker"}})
+    writes = []
+    with running(c, [original], writes.append) as editor:
+        status, data, _ = request(editor, "save", {"responses": {1: {1: "Worker"}}})
         assert status == 400 and data["question"] == 3 and 3 in data["active"]
-        status, data, _ = request(
-            editor, "save", {"index": 1, "answers": {**original, 1: "Worker", 3: "Teacher"}}
-        )
-        assert status == 200 and data["answers"]["3"] == "Teacher" and 2 not in data["active"]
+        status, _, _ = request(editor, "save", {"responses": {1: {1: "Worker", 3: "Teacher"}}})
+        assert status == 200
+        assert writes == [{1: validate_answer(c, {**original, 1: "Worker", 3: "Teacher"})}]
 
 
 def test_many_question_edit_roundtrips_journal_binding(batch, monkeypatch):
@@ -208,7 +213,7 @@ def test_many_question_edit_roundtrips_journal_binding(batch, monkeypatch):
     row = {i: "Original" for i in range(1, 13)}
     path = cli._save_plan(c, [row])
     monkeypatch.setattr(
-        "gformbot.editor.review", lambda c, rows, save, states: save(1, {**row, 10: "Changed"})
+        "gformbot.editor.review", lambda c, rows, save, states: save({1: {**row, 10: "Changed"}})
     )
     cli._edit_batch(c, [row], path)
     session = Session(path, json.loads(path.read_text()), digest(path))

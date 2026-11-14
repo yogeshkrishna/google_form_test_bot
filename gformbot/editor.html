@@ -13,20 +13,43 @@
 <header><div class="brand">GFormBot · Local editor</div><h1>Review or edit responses</h1><p id="title"></p><p>Changes stay on this computer. This editor never submits responses or sends them to AI.</p></header>
 <div class="toolbar"><button id="previous" type="button" aria-label="Previous response">← Previous</button><select id="response" aria-label="Choose a response"></select><button id="next" type="button" aria-label="Next response">Next →</button><span class="badge" id="position"></span></div>
 <p id="readonly" class="notice" hidden></p>
+<button id="discard-response" type="button" hidden>Drop edits to this response</button>
 <input id="search" class="search" type="search" placeholder="Search questions…" aria-label="Search questions">
 <p id="message" class="error" role="alert"></p>
 <form id="form" novalidate><div id="questions"></div><details id="skipped"><summary>Questions outside this response’s current route</summary><p class="hint">Changing a routing answer may make these questions required. Validation will tell you which answers are needed.</p><div id="unused"></div></details></form>
 <p id="empty" hidden>No questions match your search.</p>
 </main>
-<div class="footer"><div class="footer-inner"><span id="status" class="status" role="status" aria-live="polite">Opening your responses…</span><button id="cancel" type="button">Discard unsaved changes</button><button id="save" class="primary" type="button">Save changes</button><button id="done" type="button">Done</button></div></div>
+<div class="footer"><div class="footer-inner"><span id="status" class="status" role="status" aria-live="polite">Opening your responses…</span><button id="cancel" type="button" hidden>Cancel</button><button id="done" class="primary" type="button" disabled>Done</button></div></div>
 <script>
 'use strict';
 const el=id=>document.getElementById(id);
 const make=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
-let state,current,dirty=false,busy=false,closing=false,fields=[];
+const edits=new Map();
+let state,current,busy=false,closing=false,fields=[];
 async function api(path,body){const r=await fetch(path,body===undefined?{cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok){const error=new Error(data.error||'Could not complete this action.');error.data=data;throw error;}return data;}
-function setDirty(value){dirty=value;el('status').textContent=value?'Unsaved changes':'All changes saved locally';el('save').disabled=!value||busy||current?.status!=='ready';el('cancel').disabled=!value||busy;}
-function collect(){return Object.fromEntries(fields.map(field=>[String(field.question.index),field.read()]));}
+function updateFooter(){
+ const count=edits.size;
+ el('status').textContent=busy?'Please wait…':count?`${count} ${count===1?'response':'responses'} with unsaved edits`:'';
+ el('done').textContent=count?'Save and finish':'Done';el('done').disabled=busy||!current;
+ el('cancel').hidden=!count;el('cancel').disabled=busy;
+}
+function setBusy(value){
+ busy=value;el('response').disabled=value;el('previous').disabled=value||!current||current.index===1;
+ el('next').disabled=value||!current||current.index===state.count;
+ el('discard-response').disabled=value;
+ for(const item of fields)item.box.disabled=value;
+ updateFooter();
+}
+function stage(question,value){
+ if(busy||current.status!=='ready')return;
+ const key=String(question.index);
+ const draft=edits.get(current.index)||{answers:{}};
+ if(JSON.stringify(value)===JSON.stringify(current.answers[key]))delete draft.answers[key];
+ else draft.answers[key]=value;
+ if(Object.keys(draft.answers).length)edits.set(current.index,draft);
+ else edits.delete(current.index);
+ updateFooter();
+}
 function optionLabels(q,value){return Array.isArray(value)?value:typeof value==='string'&&value?[value]:[];}
 function field(q,value,locked){
  const box=make('fieldset');box.id='q'+q.index;box.dataset.search=(q.text+' '+q.description+' '+q.grid_title+' '+q.grid_row).toLowerCase();
@@ -50,32 +73,61 @@ function field(q,value,locked){
   if(q.qtype==='time'){input.type='time';input.step='60';}
   box.append(input);if(q.format)box.append(make('p','Format: '+q.format,'hint'));read=()=>q.qtype==='date'?input.value.replace('T',' '):input.value;
  }
- const error=make('p','','error');error.id='error'+q.index;box.append(error);box.querySelectorAll('input,select,textarea').forEach(input=>input.setAttribute('aria-describedby',error.id));box.addEventListener('input',()=>setDirty(true));box.addEventListener('change',()=>setDirty(true));return {question:q,box,read};
+ const error=make('p','','error');error.id='error'+q.index;box.append(error);box.querySelectorAll('input,select,textarea').forEach(input=>input.setAttribute('aria-describedby',error.id));box.addEventListener('input',()=>stage(q,read()));box.addEventListener('change',()=>stage(q,read()));return {box};
 }
-function render(answers=current.answers,active=current.active){
+function render(){
+ const draft=edits.get(current.index);
+ const answers={...current.answers,...draft?.answers};const active=draft?.active||current.active;
  fields=[];el('questions').replaceChildren();el('unused').replaceChildren();const reached=new Set(active);const locked=current.status!=='ready';
  for(const q of state.questions){const item=field(q,answers[String(q.index)],locked);fields.push(item);(reached.has(q.index)?el('questions'):el('unused')).append(item.box);}
  el('skipped').hidden=el('unused').childElementCount===0;filter();
- el('position').textContent=current.index+' of '+state.count;el('response').value=String(current.index);el('previous').disabled=current.index===1;el('next').disabled=current.index===state.count;
+ el('position').textContent=current.index+' of '+state.count;el('response').value=String(current.index);
  el('readonly').hidden=!locked;el('readonly').textContent=current.status==='confirmed'?'This response was already submitted. You can read it, but cannot change it.':'This response may already have been submitted. Return to the CLI to check its outcome before editing.';
+ el('discard-response').hidden=!locked||!draft;
 }
 function filter(){const query=el('search').value.toLowerCase().trim();let visible=0;for(const item of fields){item.box.hidden=!!query&&!item.box.dataset.search.includes(query);if(!item.box.hidden)visible++;}if(query)el('skipped').open=true;el('empty').hidden=visible!==0;}
 async function load(index){
- if(busy){el('response').value=String(current.index);return;}
- if(dirty&&!confirm('Discard your unsaved changes before switching responses?')){el('response').value=String(current.index);return;}
- try{current=await api('response?index='+index);render();setDirty(false);el('message').textContent='';}catch(error){el('message').textContent=error.message;}
+ if(busy)return;
+ setBusy(true);
+ try{current=await api('response?index='+index);render();el('message').textContent='';}
+ catch(error){if(current)el('response').value=String(current.index);el('message').textContent=error.message;}
+ finally{setBusy(false);}
 }
-el('previous').addEventListener('click',()=>load(current.index-1));el('next').addEventListener('click',()=>load(current.index+1));el('response').addEventListener('change',()=>load(Number(el('response').value)));el('search').addEventListener('input',filter);
+el('previous').addEventListener('click',()=>{if(current)load(current.index-1);});el('next').addEventListener('click',()=>{if(current)load(current.index+1);});el('response').addEventListener('change',()=>load(Number(el('response').value)));el('search').addEventListener('input',filter);
 el('form').addEventListener('submit',event=>event.preventDefault());
-el('cancel').addEventListener('click',()=>{if(confirm('Discard the unsaved changes to this response?')){render();setDirty(false);el('message').textContent='';}});
-el('save').addEventListener('click',async()=>{
- if(busy||!dirty||current.status!=='ready')return;busy=true;setDirty(true);const answers=collect();el('message').textContent='';
- try{current=await api('save',{index:current.index,answers});render();setDirty(false);}
- catch(error){if(error.data?.active)render(answers,error.data.active);el('message').textContent=error.message;const index=error.data?.question;if(index){const box=el('q'+index);box.classList.add('invalid');el('error'+index).textContent=error.message;const details=box.closest('details');if(details)details.open=true;box.scrollIntoView({behavior:'smooth',block:'center'});}}
- finally{busy=false;setDirty(dirty);}
-});
-el('done').addEventListener('click',async()=>{if(busy)return;if(dirty&&!confirm('Discard unsaved changes and return to the CLI?'))return;try{await api('close',{});closing=true;dirty=false;document.querySelector('main').replaceChildren(make('h1','Review complete'),make('p','You can close this tab and return to your terminal.'));document.querySelector('.footer').hidden=true;}catch(error){el('message').textContent=error.message;}});
-window.addEventListener('beforeunload',event=>{if(dirty&&!closing){event.preventDefault();event.returnValue='';}});
+async function finish(save){
+ if(busy)return;
+ setBusy(true);el('message').textContent='';
+ const hasEdits=edits.size>0;
+ try{
+  if(save&&hasEdits){
+   const responses=Object.fromEntries([...edits].map(([index,draft])=>[index,draft.answers]));
+   await api('save',{responses});
+  }else await api('close',{});
+  closing=true;edits.clear();
+  const title=save?(hasEdits?'Changes saved':'Review complete'):'Edits discarded';
+  document.querySelector('main').replaceChildren(make('h1',title),make('p','You can close this tab and return to your terminal.'));
+  document.querySelector('.footer').hidden=true;
+ }catch(error){
+  const {index,question,active}=error.data||{};
+  if(index){
+   if(active&&edits.has(index))edits.get(index).active=active;
+   try{current=await api('response?index='+index);if(question)el('search').value='';render();}catch{}
+   const box=current?.index===index&&el('q'+question);
+   if(box){
+    box.classList.add('invalid');el('error'+question).textContent=error.message;
+    const details=box.closest('details');if(details)details.open=true;
+    box.scrollIntoView({behavior:'smooth',block:'center'});
+   }
+  }
+  el('message').textContent=error.message;
+  setBusy(false);
+ }
+}
+el('cancel').addEventListener('click',()=>{if(confirm('Discard all unsaved edits and return to the CLI?'))finish(false);});
+el('discard-response').addEventListener('click',()=>{edits.delete(current.index);render();el('message').textContent='';updateFooter();});
+el('done').addEventListener('click',()=>finish(true));
+window.addEventListener('beforeunload',event=>{if(edits.size&&!closing){event.preventDefault();event.returnValue='';}});
 async function start(){try{state=await api('state');el('title').textContent=state.title;state.statuses.forEach((status,i)=>{const opt=make('option','Response '+(i+1)+(status==='ready'?'':status==='confirmed'?' · Submitted':' · Needs checking'));opt.value=String(i+1);el('response').append(opt);});await load(state.initial_index);}catch(error){el('message').textContent=error.message;el('status').textContent='Editor unavailable. Return to your terminal.';}}
 start();
 </script>

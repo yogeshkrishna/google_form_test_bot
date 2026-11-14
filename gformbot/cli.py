@@ -56,7 +56,7 @@ def _choice(value, name):
     return MenuChoice(value, name)
 
 
-def _ask_text(message, default="", *, completed=False):
+def _ask_text(message, default="", *, completed=False, watch_clipboard=None):
     if _INQUIRER:
         from InquirerPy import get_style, inquirer
 
@@ -67,7 +67,10 @@ def _ask_text(message, default="", *, completed=False):
                 style_override=False,
             )
             options["transformer"] = lambda value: value.strip() or default or "(skipped)"
-        value = run_prompt(inquirer.text(message=message, **options), typing=True)
+        prompt = inquirer.text(message=message, **options)
+        if watch_clipboard is not None:
+            _watch_clipboard_link(prompt, watch_clipboard)
+        value = run_prompt(prompt, typing=True)
         if value is None:
             raise click.Abort()
         return value.strip() or default
@@ -103,7 +106,10 @@ def _ask_select(message, choices, default=None):
         from InquirerPy import inquirer
 
         prompt = inquirer.select(
-            message=message, choices=[{"value": c.value, "name": c.name} for c in choices], default=default
+            message=message,
+            choices=[{"value": c.value, "name": c.name} for c in choices],
+            default=default,
+            pointer=">",
         )
         if message == "Start" and not console.no_color:
             accent_choice(prompt, "quick")
@@ -157,10 +163,32 @@ def _clipboard_url():
         import pyperclip
 
         value = pyperclip.paste().strip()
+        if not value.isprintable():
+            return None
         valid, _ = _validate_form_url(value)
         return value if valid else None
     except Exception:
         return None
+
+
+def _watch_clipboard_link(prompt, previous):
+    from asyncio import sleep, to_thread
+
+    session = prompt._session
+    buffer = session.default_buffer
+    app = session.app
+
+    async def fill_empty_link():
+        while not buffer.text:
+            await sleep(0.25)
+            if buffer.text:
+                return
+            link = await to_thread(_clipboard_url)
+            if link and link != previous and not buffer.text:
+                buffer.insert_text(link)
+                return
+
+    app.pre_run_callables.append(lambda: app.create_background_task(fill_empty_link()))
 
 
 def _validate_form_url(url):
@@ -181,7 +209,9 @@ def _url_prompt(*, completed=False):
             return url
         try:
             while True:
-                entered = _ask_text("Paste your public Google Form link", **options)
+                entered = _ask_text(
+                    "Paste your public Google Form link", watch_clipboard=url or "", **options
+                )
                 valid, message = _validate_form_url(entered)
                 if valid:
                     return entered
@@ -200,6 +230,18 @@ def _show_form(config):
     _section(config.form_title)
     if config.form_description:
         console.print(Text(config.form_description))
+    first_question = 2 if config.questions and config.questions[0].entry_id == "emailAddress" else 1
+    notes_by_question = {}
+    for note in config.instructions:
+        index = note["before_question"]
+        if note["page"] == 1 and index <= first_question:
+            if note["title"]:
+                console.print(Text(note["title"], style="bold"))
+            if note["description"]:
+                console.print(Text(note["description"]))
+        else:
+            notes_by_question.setdefault(index, []).append(note)
+    console.print()
     table = Table(show_lines=True, header_style="bold cyan", expand=True)
     table.add_column("Q", style="dim", no_wrap=True)
     table.add_column("Question / description", ratio=3)
@@ -207,7 +249,7 @@ def _show_form(config):
     table.add_column("Choices / rules", ratio=3)
     previous_page = None
     for q in config.questions:
-        notes = [note for note in getattr(config, "instructions", []) if note["before_question"] == q.index]
+        notes = notes_by_question.pop(q.index, [])
 
         def show_note(note):
             table.add_row(
@@ -277,8 +319,8 @@ def _show_form(config):
                 Text(asset["caption"]),
             )
         console.print(media_table)
-    for note in getattr(config, "instructions", []):
-        if note["before_question"] > len(config.questions):
+    for notes in notes_by_question.values():
+        for note in notes:
             _info(note["title"] + ("\n" + note["description"] if note["description"] else ""))
     for issue in config.unsupported:
         console.print(Text(issue, style="yellow"))
@@ -551,18 +593,19 @@ def _save_plan(config, answers, path=None, source="prepared", *, cleanup_on_succ
                 continue
             atomic_json(target, payload)
             break
-    if draft is not None:
-        try:
-            draft.finish()
-        except (OSError, ValueError) as exc:
-            _info(f"Could not remove the finished generation draft: {exc}")
-        config._generation_draft = None
     from .previews import remember
 
     try:
         remember(target)
     except OSError as exc:
         _info(f"Answers saved, but could not remember their location: {exc}. Use the saved file with --data.")
+    else:
+        if draft is not None:
+            try:
+                draft.finish()
+            except (OSError, ValueError) as exc:
+                _info(f"Could not remove the finished generation draft: {exc}")
+    config._generation_draft = None
     _info(f"Answers saved: {target.resolve()}")
     return target
 
@@ -751,38 +794,34 @@ def _pending_preview(config, answers):
 def _edit_batch(config, answers, path):
     from .artifacts import digest
     from .editor import review
-    from .generator import validate_answer
     from .locking import file_lock
     from .state import Journal, atomic_json, batch_id
 
     path = clean_path(path)
-    config, answers = _load_plan(path)
     expected = digest(path)
+    config, answers = _load_plan(path)
+    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    journal = Journal(batch_id(payload))
+    confirmed = set(config._submitted_indices)
 
     def statuses():
-        current, _ = _load_plan(path)
-        confirmed = set(current._submitted_indices)
+        outcomes = journal.states()
         return [
             "confirmed"
-            if i in confirmed
+            if i in confirmed or outcomes.get(i) == "confirmed"
             else "uncertain"
-            if current._outcomes.get(i) in {"attempted", "reviewing", "uncertain"}
+            if outcomes.get(i) in {"attempted", "reviewing", "uncertain"}
             else "ready"
             for i in range(1, len(answers) + 1)
         ]
 
-    def save(index, candidate):
-        nonlocal expected
+    def save(edits):
         with file_lock(path, timeout=5):
             if digest(path) != expected:
                 raise ValueError("The response file changed. Close the editor and reopen the batch.")
-            payload = json.loads(path.read_text(encoding="utf-8-sig"))
-            answer = validate_answer(config, candidate)
-            Journal(batch_id(payload)).edit(payload, index, answer, lambda data: atomic_json(path, data))
-            expected = digest(path)
-            return answer
+            journal.edit(payload, edits, lambda data: atomic_json(path, data))
 
-    _info("Opening the local response editor. Choose Done to return here, or press Ctrl+C in this terminal.")
+    _info("Opening the local response editor. Finish in the editor to return here.")
     review(config, answers, save, statuses)
     current, rows = _load_plan(path)
     return current, rows, path
@@ -878,11 +917,19 @@ class SavedPreview:
     answers: list
 
 
-def _saved_batches(config=None, *, started_only=False):
+@dataclass
+class SavedDraft:
+    path: Path
+    progress: str
+
+
+def _saved_batches(config=None, *, started_only=False, include_drafts=False):
     from .inspector import schema_fingerprint
     from .previews import candidates
+    from .state import batch_id
 
     matches, unreadable = [], 0
+    plan_ids = set()
     for path, known in candidates().items():
         try:
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -893,6 +940,8 @@ def _saved_batches(config=None, *, started_only=False):
             if not isinstance(payload, dict) or payload.get("kind") != "gformbot-run":
                 continue
             saved, answers = _load_plan(path)
+            if include_drafts:
+                plan_ids.add(batch_id(payload))
             if config is not None and schema_fingerprint(saved) != schema_fingerprint(config):
                 continue
             if len(saved._submitted_indices) == saved.count:
@@ -906,41 +955,40 @@ def _saved_batches(config=None, *, started_only=False):
             matches.append((created, SavedPreview(path, saved, answers)))
         except (ValueError, OSError, KeyError, TypeError, OverflowError):
             unreadable += 1
+    if include_drafts:
+        from .ai_draft import Draft, saved_paths
+
+        for path in saved_paths():
+            try:
+                draft = Draft.read(path)
+                if draft.identity not in plan_ids:
+                    matches.append(
+                        (draft.created_at.timestamp(), SavedDraft(draft.path, draft.progress_label()))
+                    )
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError):
+                unreadable += 1
     matches.sort(key=lambda item: (item[0], str(item[1].path)), reverse=True)
     return matches, unreadable
 
 
-def _batch_label(batch):
-    saved = batch.config
-    confirmed = set(saved._submitted_indices)
-    uncertain = sum(
-        index not in confirmed and state in {"attempted", "reviewing", "uncertain"}
-        for index, state in saved._outcomes.items()
-    )
-    remaining = saved.count - len(confirmed) - uncertain
-    if uncertain:
-        status = f"Needs checking ({uncertain})"
-    elif saved._submission_started or saved._outcomes or confirmed:
-        status = "Interrupted"
+def _batch_label(batch, created):
+    if isinstance(batch, SavedDraft):
+        progress = batch.progress
     else:
-        status = "Ready to submit"
-    if getattr(saved, "_quality_warnings", []):
-        status += " · AI review needed"
-    return (
-        f"{saved.form_title or 'Untitled form'} | {status} · {remaining} ready "
-        f"· {len(confirmed)}/{saved.count} submitted | {batch.path.name}"
-    )
+        saved = batch.config
+        progress = f"{len(saved._submitted_indices)}/{saved.count} submitted"
+    return f"{progress} | {datetime.fromtimestamp(created):%a, %d %b %Y %H:%M}"
 
 
-def _select_saved_preview(config=None, *, started_only=False):
+def _select_saved_preview(config=None, *, started_only=False, include_drafts=False):
     from .inspector import schema_fingerprint
 
     while True:
-        matches, unreadable = _saved_batches(config, started_only=started_only)
-        _info("Saved response batches, newest first. Confirmed submissions are skipped.")
+        matches, unreadable = _saved_batches(config, started_only=started_only, include_drafts=include_drafts)
+        _info("Newest first by creation time. Confirmed submissions are skipped.")
         if unreadable:
-            _info(f"Skipped {unreadable} unreadable response file(s).")
-        choices = [_choice(batch, _batch_label(batch)) for _, batch in matches]
+            _info(f"Skipped {unreadable} unreadable saved file(s).")
+        choices = [_choice(batch, _batch_label(batch, created)) for created, batch in matches]
         if not choices:
             _info(
                 "No unfinished response batches found."
@@ -953,6 +1001,8 @@ def _select_saved_preview(config=None, *, started_only=False):
             continue
         if selected == "back":
             return None
+        if isinstance(selected, SavedDraft):
+            return selected
         # Recheck progress and schema if another process changed the selected file.
         try:
             saved, answers = _load_plan(selected.path)
@@ -1150,10 +1200,19 @@ def _wizard():
 
 
 def _resume_batch():
-    while selected := _select_saved_preview():
+    while selected := _select_saved_preview(include_drafts=True):
         try:
+            if isinstance(selected, SavedDraft):
+                path = _resume_generation(None, selected.path)
+                config, answers = _load_plan(path)
+                selected = SavedPreview(path, config, answers)
+            else:
+                _info(f"Form: {selected.config.form_title or 'Untitled form'}")
             _manage_batch(selected.config, selected.answers, selected.path)
         except PromptBack:
+            continue
+        except (OSError, ValueError) as exc:
+            _info(f"Could not continue this batch: {exc}")
             continue
         return
 
@@ -1219,12 +1278,10 @@ def _new_batch_wizard():
     while True:
         url = _url_prompt()
         try:
-            with console.status("Reading form..."):
-                config = _run_inspect(url, display=False)
+            config = _run_inspect(url)
         except ValueError as exc:
             console.print(Text(str(exc), style="yellow"))
             continue
-        _info(config.form_title or "Form ready")
         config._prompt_csv_count = True
         try:
             _form_choices(config)
@@ -1496,10 +1553,13 @@ def _resume_generation(url, resume, *, evidence=None):
     from .ai_draft import Draft
     from .locking import file_lock
 
-    current = _run_inspect(url, display=False)
     path = clean_path(resume).absolute()
     with file_lock(path.with_name(path.name + ".resume")):
-        draft = Draft.load(path, current)
+        draft = Draft.read(path)
+        if url is None:
+            _info(f"Form: {draft.config.form_title or 'Untitled form'}")
+            url = draft.config.url
+        draft.check_form(_run_inspect(url, display=False))
         answers = _generate(
             draft.config,
             draft.reference,

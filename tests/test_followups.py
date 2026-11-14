@@ -97,6 +97,40 @@ def test_summary_is_short_full_log_keeps_every_description(tmp_path):
     assert "Long question instructions" in result.output and "Response 7" in result.output
 
 
+def test_shared_confirmation_is_printed_once_without_response_numbers(tmp_path):
+    notes = recorder(tmp_path)
+    for response in range(1, 100):
+        notes.record(
+            [{"text": "Thanks for sharing your experience!", "links": []}],
+            response,
+            0,
+            "confirmation",
+            "https://example.test/formResponse",
+        )
+    messages = []
+    notes.show(SimpleNamespace(_info=messages.append))
+    assert messages[0].splitlines()[:2] == ["Confirmation message", "Thanks for sharing your experience!"]
+    assert messages[0].count("Thanks for sharing your experience!") == 1
+    assert "Next steps" not in messages[0] and "Response " not in messages[0]
+
+
+def test_summary_separates_confirmation_and_links_with_response_scope(tmp_path):
+    notes = recorder(tmp_path)
+    base = "https://example.test/formResponse"
+    notes.record([{"text": "Thanks for signing up!", "links": ["/calendar"]}], 7, 0, "confirmation", base)
+    notes.record([{"text": "You are on the waitlist.", "links": []}], 9, 0, "confirmation", base)
+    notes.record([{"text": "Join the discussion", "links": ["/discussion"]}], 9, 3, "section", base)
+    messages = []
+    notes.show(SimpleNamespace(_info=messages.append))
+    confirmation, actions = messages[0].split("\nNext steps\n")
+    assert "Confirmation message\n" in confirmation
+    assert "Response 7\nThanks for signing up!" in confirmation
+    assert "Response 9\nYou are on the waitlist." in confirmation
+    assert "Response 7\nhttps://example.test/calendar" in actions
+    assert "Section 3 · Response 9\nJoin the discussion\nhttps://example.test/discussion" in actions
+    assert "Thanks for signing up!" not in actions
+
+
 def test_unicode_display_and_storage_failure_do_not_escape(tmp_path, monkeypatch):
     notes = recorder(tmp_path)
     monkeypatch.setattr(

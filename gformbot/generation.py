@@ -304,7 +304,7 @@ class Generation:
             try:
                 reply = ask(build_review_request(context, outbound, retry=retry))
                 reviewed = parse_review_response(reply, outbound)
-            except (ValueError, OSError) as exc:
+            except (ValueError, OSError, KeyboardInterrupt) as exc:
                 failure = exc
                 reviewed = parse_review_response(getattr(exc, "partial_content", ""), outbound)
             if reviewed:
@@ -401,6 +401,9 @@ class Generation:
                 )
                 profiles = self._checks(rows)
                 if profiles:
+                    if self.setup.get("review_total") != len(profiles):
+                        self.setup["review_total"] = len(profiles)
+                        self._save()
                     self._review(lambda messages: client.ask(messages, timeout=180), rows, profiles)
                 signals = self.quality.batch_signals(rows)
                 if signals:
@@ -413,5 +416,6 @@ class Generation:
                 return rows
         except (ValueError, OSError, KeyboardInterrupt):
             if self.draft is not None:
+                self.status("AI progress saved. Open Saved batches from Start to continue.")
                 self.status(f'Resume with: gformbot prepare "{self.config.url}" --resume "{self.draft.path}"')
             raise
