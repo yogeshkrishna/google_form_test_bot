@@ -44,6 +44,23 @@ def flat_progress(value="Alice", *, reviewed=False):
     }
 
 
+@pytest.mark.parametrize(
+    ("second_route", "suffix"),
+    [([1], "1/5 question groups saved"), (None, "1 question group saved")],
+)
+def test_partition_draft_progress_includes_saved_groups(config, second_route, suffix):
+    config.sections = ["Start", "Follow-up"]
+    config.questions += [
+        QuestionConfig(2, "Choice", "radio", options=["Finish", "Continue"], page=1),
+        QuestionConfig(3, "Notes", "textarea", page=2),
+    ]
+    state = progress()
+    state["profiles"][0]["route"] = [1, 2]
+    state["profiles"][1]["route"] = second_route
+    draft = Draft.create(config, None, "", None, state)
+    assert Draft.read(draft.path).progress_label() == f"0/2 generated · {suffix}"
+
+
 def test_roundtrip_freezes_inputs_and_preserves_identity(config, tmp_path):
     reference = [{1: "参考"}]
     state = progress()

@@ -2,7 +2,7 @@
 gformbot — A synthetic Google Forms response CLI.
 """
 
-__version__ = "0.4.2"
+__version__ = "0.4.3"
 
 
 def main():

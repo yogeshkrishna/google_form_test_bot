@@ -232,6 +232,10 @@ def _rows(rows):
     return None if rows is None else [{int(key): value for key, value in row.items()} for row in rows]
 
 
+def saved_paths():
+    return (previews.index_path().parent / "ai-drafts").glob("*.json")
+
+
 def partition_flat_profiles(config, profiles, partials):
     """Keep accepted flat profiles and start only pending profiles in the partitioner."""
     from .ai_partition import _units
@@ -295,6 +299,44 @@ class Draft:
     def strategy(self):
         return self._strategy
 
+    @property
+    def created_at(self):
+        return datetime.fromisoformat(self._payload["created_at"])
+
+    def progress_label(self):
+        profiles = self.state["profiles"]
+        total = len(profiles)
+        if self.strategy == "flat":
+            generated = sum(profile["position"] == 1 for profile in profiles)
+        else:
+            from .ai_partition import _units
+
+            sizes = {page: len(units) for page, units in _units(self.config).items()}
+            generated = routed = saved_groups = total_groups = 0
+            for profile in profiles:
+                if profile["route"] is None:
+                    continue
+                groups = sum(sizes.get(page, 0) for page in profile["route"])
+                routed += 1
+                saved_groups += profile["position"]
+                total_groups += groups
+                generated += profile["position"] == groups
+            if generated < total and saved_groups:
+                if routed == total:
+                    progress = f"{saved_groups}/{total_groups} question groups saved"
+                else:
+                    unit = "question group" if saved_groups == 1 else "question groups"
+                    progress = f"{saved_groups} {unit} saved"
+                return f"{generated}/{total} generated · {progress}"
+        if generated == total:
+            checked = len(self.state.get("review", {}).get("checked", ()))
+            review_total = self.state.get("setup", {}).get("review_total")
+            if type(review_total) is int and 0 < review_total <= total and checked <= review_total:
+                return f"{checked}/{review_total} quality checked"
+            if checked:
+                return f"{checked} quality checked"
+        return f"{generated}/{total} generated"
+
     @classmethod
     def create(cls, config, reference, instructions, partials, state, *, options=None):
         validate_config(config)
@@ -332,13 +374,21 @@ class Draft:
         return cls(path, payload, _read(path)[1], stored)
 
     @classmethod
-    def load(cls, path, current):
+    def read(cls, path):
         path = clean_path(path).absolute()
         payload, digest = _read(path)
         config = _validate(payload)
-        if payload["form_fingerprint"] != _fingerprint(current):
-            raise ValueError("The form or its instructions changed. Start a new generation request.")
         return cls(path, payload, digest, config)
+
+    @classmethod
+    def load(cls, path, current):
+        draft = cls.read(path)
+        draft.check_form(current)
+        return draft
+
+    def check_form(self, current):
+        if self._payload["form_fingerprint"] != _fingerprint(current):
+            raise ValueError("The form or its instructions changed. Start a new generation request.")
 
     def _unchanged(self):
         payload, digest = _read(self.path)

@@ -19,6 +19,8 @@ from .generator import validate_answer
 from .routing import Routing
 from .validation import date_format, time_format
 
+_MAX_EDIT_BYTES = 32 * 1024 * 1024
+
 
 class EditorServer:
     def __init__(self, config, answers, save, statuses=None):
@@ -138,18 +140,17 @@ class EditorServer:
                     return
                 name, _ = route
                 try:
-                    length = int(self.headers.get("Content-Length", "0"))
-                    if not 0 < length <= 4 * 1024 * 1024:
-                        self.send(413, {"error": "The editor request is too large or empty."})
-                        return
-                    raw = self.rfile.read(length)
                     if (
                         self.headers.get("Origin") != owner.origin
                         or self.headers.get("Content-Type", "").split(";")[0] != "application/json"
                     ):
                         self.send(403, {"error": "Only this editor can save changes."})
                         return
-                    payload = json.loads(raw)
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= _MAX_EDIT_BYTES:
+                        self.send(413, {"error": "The editor request is too large or empty."})
+                        return
+                    payload = json.loads(self.rfile.read(length))
                     if not isinstance(payload, dict):
                         raise ValueError("Expected an answer object.")
                     if name == "close":
@@ -159,33 +160,29 @@ class EditorServer:
                     if name != "save":
                         self.send(404, {"error": "Unknown editor action."})
                         return
-                    index = owner.index(payload.get("index"))
-                    if owner.statuses()[index - 1] != "ready":
-                        self.send(
-                            409,
-                            {
-                                "error": "Submitted or uncertain responses are read-only. Reopen the batch to check its status."
-                            },
-                        )
-                        return
-                    candidate = payload.get("answers")
-                    try:
-                        answer = validate_answer(config, candidate)
-                    except ValueError as exc:
-                        error = {"error": str(exc)}
-                        match = re.search(r"\bQ(\d+)", str(exc))
-                        if match:
-                            error["question"] = int(match[1])
-                        try:
-                            error["active"] = sorted(
-                                Routing(config).active({int(k): v for k, v in candidate.items()})
+                    changes = payload.get("responses")
+                    if not isinstance(changes, dict) or not changes or len(changes) > len(owner.answers):
+                        raise ValueError("Send edits for existing responses.")
+                    states = owner.statuses()
+                    validated = {}
+                    for key, patch in changes.items():
+                        index = owner.index(key)
+                        if str(index) != key or not isinstance(patch, dict) or not patch:
+                            raise ValueError(
+                                "Each edited response needs a response number and changed answers."
                             )
-                        except (ValueError, TypeError, AttributeError):
-                            pass
-                        self.send(400, error)
-                        return
-                    owner.answers[index - 1] = deepcopy(owner.save(index, answer))
-                    self.send(200, owner.response(index))
+                        if states[index - 1] != "ready":
+                            self.send(409, {"index": index, "error": f"Response {index} is now read-only."})
+                            return
+                        candidate = {**{str(k): v for k, v in owner.answers[index - 1].items()}, **patch}
+                        try:
+                            validated[index] = validate_answer(config, candidate)
+                        except ValueError as exc:
+                            self.send(400, owner.validation_error(index, candidate, exc))
+                            return
+                    owner.save(validated)
+                    owner.closed = True
+                    self.send(200, {"saved": len(validated)})
                 except sqlite3.Error:
                     self.send(
                         409,
@@ -215,6 +212,17 @@ class EditorServer:
             "active": sorted(Routing(self.config).active(answer)),
             "status": self.statuses()[index - 1],
         }
+
+    def validation_error(self, index, candidate, exc):
+        error = {"index": index, "error": f"Response {index}: {exc}"}
+        match = re.search(r"\bQ(\d+)", str(exc))
+        if match:
+            error["question"] = int(match[1])
+        try:
+            error["active"] = sorted(Routing(self.config).active({int(k): v for k, v in candidate.items()}))
+        except (ValueError, TypeError):
+            pass
+        return error
 
     def run(self):
         while not self.closed and time.monotonic() - self.last_request < 1800:

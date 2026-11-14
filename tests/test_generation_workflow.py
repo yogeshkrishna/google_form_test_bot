@@ -3,6 +3,7 @@
 import json
 from copy import deepcopy
 
+import pytest
 from click.testing import CliRunner
 
 from gformbot import chatgpt_http, cli, previews
@@ -44,6 +45,73 @@ def test_review_context_names_reached_route_sections():
     context = Generation(config, None, "")._review_context({1: {"route": [1, 2, 4], "answers": {1: "Yes"}}})
     assert context["route_sections"] == {1: "Gate", 2: "Chosen branch", 4: "Readback"}
     assert context["questions"][1]["page"] == 4
+
+
+@pytest.mark.parametrize("phase", ["generation", "review"])
+def test_interrupted_ai_draft_resumes_from_saved_batches(tmp_path, monkeypatch, phase):
+    config = _setup(
+        monkeypatch,
+        tmp_path,
+        [
+            QuestionConfig(1, "Equipment state", "radio", True, ["On", "Off"]),
+            QuestionConfig(2, "Handoff notes", "textarea", True),
+        ],
+        count=2,
+    )
+    calls = []
+    original = {1: "On", 2: "The equipment can stay on for the next shift."}
+
+    def ask(self, messages, **kwargs):
+        task = json.loads(messages[-1]["content"])
+        if "profiles" in task:
+            stage = "review"
+            reply = {
+                int(number): json.dumps({"response": int(number), "issues": []})
+                for number in task["profiles"]
+            }
+        else:
+            stage = "generation"
+            reply = {
+                number: json.dumps({"profile_id": number, "answers": {"1": 1, "2": original[2]}})
+                for number in task["profile_numbers"]
+            }
+        call = (stage, tuple(reply))
+        interrupt = stage == phase and call == (phase, (1, 2)) and call not in calls
+        calls.append(call)
+        if interrupt:
+            error = KeyboardInterrupt()
+            error.partial_content = reply[1] + '\n{"truncated":'
+            raise error
+        return "\n".join(reply.values())
+
+    monkeypatch.setattr(chatgpt_http.Client, "ask", ask)
+    result = CliRunner().invoke(cli.cli, ["prepare", config.url, "-n", "2"])
+    assert result.exit_code == 1 and "Open Saved batches" in result.output
+    assert cli._saved_batches(config)[0] == []
+    opened = []
+    messages = []
+
+    def select(_, choices, **kwargs):
+        choice = next(item for item in choices if isinstance(item.value, cli.SavedDraft))
+        expected = "1/2 generated" if phase == "generation" else "1/2 quality checked"
+        assert choice.name.startswith(expected + " | ")
+        assert config.form_title not in choice.name
+        return choice.value
+
+    def inspect(url, *, display):
+        assert messages[-1] == f"Form: {config.form_title}"
+        assert url == config.url and not display
+        return deepcopy(config)
+
+    monkeypatch.setattr(cli, "_ask_select", select)
+    monkeypatch.setattr(cli, "_info", messages.append)
+    monkeypatch.setattr(cli, "_run_inspect", inspect)
+    monkeypatch.setattr(cli, "_manage_batch", lambda config, rows, path: opened.append(rows))
+    cli._resume_batch()
+    assert (phase, (2,)) in calls
+    assert calls.count((phase, (1, 2))) == 1
+    assert opened == [[original, original]]
+    assert not list((tmp_path / "state" / "ai-drafts").glob("*.json"))
 
 
 def test_review_repairs_only_contradictory_field_and_checks_again(tmp_path, monkeypatch):
