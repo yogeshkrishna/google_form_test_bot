@@ -246,3 +246,22 @@ def test_count_is_empty_while_typing_and_enter_uses_default(monkeypatch, keys, e
         monkeypatch.setattr(inquirer, "text", lambda **kw: text(**kw, input=pipe, output=DummyOutput()))
         pipe.send_text(keys)
         assert cli._ask_number("Number of responses", completed=True) == expected
+
+
+@pytest.mark.parametrize(
+    ("interactive", "expected"),
+    [
+        (True, "Arrow keys to choose, Enter to select, Backspace twice to go back."),
+        (False, "Enter a number to choose; select Back where available."),
+    ],
+)
+def test_start_menu_help_matches_input_mode(monkeypatch, interactive, expected):
+    messages = []
+    monkeypatch.setattr(cli, "_INQUIRER", interactive)
+    monkeypatch.setattr(cli, "_print_banner", lambda: None)
+    monkeypatch.setattr(cli, "_info", messages.append)
+    monkeypatch.setattr(cli, "_ask_select", lambda *args, **kwargs: "exit")
+
+    cli._wizard()
+
+    assert expected in messages

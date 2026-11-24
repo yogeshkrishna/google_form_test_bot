@@ -1172,7 +1172,10 @@ def _random_answers(config):
 
 def _wizard():
     _print_banner()
-    _info("Arrow keys to choose, Enter to select, Backspace twice to go back.")
+    if _INQUIRER:
+        _info("Arrow keys to choose, Enter to select, Backspace twice to go back.")
+    else:
+        _info("Enter a number to choose; select Back where available.")
     while True:
         choices = [
             _choice("quick", "Quick submit"),
