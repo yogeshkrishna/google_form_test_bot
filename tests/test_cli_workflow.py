@@ -91,8 +91,29 @@ def test_optional_csv_mapping_requires_explicit_blank_acknowledgement(batch, mon
         return "blank"
 
     monkeypatch.setattr(cli, "_ask_select", choose)
-    assert cli._mapping(config, ["Unrelated"]) == {1: None, 2: None}
+    assert cli._mapping(config, ["Choice"]) == {1: "Choice", 2: None}
     assert len(seen) == 1 and seen[0][1] == "map"
+
+
+@pytest.mark.parametrize("branching", [False, True])
+def test_csv_without_matching_headers_rejected_before_mapping_table(batch, monkeypatch, capsys, branching):
+    config, _, _ = batch
+    if branching:
+        config.sections = ["Start", "Done"]
+        config.questions[0].branches = {"A": 0, "B": 2}
+    monkeypatch.setattr(cli, "_ask_select", lambda *a, **k: pytest.fail("No mapping prompt expected"))
+    with pytest.raises(ValueError, match="No CSV headers match this form"):
+        cli._mapping(config, ["Unrelated"])
+    assert "Match CSV columns to questions" not in capsys.readouterr().out
+
+
+def test_quick_csv_mapping_reuses_aliases_without_rendering_complete_mapping(batch, capsys):
+    config, _, _ = batch
+    config.pool_column_map = {1: "Another CSV"}
+    assert cli._mapping(config, ["Q1", "Comment", "Ignore me"], preview=False) == {1: "Q1", 2: "Comment"}
+    output = capsys.readouterr().out
+    assert "Unused CSV columns: Ignore me" in output
+    assert "Match CSV columns to questions" not in output
 
 
 def test_preview_rejects_execution_overrides(batch):

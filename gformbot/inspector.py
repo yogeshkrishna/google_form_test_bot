@@ -6,18 +6,21 @@ format, so shape changes and unsupported controls are reported explicitly.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import html
 import json
 import re
+import zlib
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+from http.client import IncompleteRead
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .access import FormAccessError, raise_for_access
-from .media import inspect_media
+from .media import inspect_media, media_links
 from .validation import checkbox_bounds, date_settings, is_checkbox_rule, text_rules, time_settings
 
 
@@ -65,6 +68,7 @@ class FormSchema:
     section_ids: list[str] = field(default_factory=list)
     section_next: list[int] = field(default_factory=list)
     media: list[dict] = field(default_factory=list)
+    media_links: dict[str, str] = field(default_factory=dict)
 
     def get(self, index: int) -> QuestionSchema | None:
         return next((q for q in self.questions if q.index == index), None)
@@ -89,6 +93,7 @@ KINDS = {
     18: "rating",
 }
 UNSUPPORTED = {13: "file upload"}
+_MAX_FORM_BYTES = 10_000_000
 
 
 class _PlainText(HTMLParser):
@@ -388,16 +393,29 @@ def inspect_form(url: str, status_cb=None, timeout: int = 30) -> FormSchema:
     if status_cb:
         status_cb("Reading all form questions and constraints…")
     try:
-        request = Request(requested, headers={"User-Agent": "gformbot (form inspection)"})
+        request = Request(
+            requested, headers={"User-Agent": "gformbot (form inspection)", "Accept-Encoding": "gzip"}
+        )
         with urlopen(request, timeout=timeout) as response:
             raise_for_access(url=response.url, status=getattr(response, "status", None))
-            raw = response.read(10_000_001)
-            if len(raw) > 10_000_000:
+            if response.headers.get("Content-Encoding", "").strip().lower() == "gzip":
+                with gzip.GzipFile(fileobj=response) as decoded:
+                    raw = decoded.read(_MAX_FORM_BYTES + 1)
+            else:
+                raw = response.read(_MAX_FORM_BYTES + 1)
+            if len(raw) > _MAX_FORM_BYTES:
                 raise ValueError("The responder page is too large to inspect safely.")
             encoding = response.headers.get_content_charset() or "utf-8"
-            document = raw.decode(encoding)
+            try:
+                document = raw.decode(encoding)
+            except (LookupError, UnicodeError) as exc:
+                raise FormAccessError("temporary_failure") from exc
             final_url = clean_url(response.url, allow_short=False)
         schema = parse_form_html(document, final_url)
+        if schema.media:
+            schema.media_links = media_links(schema.media, document)
+            # Transient responder HTML for background previews; never part of a saved plan.
+            schema._media_document = document
         if status_cb:
             status_cb(f"Read {len(schema.questions)} questions across {schema.pages} section(s).")
         return schema
@@ -407,9 +425,7 @@ def inspect_form(url: str, status_cb=None, timeout: int = 30) -> FormSchema:
             raise FormAccessError("unknown") from exc
         finally:
             exc.close()
-    except ValueError:
-        raise
-    except (URLError, TimeoutError, OSError, UnicodeError) as exc:
+    except (URLError, TimeoutError, OSError, EOFError, IncompleteRead, zlib.error) as exc:
         raise FormAccessError("temporary_failure") from exc
 
 

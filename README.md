@@ -31,8 +31,8 @@ Want to submit a bunch of responses quickly?
 
 1. Select **Quick submit** with the arrow keys and Enter.
 2. Paste the link a respondent would open. Both `forms.gle` and full responder links work.
-3. Enter the response count and any instructions. You can also pick a guide CSV to show AI what kind of answers you want.
-4. GFormBot generates, validates, and submits the responses. If AI flags an answer, the wizard pauses for review.
+3. Enter the response count and any instructions. For answers that depend on media, add observations using the numbers in the question table, for example `Q12: The arrow points left; Q13: The card reads ABC-123`. You can also pick a guide CSV.
+4. GFormBot generates and checks the full batch, then submits automatically. If it needs more answers or manual review, it saves your work under **Continue batches**.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/yogeshkrishna/google_form_test_bot/master/readme/terminal.svg" alt="Quick submit example with a form link, five fictional event registrations, and no guide CSV." width="900">
@@ -55,10 +55,10 @@ Choose **Start a new form** to see the form introduction and questions before ch
 | In the wizard | Reach for it when… | What happens |
 | --- | --- | --- |
 | **Generate answers with AI** | You want a spread of fictional profiles, including written answers. | Uses the form’s questions and rules, your instructions, and an optional guide CSV. Larger forms are handled in groups, with related answers carried forward. |
-| **Use my own answers** | You already have a CSV or saved batch you want to submit. | Imports complete CSV rows or opens a saved plan. You can read CSV rows in order, shuffle them, or sample with repeats. |
+| **Use my own answers** | You have a CSV or want to make one with your own AI tool. | Optionally copy a prompt tailored to the form, then choose a CSV. Read rows in order, shuffle them, or sample with repeats. |
 | **Pick answers randomly** | You want a mix of answers for choice-heavy forms. | Samples eligible choices. Use equal chances, patterns from a guide CSV, or weights you set. AI can fill remaining written and date fields if needed. |
 
-`--data` uses your supplied answers. `--like` uses a CSV as a guide for generating **new** answers. Scripted CSV imports read complete rows in order, so values from different people stay together. Review AI output for meaning before relying on it. A batch with AI quality warnings pauses for review before it can be submitted.
+`--data` uses your supplied answers. `--like` uses a CSV as a guide for generating **new** answers. Scripted CSV imports read complete rows in order, so values from different people stay together. Choose **Start a new form** if you want to review the prepared batch before sending it.
 
 <details>
 <summary><strong>CSV and JSON formats</strong></summary>
@@ -84,20 +84,25 @@ GFormBot works with **public Google Forms that accept anonymous responses**. It 
 | Structured answers | Multiple-choice and checkbox grids, dates, clock times, and durations |
 | Form structure | Sections, routing, instructions, and confirmation messages |
 
-The form must be open to responses without Google sign-in. Account-verified email, one-response-per-account settings, and file uploads are unsupported. Unknown controls or rules can prevent a route from running. Images and videos appear during inspection for you to review. If they matter to an AI answer, describe the relevant facts in **Extra instructions**.
+The form must be open to responses without Google sign-in. Account-verified email, one-response-per-account settings, and file uploads are unsupported. Unknown controls or rules can prevent a route from running. Images and videos appear during inspection for you to review. If they matter to an AI answer, add observations in **Extra instructions** using the question numbers, such as `Q12: The arrow points left`.
+
+
+Media links appear in the terminal as they’re found. Click **Open image** or **Open video** in a terminal with mouse support. Choose **Show media links** to copy the direct URLs. Continuing to generation or leaving the form cancels discovery.
 
 
 ## Resume a batch or find its results
 
 | What you see | What to do |
 | --- | --- |
-| **Ready to submit** | Open the plan from **Saved batches** to review, export, or send it. |
-| **Submission interrupted** | Open **Saved batches** and choose the batch by its progress and date. Confirmed responses are skipped. |
+| **Ready to submit** | Open the plan from **Continue batches** to review, export, or send it. |
+| **Submission interrupted** | Open **Continue batches** and choose the batch by its progress and date. Confirmed responses are skipped. |
 | **A response needs checking** | Look in Google Forms or the linked sheet before choosing whether to retry. A lost connection can leave the result uncertain. |
-| **AI generation or quality review interrupted** | Open **Saved batches** to pick up the saved AI draft. |
+| **AI generation or quality review interrupted** | Open **Continue batches** to reuse saved work. If the wizard offers **Continue this batch**, you can also resume right there. |
 | **Looking for a receipt or instructions?** | Open **More options → View recent activity** from the folder you ran the batch in, or use `log --followups`. |
 
 GFormBot tracks submission outcomes in a local journal. Keep the original plan and journal when resuming. Files supplied as input and plans made with `prepare` are preserved. Temporary plans created for submission can be cleaned up after Google confirms the entire batch.
+
+If an AI draft needs an additional media observation, save it in a JSON file such as `{"evidence":{"Q12":"The arrow points left"}}` and run `gformbot prepare --resume DRAFT.json --quality POLICY.json` with your actual file paths. You can review and submit the resulting plan from **Continue batches**.
 
 ## Command guide
 
@@ -107,7 +112,7 @@ Run these after `python -m gformbot` or `gformbot`. Add `--help` after a command
 | --- | --- |
 | `prepare "URL" -n 5 -m "Use fictional attendees"` | Generate and save five answers for review. |
 | `prepare "URL" --data answers.csv -n 2` | Save two validated CSV rows without sending. |
-| `prepare "URL" --resume "DRAFT.json"` | Resume generation from a saved AI draft. |
+| `prepare --resume "DRAFT.json"` | Continue a saved AI draft using its original form link. |
 | `preview [PLAN.json]` | Open a saved plan in the default app. Omit the path to choose from unfinished plans. |
 | `generate "URL" --data "PLAN.json"` | Submit the plan’s remaining responses. |
 | `generate "URL" --like guide.csv -n 3` | Generate and submit three responses guided by a CSV. |
@@ -121,7 +126,7 @@ Run these after `python -m gformbot` or `gformbot`. Add `--help` after a command
 ## Troubleshooting
 
 - **The terminal can’t find `gformbot`.** Run `python -m gformbot` with the same Python you used to install it.
-- **The file picker doesn’t open.** The wizard uses Tk and needs a desktop session. On Linux, install the Python Tk package for your distribution, or give `prepare` a path with `--data`.
+- **The file picker doesn’t open.** Paste the CSV path into the wizard. The picker itself needs Tk and a desktop session.
 - **Google asks you to sign in.** Check the form’s publishing and access settings. The form must accept anonymous responses.
 - **A CSV answer was rejected.** Check the row and field in the error, then match the form’s option labels or date format exactly.
 - **AI generation is unavailable.** The guest service can limit or deny access. Reopen the saved draft when it’s available or prepare answers from a CSV.

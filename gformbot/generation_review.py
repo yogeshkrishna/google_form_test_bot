@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 
-_ISSUE_KINDS = {"contradiction", "relevance", "missing_evidence"}
+_ISSUE_KINDS = {"contradiction", "cross_answer", "relevance", "missing_evidence"}
+_QUESTION_REFERENCE = re.compile(r"(?<![\w-])q(?:uestion)?\s*#?\s*([1-9][0-9]{0,8})\b", re.I)
 _SYSTEM = (
     "Review fictional test responses for the supplied form. "
     "Use the original form wording, active route, and protected facts as evidence. "
+    "Use only the current profile's route and answers. Other profiles may reach different sections. "
     "Interpret branch reports in the scope of the question's section. Use the ordered route and section "
     "titles to locate its relevant gate. Separate gates or later sections do not establish that a prior "
     "branch was switched or revisited. A fictional receipt code alone does not establish submission. "
@@ -19,12 +22,13 @@ _SYSTEM = (
     "Distinguish a conditional request or preference from a claim about the choices actually selected. "
     "Do not infer problems from style alone or guess the contents of missing media. "
     "Report at most eight concrete issues per profile. Each issue must cite a short, exact excerpt "
-    "from the affected answer, using its question number. Add excerpts from other "
-    "answers where relevant, and identify the specific conflicting fact or missing evidence in the reason. "
+    "from the affected answer, using its question number. Use cross_answer for conflicts between answers, "
+    "and quote both sides exactly. Use contradiction for conflicts within one answer or with the form. "
+    "Identify the conflicting fact or missing evidence in the reason. "
     'Return exactly one JSON line per supplied profile: {"response":7,"issues":'
-    '[{"question":12,"kind":"contradiction","reason":"Which facts conflict",'
-    '"evidence":[{"question":12,"quote":"exact excerpt from answer"}]}]}. '
-    "Allowed kinds: contradiction, relevance, missing_evidence. "
+    '[{"question":12,"kind":"cross_answer","reason":"Which facts conflict",'
+    '"evidence":[{"question":12,"quote":"exact excerpt"},{"question":5,"quote":"conflicting excerpt"}]}]}. '
+    "Allowed kinds: contradiction, cross_answer, relevance, missing_evidence. "
     "Use an empty issues list for a checked profile with no concrete issue. "
     "Return findings only, without revised answers, commentary or code fences."
 )
@@ -78,7 +82,7 @@ def _validated_issues(issues, profile):
         return None
     answers = {str(key): value for key, value in profile["answers"].items()}
     review_keys = {str(key) for key in profile.get("review_keys", answers)}
-    seen = set()
+    seen, checked = set(), []
     for issue in issues:
         if not isinstance(issue, dict) or set(issue) != {"question", "kind", "reason", "evidence"}:
             return None
@@ -96,7 +100,7 @@ def _validated_issues(issues, profile):
             or not 1 <= len(evidence) <= 4
         ):
             return None
-        cited_target = False
+        cited_questions = set()
         for item in evidence:
             if not isinstance(item, dict) or set(item) != {"question", "quote"}:
                 return None
@@ -109,11 +113,18 @@ def _validated_issues(issues, profile):
                 or not any(quote in value for value in _answer_text(answers[str(cited)]))
             ):
                 return None
-            cited_target |= cited == question
-        if not cited_target:
+            cited_questions.add(cited)
+        if question not in cited_questions:
             return None
         seen.add((question, kind))
-    return issues
+        references = {int(match[1]) for match in _QUESTION_REFERENCE.finditer(reason)} - {question}
+        if (kind == "cross_answer" and len(cited_questions) < 2) or (
+            kind in {"contradiction", "cross_answer"} and not references <= cited_questions
+        ):
+            # Keep the observation visible without blocking on an unsupported comparison.
+            issue = {**issue, "kind": "relevance", "reason": "Unverified comparison. " + reason}
+        checked.append(issue)
+    return checked
 
 
 def parse_review_response(text: str, profiles: dict[int, dict]) -> dict[int, list[dict]]:

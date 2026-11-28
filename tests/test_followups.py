@@ -49,10 +49,10 @@ def test_existing_journal_upgrade_and_retry_deduplication(tmp_path):
             "CREATE TABLE responses(batch TEXT,response INTEGER,state TEXT,PRIMARY KEY(batch,response))"
         )
         connection.execute("INSERT INTO responses VALUES('batch',7,'confirmed')")
-    blocks = [{"text": "Join us", "links": ["https://discord.gg/abc"]}]
+    blocks = [(2, "section", {"text": "Join us", "links": ["https://discord.gg/abc"]})]
     for _ in range(2):
-        journal.record_followups(7, 2, "section", blocks, str(tmp_path / "runs.csv"), "Form")
-    journal.record_followups(9, 2, "section", blocks, str(tmp_path / "runs.csv"), "Form")
+        journal.record_followups(7, blocks, str(tmp_path / "runs.csv"), "Form")
+    journal.record_followups(9, blocks, str(tmp_path / "runs.csv"), "Form")
     assert journal.states() == {7: "confirmed"}
     assert [r["response"] for r in journal.followups()] == [7, 9]
     assert Journal("other").followups(log_path=str(tmp_path / "other.csv")) == []
@@ -154,11 +154,11 @@ def test_failed_display_does_not_escape(tmp_path):
 
 def test_log_limits_responses_and_keeps_custom_logs_separate(tmp_path):
     journal = Journal("batch")
-    block = [{"text": "Instructions", "links": []}]
+    block = {"text": "Instructions", "links": []}
     first, second = str(tmp_path / "first.csv"), str(tmp_path / "second.csv")
-    journal.record_followups(7, 1, "section", block, first, "First")
-    journal.record_followups(7, 2, "section", block, second, "Second")
-    journal.record_followups(9, 1, "section", block, first, "First")
+    journal.record_followups(7, [(1, "section", block)], first, "First")
+    journal.record_followups(7, [(2, "section", block)], second, "Second")
+    journal.record_followups(9, [(1, "section", block)], first, "First")
     assert [r["response"] for r in journal.followups(log_path=first, last=1)] == [9]
     assert [r["section"] for r in journal.followups(log_path=second)] == [2]
 

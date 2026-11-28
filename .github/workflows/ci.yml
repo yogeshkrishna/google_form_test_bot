@@ -123,7 +123,11 @@ jobs:
           done
           "$WHEEL_PYTHON" -m gformbot doctor --check
           "$WHEEL_PYTHON" -m pip install pytest
-          "$WHEEL_PYTHON" -m pytest -q gformbot-wheel-tests/test_transport.py gformbot-wheel-tests/test_editor.py gformbot-wheel-tests/test_chatgpt_http.py gformbot-wheel-tests/test_generation_recovery.py
+          "$WHEEL_PYTHON" -m pytest -q gformbot-wheel-tests/test_transport.py gformbot-wheel-tests/test_editor.py gformbot-wheel-tests/test_chatgpt_http.py gformbot-wheel-tests/test_generation_recovery.py gformbot-wheel-tests/test_media.py
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            "$WHEEL_PYTHON" -m pip install 'pywinpty>=3.1,<4'
+          fi
+          GFORMBOT_TEST_INSTALLED_WIZARD=1 "$WHEEL_PYTHON" -m pytest -q gformbot-wheel-tests/test_installed_wizard.py
       - name: Smoke-test the source archive outside the checkout
         shell: bash
         run: |

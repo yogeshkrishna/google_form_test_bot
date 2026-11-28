@@ -12,6 +12,8 @@ import pytest
 from click.testing import CliRunner
 
 from gformbot import cli, generator
+from gformbot.ai_draft import Draft
+from gformbot.artifacts import digest
 from gformbot.config import QuestionConfig, RunConfig, config_to_dict, save_config
 from gformbot.state import Journal, batch_id
 
@@ -114,7 +116,9 @@ def test_retired_commands_are_not_public(name):
 @pytest.mark.parametrize("name", ["generate", "prepare"])
 def test_generation_commands_require_form_url(name):
     result = invoke(name)
-    assert result.exit_code == 2 and "Missing argument" in result.output
+    assert result.exit_code == 2
+    message = "Missing argument" if name == "generate" else "Provide a form URL or use --resume"
+    assert message in result.output
 
 
 def test_generate_defaults_to_one_response_and_submission(commands):
@@ -127,20 +131,123 @@ def test_generate_defaults_to_one_response_and_submission(commands):
     assert commands.inspected[0][1].get("display") is False
 
 
-@pytest.mark.parametrize("confirm", [False, True])
-def test_quick_submit_pauses_for_review(commands, monkeypatch, confirm):
-    def flagged(config, *args, **kwargs):
-        config._quality_warnings = [{"response": 1, "question": 2, "reason": "Check the answer."}]
-        return profiles()[:1]
+def run_quick(commands, monkeypatch, count, *, guide=None, instructions=""):
+    monkeypatch.setattr(cli, "_url_prompt", lambda **kwargs: commands.config.url)
+    monkeypatch.setattr(cli, "_ask_number", lambda *args, **kwargs: count)
+    monkeypatch.setattr(cli, "_ask_text", lambda *args, **kwargs: instructions)
+    monkeypatch.setattr(cli, "_quick_reference", lambda: guide)
+    cli._quick_submit()
 
-    actions = iter(["submit", "back"])
+
+def test_quick_submit_uses_fresh_wizard_configuration_and_sends_the_full_batch(commands, monkeypatch):
+    saved = copy.deepcopy(commands.config)
+    saved.questions[0].fixed_value = "A"
+    save_config(saved, cli.DEFAULT_CONFIG_NAME)
+
+    run_quick(commands, monkeypatch, 2)
+    [generation] = commands.generated
+    assert generation[0].questions[0].fixed_value is None
+    assert not generation[3].get("allow_partial")
+    [(_, request)] = commands.filled
+    assert request["answers"] == [{1: "A", 2: "Generated 1"}, {1: "B", 2: "Generated 2"}]
+    assert cli.load_config(cli.DEFAULT_CONFIG_NAME).count == 2
+
+
+@pytest.mark.parametrize("count", [1, 3])
+def test_quick_submit_rejects_wrong_response_count(commands, monkeypatch, capsys, count):
+    monkeypatch.setattr(cli, "_generate", lambda *args, **kwargs: profiles())
+    run_quick(commands, monkeypatch, count)
+    assert "Prepared response count does not match" in capsys.readouterr().out
+    assert not commands.filled
+
+
+@pytest.mark.parametrize("message", ["Q2: ", "Q2: first; Q2: second"])
+def test_generation_rejects_empty_or_duplicate_observations(message):
+    with pytest.raises(ValueError, match="one nonempty observation for Q2"):
+        cli._media_instructions(message)
+
+
+def test_interrupted_quick_submit_resumes_only_unsent_rows(commands, monkeypatch):
+    accepted = [*profiles(), {1: "B", 2: "Third response"}]
+    monkeypatch.setattr(cli, "_generate", lambda *args, **kwargs: accepted)
+
+    def interrupted(config, *, answers, compact):
+        assert answers == accepted
+        assert compact is True
+        config._session.start()
+        config._session.before_submit(1)
+        config._record_submission(1)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_run_submit", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run_quick(commands, monkeypatch, 3)
+
+    [(_, saved)], unreadable = cli._saved_batches()
+    assert unreadable == 0 and saved.answers == accepted
+    assert saved.config._submitted_indices == [1]
+    assert saved.config._requested_count == 3
+    remaining = cli._track_plan(saved.config, saved.answers, saved.path, digest(saved.path))
+    assert remaining == accepted[1:]
+
+
+def _quick_draft(config):
+    config = copy.deepcopy(config)
+    config.count = 3
+    state = {
+        "strategy": "flat",
+        "profiles": [{"answers": {}, "route": None, "position": 0} for _ in range(config.count)],
+        "review": {"checked": [], "issues": []},
+        "setup": {},
+    }
+    return Draft.create(config, None, "", None, state, options={"allow_partial": True})
+
+
+def test_quick_submit_preserves_draft_when_responses_are_missing(commands, monkeypatch):
+    from gformbot.ai import GenerationError
+
+    draft = _quick_draft(commands.config)
+
+    def invalid(config, *args, **kwargs):
+        config._generation_draft = draft
+        raise GenerationError("Prepared 2/3 responses. Response 3 is incomplete.")
+
+    monkeypatch.setattr(cli, "_generate", invalid)
+    run_quick(commands, monkeypatch, 3)
+    assert Draft.read(draft.path).identity == draft.identity
+    assert not commands.filled and not list(Path.cwd().glob("gformbot-responses*.json"))
+
+
+def test_prepare_resume_requires_full_count_for_legacy_quick_draft(commands, monkeypatch):
+    draft = _quick_draft(commands.config)
+    full_batch = [*profiles(), {1: "B", 2: "Third response"}]
+
+    def resume(config, *args, **kwargs):
+        assert config.count == 3
+        assert "allow_partial" not in kwargs
+        config._generation_draft = kwargs["draft"]
+        return full_batch
+
+    monkeypatch.setattr(cli, "_generate", resume)
+    result = invoke("prepare", "--resume", str(draft.path))
+    assert result.exit_code == 0, result.exception
+    assert not commands.filled and not draft.path.exists()
+    (plan,) = Path.cwd().glob("gformbot-responses*.json")
+    saved_config, answers = cli._load_plan(plan)
+    assert saved_config.count == 3 and answers == full_batch
+    assert batch_id(json.loads(plan.read_text(encoding="utf-8"))) == draft.identity
+
+
+def test_quick_submit_keeps_a_plan_that_needs_manual_warning_review(commands, monkeypatch, capsys):
+    def flagged(config, *args, **kwargs):
+        config._quality_warnings = [{"response": 2, "question": 2, "reason": "Advisory note."}]
+        return profiles()
+
     monkeypatch.setattr(cli, "_generate", flagged)
-    monkeypatch.setattr(cli, "_next_action", lambda count: next(actions))
-    monkeypatch.setattr(cli, "_ask_confirm", lambda *a, **kw: confirm)
-    cli._submit_command(commands.config.url, 1, "", None, None, guided=True)
-    assert len(commands.filled) == int(confirm)
-    if not confirm:
-        assert Path("gformbot-responses.json").is_file()
+    run_quick(commands, monkeypatch, 2)
+    assert not commands.filled
+    assert list(Path.cwd().glob("gformbot-responses*.json"))
+    assert "Continue batches" in capsys.readouterr().out
 
 
 def test_generate_keeps_warned_plan_for_interactive_review(commands, tmp_path):

@@ -6,6 +6,14 @@ import random
 import time
 
 
+def submission_counts(config, confirmed, prepared):
+    requested = getattr(config, "_requested_count", prepared)
+    skipped = requested - prepared
+    if skipped:
+        return f"{confirmed} of {requested} submitted · {skipped} skipped during generation"
+    return f"{confirmed}/{requested} submitted"
+
+
 class Runner:
     def __init__(self, config, answers, ui, session=None):
         self.config, self.answers, self.ui, self.session = config, answers, ui, session
@@ -59,6 +67,32 @@ class Runner:
         finally:
             self.followups.show(self.ui)
 
+    def _submit_one(self, client, index, answer):
+        observations = []
+        original, url = self.original(index), self.config.url
+
+        def save_observations():
+            if observations:
+                self.followups.record_many(observations, original, url)
+                observations.clear()
+
+        def observe(section, stage, blocks):
+            if stage == "confirmation":
+                save_observations()
+                self.followups.record(blocks, original, section, stage, url)
+            else:
+                observations.append((section, stage, blocks))
+
+        def before_submit():
+            save_observations()
+            if self.session:
+                self.session.before_submit(index)
+
+        try:
+            return client.submit(answer, observe=observe, before_submit=before_submit)
+        finally:
+            save_observations()
+
     def _http(self, *, compact=False):
         from .access import SubmissionRejectedError, SubmissionUncertainError
         from .config import clean_path
@@ -74,15 +108,8 @@ class Runner:
         with Client(c) as client:
             for index, answer in enumerate(self.answers, 1):
                 try:
-
-                    def observe(section, stage, blocks, i=index):
-                        self.followups.record(blocks, self.original(i), section, stage, c.url)
-
                     try:
-                        options = {"observe": observe}
-                        if self.session:
-                            options["before_submit"] = lambda i=index: self.session.before_submit(i)
-                        ok, message = client.submit(answer, **options)
+                        ok, message = self._submit_one(client, index, answer)
                         if not ok:
                             raise SubmissionRejectedError(message)
                     except SubmissionUncertainError as exc:
@@ -109,7 +136,8 @@ class Runner:
                     raise ValueError(
                         f"Response {self.original(index)} failed after {completed}/{len(self.answers)} submitted: {exc}"
                     ) from exc
-        ui._info(
-            f"Finished: {completed}/{len(self.answers)} submitted. Log: {clean_path(c.log_file).resolve()}"
-        )
+        prepared = len(self.session.payload["responses"]) if self.session else len(self.answers)
+        confirmed = len(self.session.confirmed) if self.session else completed
+        counts = submission_counts(c, confirmed, prepared)
+        ui._info(f"Finished: {counts}. Log: {clean_path(c.log_file).resolve()}")
         return True
