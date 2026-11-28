@@ -98,8 +98,8 @@ def _install():
 
     def wait(_delay):
         if os.environ.get("GFORMBOT_WIZARD_FIXTURE_INTERRUPT") == "1":
-            record("pause")
-            sleep(60)
+            # Exercise recovery after a receipt without relying on ConPTY to send SIGINT.
+            raise KeyboardInterrupt
         if os.environ.get("GFORMBOT_WIZARD_FIXTURE_QUEUED_ENTER") == "1":
             print("Fixture waiting for a queued key.", flush=True)
             _wait_for_terminal_input()

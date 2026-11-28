@@ -271,7 +271,6 @@ def test_installed_wizard_resumes_complete_batch_after_interrupt(tmp_path, sandb
     ) as console:
         _quick(console, count="3", invalid=True)
         console.expect("Response 1 submitted")
-        console.write("\x03")
         console.expect("Cancelled\\.")
         console.expect()
     _assert_rows(tmp_path, [1])
