@@ -27,6 +27,70 @@ def _checkpoint(config):
     return Draft.load(path, config)
 
 
+@pytest.mark.parametrize("resume_now", [True, False])
+def test_wizard_retries_or_keeps_the_same_checkpoint(tmp_path, monkeypatch, resume_now):
+    config = _form(2, [QuestionConfig(1, "Order code", "text", True)])
+    monkeypatch.setattr(previews, "index_path", lambda: tmp_path / "state" / "previews.json")
+    calls = []
+
+    def ask(self, messages, *, timeout):
+        task = json.loads(messages[-1]["content"])
+        if "profiles" in task:
+            return "\n".join(json.dumps({"response": int(i), "issues": []}) for i in task["profiles"])
+        ids = task["profile_numbers"]
+        calls.append(ids)
+        if len(calls) == 1:
+            raise chatgpt_http.ChatHTTPError(
+                "Connection interrupted", partial_content=_record(1, {"1": "Saved"})
+            )
+        return _record(2, {"1": "Recovered"})
+
+    def choose(message, choices, **kwargs):
+        assert "saved" in message.lower()
+        assert _checkpoint(config).progress_label() == "1/2 generated"
+        label = "Continue this batch" if resume_now else "Back to Start (keep draft)"
+        return next(choice.value for choice in choices if choice.name == label)
+
+    monkeypatch.setattr(chatgpt_http.Client, "ask", ask)
+    monkeypatch.setattr(cli, "_ask_select", choose)
+    token = cli.wizard_navigation.set(True)
+    try:
+        if resume_now:
+            assert cli._generate(config) == [{1: "Saved"}, {1: "Recovered"}]
+        else:
+            with pytest.raises(cli.GenerationDeferred):
+                cli._generate(config)
+    finally:
+        cli.wizard_navigation.reset(token)
+    assert calls == ([[1, 2], [2]] if resume_now else [[1, 2]])
+    assert _checkpoint(config).state["profiles"][0]["answers"] == {"1": "Saved"}
+
+
+@pytest.mark.parametrize("guided", [True, False])
+def test_review_blocker_preserves_draft_without_offering_an_unchanged_retry(monkeypatch, capsys, guided):
+    from gformbot.generation import Generation, ReviewBlockedError
+
+    config = _form(1, [QuestionConfig(1, "Order code", "text", True)])
+
+    def blocked(self):
+        profile = {"answers": {"1": "Saved"}, "position": 1, "route": None}
+        self._save({"strategy": "flat", "profiles": [profile]})
+        raise ReviewBlockedError("The answer is protected from automatic edits.")
+
+    monkeypatch.setattr(Generation, "run", blocked)
+    monkeypatch.setattr(cli, "_ask_select", lambda *a, **kw: pytest.fail("No unchanged retry is possible."))
+    token = cli.wizard_navigation.set(guided)
+    try:
+        with pytest.raises(cli.GenerationDeferred if guided else ReviewBlockedError):
+            cli._generate(config)
+    finally:
+        cli.wizard_navigation.reset(token)
+    assert _checkpoint(config).state["profiles"][0]["answers"] == {"1": "Saved"}
+    output = capsys.readouterr().out
+    assert "Draft saved" in output
+    assert "gformbot prepare --resume" not in output
+
+
 def _prepare_fixture(config, tmp_path, monkeypatch, *, final_position):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "_run_inspect", lambda *args, **kwargs: deepcopy(config))
@@ -71,17 +135,20 @@ def test_cli_500_resume_from_491_keeps_exact_answers_and_sends_only_missing_ids(
     monkeypatch.setattr(chatgpt_http.Client, "ask", ask)
     result = runner.invoke(cli.cli, ["prepare", config.url, "-n", "500"])
     assert isinstance(result.exception, ValueError) and "Connection interrupted" in str(result.exception)
-    assert "Resume with:" in result.output
     assert progress[-1] == 491
     assert not list(tmp_path.glob("gformbot-responses*.json"))
     saved = _checkpoint(config)
+    assert any(
+        line.startswith("gformbot prepare --resume ") and str(saved.path) in line
+        for line in result.output.splitlines()
+    )
     assert saved.strategy == "flat"
     assert [p["position"] for p in saved.state["profiles"]] == [1] * 491 + [0] * 9
     accepted = [p["answers"] for p in saved.state["profiles"][:491]]
 
     calls.clear()
     interrupt = False
-    resumed = runner.invoke(cli.cli, ["prepare", config.url, "--resume", str(saved.path)])
+    resumed = runner.invoke(cli.cli, ["prepare", "--resume", str(saved.path)])
     assert resumed.exit_code == 0, resumed.exception
     assert [i for batch in calls for i in batch] == list(range(492, 501))
     assert progress[-1] == 500
@@ -122,7 +189,7 @@ def test_cli_partition_commits_first_reply_before_next_inner_request(tmp_path, m
     monkeypatch.setattr(chatgpt_http.Client, "ask", ask)
     result = runner.invoke(cli.cli, ["prepare", config.url, "-n", "3"])
     assert isinstance(result.exception, ValueError) and "Rate limit" in str(result.exception)
-    assert "Resume with:" in result.output
+    assert any(line.startswith("gformbot prepare --resume ") for line in result.output.splitlines())
     saved = _checkpoint(config)
     assert not list(tmp_path.glob("gformbot-responses*.json"))
 

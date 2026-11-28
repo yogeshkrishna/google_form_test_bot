@@ -64,18 +64,25 @@ def _pairs(items):
     return result
 
 
-def _read(path):
+def _read_bytes(path):
     if path.is_symlink() or not path.is_file():
         raise ValueError("Choose an existing AI draft file, not a link or directory.")
     with path.open("rb") as handle:
         raw = handle.read(_MAX_BYTES + 1)
     if len(raw) > _MAX_BYTES:
         raise ValueError("AI draft exceeds the 32 MiB size limit.")
+    return raw
+
+
+def _decode(raw):
     try:
-        payload = json.loads(raw, object_pairs_hook=_pairs)
+        return json.loads(raw, object_pairs_hook=_pairs)
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise ValueError("Cannot read AI draft JSON.") from exc
-    return payload, hashlib.sha256(raw).hexdigest()
+
+
+def _file_hash(raw):
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _answers(value, known):
@@ -120,7 +127,7 @@ def _validate_review(review, count, known):
     for issue in issues:
         if (
             not isinstance(issue, dict)
-            or set(issue) - {"blocking"} != {"response", "question", "reason"}
+            or set(issue) - {"blocking", "related"} != {"response", "question", "reason"}
             or not response_id(issue["response"])
             or (
                 issue["question"] is not None
@@ -129,8 +136,43 @@ def _validate_review(review, count, known):
             or not isinstance(issue["reason"], str)
             or not issue["reason"].strip()
             or type(issue.get("blocking", True)) is not bool
+            or not isinstance(issue.get("related", []), list)
+            or not all(type(key) is int and str(key) in known for key in issue.get("related", []))
+            or (issue.get("related") and issue["question"] is None)
         ):
             raise ValueError("AI draft review issue is invalid.")
+
+
+def _validate_review_related(related, count, known):
+    responses = {str(number) for number in range(1, count + 1)}
+    if not isinstance(related, dict):
+        raise ValueError("AI draft review references are invalid.")
+    for response, questions in related.items():
+        if response not in responses or not isinstance(questions, dict):
+            raise ValueError("AI draft review references are invalid.")
+        for question, indices in questions.items():
+            if (
+                question not in known
+                or not isinstance(indices, list)
+                or any(type(index) is not int or str(index) not in known for index in indices)
+            ):
+                raise ValueError("AI draft review references are invalid.")
+
+
+def _migrate_review_related(state):
+    """Move experimental v2 fields into setup, which older readers allow."""
+    changed = False
+    for issue in state.get("review", {}).get("issues", ()):
+        if "related" not in issue:
+            continue
+        changed = True
+        indices = issue.pop("related")
+        if indices:
+            related = state["setup"].setdefault("review_related", {})
+            questions = related.setdefault(str(issue["response"]), {})
+            question = str(issue["question"])
+            questions[question] = sorted(set(questions.get(question, ())).union(indices))
+    return changed
 
 
 def _validate_state(state, version, config, known):
@@ -143,8 +185,11 @@ def _validate_state(state, version, config, known):
     if strategy not in ("flat", "partition"):
         raise ValueError("AI draft generation strategy is invalid.")
     if version == _VERSION:
-        if not isinstance(state["setup"], dict):
+        setup = state["setup"]
+        if not isinstance(setup, dict):
             raise ValueError("AI draft generation setup is invalid.")
+        if "review_related" in setup:
+            _validate_review_related(setup["review_related"], config.count, known)
         _validate_review(state["review"], config.count, known)
     profiles = state["profiles"]
     if not isinstance(profiles, list) or len(profiles) != config.count:
@@ -206,12 +251,10 @@ def _validate(payload):
     if not isinstance(payload["instructions"], str):
         raise ValueError("AI draft instructions must be text.")
     options = payload.get("options", {})
-    if not isinstance(options, dict) or options.get("browser") not in (
-        None,
-        "auto",
-        "chrome",
-        "firefox",
-        "edge",
+    if (
+        not isinstance(options, dict)
+        or options.get("browser") not in (None, "auto", "chrome", "firefox", "edge")
+        or type(options.get("allow_partial", False)) is not bool
     ):
         raise ValueError("AI draft generation options are invalid.")
     known = {str(q.index) for q in config.questions}
@@ -226,6 +269,19 @@ def _validate(payload):
                 _answers(row, known)
     _validate_state(payload["state"], version, config, known)
     return config
+
+
+def _storable_payload(payload):
+    # Freeze caller-owned maps and normalize integer answer keys once.
+    payload = json.loads(_encode(payload, sort_keys=False), object_pairs_hook=_pairs)
+    payload["checksum"] = _digest(payload)
+    config = _validate(payload)
+    if _migrate_review_related(payload["state"]):
+        del payload["checksum"]
+        payload["checksum"] = _digest(payload)
+    # Check the canonical size with the checksum before writing compact JSON.
+    _encode(payload)
+    return payload, config
 
 
 def _rows(rows):
@@ -303,31 +359,35 @@ class Draft:
     def created_at(self):
         return datetime.fromisoformat(self._payload["created_at"])
 
-    def progress_label(self):
+    def generation_progress(self):
+        """Return saved responses, saved question groups, and known group total."""
         profiles = self.state["profiles"]
-        total = len(profiles)
         if self.strategy == "flat":
-            generated = sum(profile["position"] == 1 for profile in profiles)
-        else:
-            from .ai_partition import _units
+            return sum(profile["position"] == 1 for profile in profiles), 0, None
+        from .ai_partition import _units
 
-            sizes = {page: len(units) for page, units in _units(self.config).items()}
-            generated = routed = saved_groups = total_groups = 0
-            for profile in profiles:
-                if profile["route"] is None:
-                    continue
-                groups = sum(sizes.get(page, 0) for page in profile["route"])
-                routed += 1
-                saved_groups += profile["position"]
-                total_groups += groups
-                generated += profile["position"] == groups
-            if generated < total and saved_groups:
-                if routed == total:
-                    progress = f"{saved_groups}/{total_groups} question groups saved"
-                else:
-                    unit = "question group" if saved_groups == 1 else "question groups"
-                    progress = f"{saved_groups} {unit} saved"
-                return f"{generated}/{total} generated · {progress}"
+        sizes = {page: len(units) for page, units in _units(self.config).items()}
+        generated = routed = saved_groups = total_groups = 0
+        for profile in profiles:
+            if profile["route"] is None:
+                continue
+            groups = sum(sizes.get(page, 0) for page in profile["route"])
+            routed += 1
+            saved_groups += profile["position"]
+            total_groups += groups
+            generated += profile["position"] == groups
+        return generated, saved_groups, total_groups if routed == len(profiles) else None
+
+    def progress_label(self):
+        total = len(self.state["profiles"])
+        generated, saved_groups, total_groups = self.generation_progress()
+        if generated < total and saved_groups:
+            if total_groups is not None:
+                progress = f"{saved_groups}/{total_groups} question groups saved"
+            else:
+                unit = "question group" if saved_groups == 1 else "question groups"
+                progress = f"{saved_groups} {unit} saved"
+            return f"{generated}/{total} generated · {progress}"
         if generated == total:
             checked = len(self.state.get("review", {}).get("checked", ()))
             review_total = self.state.get("setup", {}).get("review_total")
@@ -360,25 +420,22 @@ class Draft:
         }
         if modern:
             payload["options"] = {} if options is None else options
-        # Freeze caller-owned maps and normalize integer answer keys once.
-        payload = json.loads(_encode(payload, sort_keys=False), object_pairs_hook=_pairs)
-        payload["checksum"] = _digest(payload)
-        stored = _validate(payload)
-        # The actual compact JSON is shorter than this canonical encoding,
-        # even with the trailing newline written by atomic_json.
-        _encode(payload)
+        payload, stored = _storable_payload(payload)
         with file_lock(path):
             if path.exists() or path.is_symlink():
                 raise ValueError("AI draft destination already exists.")
             atomic_json(path, payload, compact=True)
-        return cls(path, payload, _read(path)[1], stored)
+            digest = _file_hash(_read_bytes(path))
+        return cls(path, payload, digest, stored)
 
     @classmethod
     def read(cls, path):
         path = clean_path(path).absolute()
-        payload, digest = _read(path)
+        raw = _read_bytes(path)
+        payload = _decode(raw)
         config = _validate(payload)
-        return cls(path, payload, digest, config)
+        _migrate_review_related(payload["state"])
+        return cls(path, payload, _file_hash(raw), config)
 
     @classmethod
     def load(cls, path, current):
@@ -391,14 +448,14 @@ class Draft:
             raise ValueError("The form or its instructions changed. Start a new generation request.")
 
     def _unchanged(self):
-        payload, digest = _read(self.path)
-        if digest != self._digest:
+        raw = _read_bytes(self.path)
+        if _file_hash(raw) != self._digest:
             raise ValueError("AI draft changed in another process. Reopen it before continuing.")
-        return payload
+        return raw
 
     def save(self, state):
         with file_lock(self.path):
-            original = self._unchanged()
+            original = _decode(self._unchanged())
             strategy = _strategy(state)
             if strategy != self.strategy and not (
                 self.strategy == "flat"
@@ -414,12 +471,9 @@ class Draft:
             if isinstance(state, dict) and "strategy" in state and payload["version"] == 1:
                 payload.update(version=_VERSION, options={})
             payload.pop("checksum")
-            payload = json.loads(_encode(payload, sort_keys=False), object_pairs_hook=_pairs)
-            payload["checksum"] = _digest(payload)
-            _validate(payload)
-            _encode(payload)
+            payload, _ = _storable_payload(payload)
             atomic_json(self.path, payload, compact=True)
-            self._digest = _read(self.path)[1]
+            self._digest = _file_hash(_read_bytes(self.path))
         self._payload, self.state, self._strategy = payload, payload["state"], strategy
 
     def finish(self):

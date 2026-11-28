@@ -1,6 +1,7 @@
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 
@@ -36,6 +37,7 @@ class Pool:
         self.responses = iter(responses)
         self.calls = []
         self.cleared = False
+        self.pool_classes_by_scheme = {}
 
     def request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
@@ -98,6 +100,35 @@ def test_https_turn_sends_prompt_once_and_applies_assistant_stream_updates(guest
     assert request["headers"]["x-conduit-token"] == "conduit-test"
     assert all(response.closed and response.released for response in (requirements, preparation, answer))
     assert pool.cleared
+
+
+@pytest.mark.parametrize("tail", [b"", TimeoutError()])
+def test_completed_stream_keeps_reply_and_metrics_with_delayed_tail(guest, tail):
+    from gformbot.generation_timing import GenerationTiming
+
+    content = event({"v": "Fictional answer"}) + b"data: [DONE]\n\n"
+    response = Response(content, tail, content_type="text/event-stream")
+    timeouts = []
+    response.connection = SimpleNamespace(
+        sock=SimpleNamespace(gettimeout=lambda: 30, settimeout=timeouts.append)
+    )
+    timing = GenerationTiming()
+    client, _ = guest(response, timing=timing)
+    try:
+        assert client._post("/test", {}, time.monotonic() + 5, "stream", extra_headers={}) == (
+            "Fictional answer"
+        )
+    finally:
+        client.close()
+
+    assert len(timeouts) == 1
+    assert 0 < timeouts[0] <= chatgpt_http._STREAM_TAIL_SECONDS + 1e-6
+    [stats] = timing.requests
+    assert stats["status"] == 200
+    assert stats["response_bytes"] == len(content)
+    assert stats["headers_ms"] <= stats["total_ms"]
+    assert 0 <= stats["first_output_ms"] <= stats["total_ms"]
+    assert "Fictional answer" not in json.dumps(stats)
 
 
 @pytest.mark.parametrize("ending", [b"\n", b"\r\n"])

@@ -69,16 +69,29 @@ def test_file_picker_opens_only_after_enter_and_closes_hidden_root(monkeypatch, 
 
 
 @pytest.mark.parametrize("error", [RuntimeError("Tk unavailable"), ValueError("display unavailable")])
-def test_picker_failure_recommends_public_flags(monkeypatch, error):
+def test_picker_failure_allows_pasting_path(monkeypatch, tmp_path, capsys, error):
+    path = tmp_path / "reference data.CSV"
+    path.write_text("Q1\nStudy\n", encoding="utf-8")
+
     def unavailable():
         raise error
 
-    monkeypatch.setitem(sys.modules, "tkinter", SimpleNamespace(Tk=unavailable, filedialog=None))
-    monkeypatch.setattr(cli, "_ask_text", lambda *args: "")
-    with pytest.raises(ValueError) as caught:
-        cli._select_csv()
-    assert "--data" in str(caught.value) and "--like" in str(caught.value)
-    assert "--pool" not in str(caught.value) and "--reference" not in str(caught.value)
+    monkeypatch.setitem(
+        sys.modules, "tkinter", SimpleNamespace(Tk=unavailable, TclError=ValueError, filedialog=None)
+    )
+    values = iter(["", str(tmp_path / "missing.csv"), f'"{path}"'])
+    monkeypatch.setattr(cli, "_ask_text", lambda *args: next(values))
+    assert cli._select_csv() == path
+    assert "Paste a CSV path instead" in capsys.readouterr().out
+
+
+def test_csv_pasted_path_does_not_open_picker(monkeypatch, tmp_path):
+    path = tmp_path / "reference data.csv"
+    path.write_text("Q1\nStudy\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setitem(sys.modules, "tkinter", None)
+    monkeypatch.setattr(cli, "_ask_text", lambda *args: path.name)
+    assert cli._select_csv() == path
 
 
 def test_picker_cancel_returns_to_source_selection(config, monkeypatch, tmp_path):
@@ -113,6 +126,7 @@ def test_generation_sources_write_new_csv_without_changing_reference(
     monkeypatch.setattr(
         cli, "_reference_prompt", lambda c, required=False: seen.append(required) or profiles()
     )
+
     monkeypatch.setattr(cli, "_ask_text", lambda *args: "Match the style")
 
     def generate(c, reference, instructions):
@@ -126,15 +140,36 @@ def test_generation_sources_write_new_csv_without_changing_reference(
     assert seen == ([] if source == "fresh" else [True])
 
 
-def test_own_data_keeps_original_profiles(config, monkeypatch, tmp_path):
+@pytest.mark.parametrize(("want_prompt", "clipboard"), [(False, None), (True, True), (True, False)])
+def test_own_data_opens_csv_picker_with_or_without_prompt(
+    config, monkeypatch, tmp_path, capsys, want_prompt, clipboard
+):
     monkeypatch.chdir(tmp_path)
     path = generator.write_csv(config, profiles(), tmp_path / "pool.csv")
     before = path.read_bytes()
-    monkeypatch.setattr(cli, "_select_csv", lambda: path)
-    choices = iter(["csv", "ordered"])
-    monkeypatch.setattr(cli, "_ask_select", lambda *args, **kwargs: next(choices))
+    events = []
+    monkeypatch.setattr(cli, "_ask_confirm", lambda message: events.append(message) or want_prompt)
+    monkeypatch.setattr(cli, "_select_csv", lambda: events.append("picker") or path)
+
+    def copy_prompt(prompt):
+        assert config.form_title in prompt and "Exact CSV header:" in prompt
+        events.append("copy")
+        return clipboard
+
+    def select(message, choices, **kwargs):
+        assert message == "How should rows be chosen from your CSV?"
+        return "ordered"
+
+    monkeypatch.setattr(cli, "_copy_to_clipboard", copy_prompt)
+    monkeypatch.setattr(cli, "_ask_select", select)
     assert cli._prepare_source(config, "own") == profiles()
     assert path.read_bytes() == before
+    assert events == [
+        "Copy a prompt to create your answer CSV?",
+        *(["copy"] if want_prompt else []),
+        "picker",
+    ]
+    assert ("Clipboard unavailable" in capsys.readouterr().out) is (clipboard is False)
 
 
 def test_random_mixed_form_completes_text_preserving_choice_profiles(config, monkeypatch):
@@ -156,6 +191,29 @@ def test_random_declining_required_text_generation_returns_to_sources(config, mo
     config.questions[1].required = True
     monkeypatch.setattr(cli, "_ask_confirm", lambda *args: False)
     assert cli._prepare_source(config, "random") is None
+
+
+@pytest.mark.parametrize(
+    ("choice_only", "guide_has_required_text"), [(False, False), (True, False), (True, True)]
+)
+def test_random_declining_ai_checks_routes_before_asking_for_a_guide(
+    config, monkeypatch, choice_only, guide_has_required_text
+):
+    config.sections = ["Start", "Interview", "Done"]
+    config.questions[0].branches = {"Study": 2, "Work": 3 if choice_only else 2}
+    config.questions[1].page = 2
+    config.questions[1].required = True
+    monkeypatch.setattr(cli, "_ask_confirm", lambda *args: False)
+    monkeypatch.setattr(cli, "_ask_select", lambda *args, **kwargs: "auto")
+    monkeypatch.setattr(cli, "_generate", lambda *args, **kwargs: pytest.fail("AI was declined"))
+    if choice_only:
+        guide = [{1: "Study", 2: "Written answer on the other route"}] if guide_has_required_text else None
+        monkeypatch.setattr(cli, "_reference_prompt", lambda c: guide)
+        config.questions[0].weights = [100, 1]
+        assert cli._prepare_source(config, "random") == [{1: "Work", 2: ""}, {1: "Work", 2: ""}]
+    else:
+        monkeypatch.setattr(cli, "_reference_prompt", lambda c: pytest.fail("No choice-only route"))
+        assert cli._prepare_source(config, "random") is None
 
 
 def test_random_choice_only_requires_no_ai(config, monkeypatch):
@@ -286,27 +344,29 @@ def test_form_table_shows_full_contents_and_literal_markup(config, monkeypatch):
     assert "Question description [literal]" in output
     assert "[bold]" in output and "Another option" in output
     assert "Required" in output and "Section 1" in output
+    assert "radio" in output and "text" in output
     assert "Very long question" in output
     assert "…" not in output
 
 
-def test_start_new_form_shows_preview_before_asking_for_answers(config, monkeypatch):
-    events = []
-
-    def inspect(url, *, display=True):
-        assert url == config.url
-        events.append("inspect")
-        if display:
-            cli._show_form(config)
-        return config
-
+def test_start_new_form_shows_full_preview_before_asking_for_answers(config, monkeypatch):
+    output = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output, width=100))
+    schema = inspector.FormSchema(
+        url=config.url, title="Survey", description="Read the survey overview.", questions=config.questions
+    )
     monkeypatch.setattr(cli, "_url_prompt", lambda: config.url)
-    monkeypatch.setattr(cli, "_run_inspect", inspect)
-    monkeypatch.setattr(cli, "_show_form", lambda _: events.append("preview"))
-    monkeypatch.setattr(cli, "_form_choices", lambda _: events.append("choose answers"))
+    monkeypatch.setattr(inspector, "inspect_form", lambda url: schema)
+
+    def choose_answers(config):
+        preview = output.getvalue()
+        assert "Survey" in preview and "Read the survey overview." in preview
+        assert "Question / description" in preview
+        assert all(question.text in preview for question in config.questions)
+
+    monkeypatch.setattr(cli, "_form_choices", choose_answers)
 
     cli._new_batch_wizard()
-    assert events == ["inspect", "preview", "choose answers"]
 
 
 def test_explicit_new_url_does_not_reuse_default_config(config, monkeypatch, tmp_path):

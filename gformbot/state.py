@@ -80,14 +80,14 @@ class Journal:
         except (sqlite3.Error, OSError) as exc:
             raise ValueError(f"Cannot read submission journal {self.path}: {exc}") from exc
 
-    def record_followups(self, response, section, stage, blocks, log_path, title):
+    def record_followups(self, response, observations, log_path, title):
         from .config import clean_path
 
         path = str(clean_path(log_path).resolve())
         with self._connect() as connection:
             connection.executemany(
                 "INSERT OR IGNORE INTO followups VALUES(?,?,?,?,?,?,?)",
-                [
+                (
                     (
                         self.identity,
                         response,
@@ -97,8 +97,8 @@ class Journal:
                         path,
                         title,
                     )
-                    for block in blocks
-                ],
+                    for section, stage, block in observations
+                ),
             )
 
     def followups(self, *, log_path=None, last=20):

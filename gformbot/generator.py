@@ -50,7 +50,13 @@ def read_pool(path: str | Path) -> tuple[list[str], list[dict[str, str]]]:
     return list(headers), rows
 
 
-def map_columns(config: RunConfig, headers: list[str], mapping: dict | None = None) -> dict[int, str | None]:
+def map_columns(
+    config: RunConfig,
+    headers: list[str],
+    mapping: dict | None = None,
+    *,
+    allow_missing_required: bool = False,
+) -> dict[int, str | None]:
     supplied = config.pool_column_map if mapping is None else mapping
     if not isinstance(supplied, dict):
         raise ValueError("Column mapping must be an object.")
@@ -69,7 +75,7 @@ def map_columns(config: RunConfig, headers: list[str], mapping: dict | None = No
     by_name = {}
     for header in headers:
         by_name.setdefault(_normal(header), []).append(header)
-    conditional = Routing(config).enabled
+    allow_missing_required = allow_missing_required or Routing(config).enabled
     for q in config.questions:
         explicit = q.index in supplied or str(q.index) in supplied or q.pool_column is not None
         if explicit:
@@ -86,7 +92,7 @@ def map_columns(config: RunConfig, headers: list[str], mapping: dict | None = No
             if len(matches) > 1:
                 raise ValueError(f"Q{q.index}: multiple CSV columns match. Choose its source column.")
             column = matches[0] if matches else None
-        if column is None and q.required and not conditional:
+        if column is None and q.required and not allow_missing_required:
             raise ValueError(f"Q{q.index}: missing required CSV column for {q.text!r}.")
         if column is not None:
             if column in used:
@@ -184,6 +190,20 @@ def parse_checkbox(q: QuestionConfig, value: Any) -> list[str]:
     return selected
 
 
+def _decode_other(question, value):
+    if (
+        question.allow_other
+        and isinstance(value, str)
+        and value not in question.options
+        and value.lstrip().startswith("{")
+    ):
+        try:
+            return json.loads(value)
+        except ValueError as exc:
+            raise ValueError(f"Q{question.index}: invalid Other JSON object.") from exc
+    return value
+
+
 def validate_answer(
     config: RunConfig,
     answer: dict,
@@ -209,16 +229,7 @@ def validate_answer(
             continue
         value = answer.get(q.index, answer.get(str(q.index)))
         value = ([] if q.qtype == "checkbox" else "") if value is None else value
-        if (
-            q.allow_other
-            and isinstance(value, str)
-            and value not in q.options
-            and value.lstrip().startswith("{")
-        ):
-            try:
-                value = json.loads(value)
-            except ValueError as exc:
-                raise ValueError(f"Q{q.index}: invalid Other JSON object.") from exc
+        value = _decode_other(q, value)
         if (
             not isinstance(value, str)
             and not (
@@ -296,8 +307,20 @@ def load_reference(
     repair: bool = False,
     changes: list[str] | None = None,
 ) -> list[dict[int, Any]]:
+    return reference_profiles(config, read_pool(path), mapping=mapping, repair=repair, changes=changes)
+
+
+def reference_profiles(
+    config: RunConfig,
+    pool: tuple[list[str], list[dict[str, str]]],
+    *,
+    mapping: dict | None = None,
+    repair: bool = False,
+    changes: list[str] | None = None,
+) -> list[dict[int, Any]]:
+    """Map and validate already-read CSV rows without opening the file again."""
     validate_config(config)
-    headers, rows = read_pool(path)
+    headers, rows = pool
     columns = map_columns(config, headers, mapping)
     if (
         not any(column is not None for column in columns.values())
@@ -311,9 +334,14 @@ def load_reference(
     profiles = [
         {q.index: row[columns[q.index]] if columns[q.index] else "" for q in config.questions} for row in rows
     ]
+    routing_other = [
+        q for q in config.questions if q.allow_other and (q.branches or q.other_branch is not None)
+    ]
     active = []
     for line, row in enumerate(profiles, 2):
         try:
+            for q in routing_other:
+                row[q.index] = _decode_other(q, row[q.index])
             active.append(routes.active(row))
         except ValueError as exc:
             raise ValueError(f"CSV row {line}: {exc}") from exc
@@ -410,7 +438,12 @@ def _random_from_options(q: QuestionConfig) -> Any:
 
 
 def make_answer(
-    config: RunConfig, pool_row: dict | None = None, *, routing: Routing | None = None, partial: bool = False
+    config: RunConfig,
+    pool_row: dict | None = None,
+    *,
+    routing: Routing | None = None,
+    partial: bool = False,
+    avoid_questions: frozenset[int] = frozenset(),
 ) -> dict[int, Any]:
     routes = routing or Routing(config)
     if pool_row is not None:
@@ -421,8 +454,8 @@ def make_answer(
             routing=routes,
         )
     answer = {q.index: q.fixed_value for q in config.questions if q.fixed_value is not None}
-    if routes.enabled:
-        answer.update(routes.choose_route(answer))
+    if routes.enabled or avoid_questions:
+        answer.update(routes.choose_route(answer, avoid_questions=avoid_questions))
     else:
         routes.require_supported()
     groups = grid_groups(config) if any(q.grid_unique for q in config.questions) else {}
@@ -481,6 +514,10 @@ def prepare_responses(
     return [make_answer(config, routing=routes) for _ in range(config.count)]
 
 
+def csv_headers(config: RunConfig) -> list[str]:
+    return [f"entry.{q.entry_id}" if q.entry_id else f"Q{q.index}" for q in config.questions]
+
+
 def write_csv(config: RunConfig, answers: list[dict], path: str | Path) -> Path:
     from .locking import file_lock
 
@@ -488,7 +525,7 @@ def write_csv(config: RunConfig, answers: list[dict], path: str | Path) -> Path:
     if config.pool_file and target.resolve() == clean_path(config.pool_file).resolve():
         raise ValueError("The output CSV cannot overwrite your source CSV.")
     target.parent.mkdir(parents=True, exist_ok=True)
-    headers = [f"entry.{q.entry_id}" if q.entry_id else f"Q{q.index}" for q in config.questions]
+    headers = csv_headers(config)
     temporary = None
     try:
         with file_lock(target, timeout=5):

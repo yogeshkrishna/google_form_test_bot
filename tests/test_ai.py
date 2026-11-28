@@ -150,9 +150,10 @@ def test_unsupported_form_makes_no_request(config, monkeypatch):
 def test_batches_and_corrections_reuse_one_client(monkeypatch, config):
     closed = []
     monkeypatch.setattr(Client, "close", lambda client: closed.append(client))
-    calls = mock_chat(monkeypatch, [reply(profile(), profile("bad")), reply(profile("B")), reply(profile())])
+    calls = mock_chat(monkeypatch, [reply(profile(), profile("bad")), reply(profile()), reply(profile("B"))])
     assert len(ai.generate_responses(config, 3, batch_size=2)) == 3
-    assert len(calls) == 3 and len(closed) == 1
+    assert [call["task"]["profile_numbers"] for call in calls] == [[1, 2], [3], [2]]
+    assert len(closed) == 1
     assert all(call["client"] is closed[0] for call in calls)
 
 

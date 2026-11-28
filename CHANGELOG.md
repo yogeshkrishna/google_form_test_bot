@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.4
+
+- Quick submit uses the same preparation and checks as the normal wizard, then sends the full batch automatically. Both wizards accept a pasted CSV path or the file picker.
+- Show the current AI stage and elapsed time while waiting. Repair missing fields without regenerating independently valid answers or changing a verified route.
+- Reject CSVs with no matching columns before showing a mapping table. Random answers without AI use routes that can be completed with the available choices.
+- Use my own answers can copy a prompt for creating the form's CSV.
+- Rename the recovery menu to Continue batches.
+- Use question-number media observations across AI workflows, and keep CSV-guided random answers on the selected route.
+- Load media links in the background and open them with a single click in supported terminals.
+- Clear keypresses queued during work before showing the Start menu again.
+- Continue reviewing independent responses if a review group fails. Keep saved batches resumable across interruptions.
+- Require supporting quotes for AI review findings that compare answers. Restore duplicate-contact guidance when resuming a synthetic batch.
+- Reduce local work when packing AI prompts, saving drafts, and recording form instructions before submission.
+- Skip AI route selection for responses with a verified preset route, and size question groups against the actual prompt and estimated reply.
+- Keep generating other responses when an individual response exhausts its retries. Continue the saved draft directly from the wizard or run `prepare --resume` with the draft file alone.
+- Keep batches large when individual answers need correction. Generate and review responses across branches together when they fit within the prompt limits.
+- Batch field corrections separately from new responses, track generated contact collisions, and grow review batches after complete replies.
+
 ## 0.4.3
 
 - Show the form introduction before the question table and open the preview automatically in Start a new form.

@@ -12,6 +12,8 @@ _RETIRED = {
     "gformbot/browser.py",
     "gformbot/chatgpt.py",
     "gformbot/filler.py",
+    "gformbot/media_preview.html",
+    "gformbot/media_preview.py",
     "gformbot/selenium_runtime.py",
     "setup.py",
 }

@@ -91,7 +91,9 @@ def _restore(config, state, bases, routes, units):
             navigation = {
                 q.index
                 for q in config.questions
-                if q.index in active and (q.branches or q.other_branch is not None)
+                if q.index in active
+                and (q.branches or q.other_branch is not None)
+                and (q.page != len(routes.questions) or q.index in row)
             }
             validated = prefix | navigation
             complete_map = position == len(task) and len(row) == len(allowed)
@@ -141,7 +143,8 @@ def generate_partitioned(
     quality=None,
     client=None,
 ):
-    from .ai import GenerationError, _generate_responses, _preserve_presets
+    from .ai import GenerationError, _generate_responses, _generation_capacity, _preserve_presets
+    from .ai_context import history_keys, selected_history
     from .chatgpt_http import Client
 
     routes = Routing(config)
@@ -151,6 +154,7 @@ def generate_partitioned(
         for i in range(count)
     ]
     completed = {}
+    failed = {}
     positions = [0] * count
     paths = [None] * count
     units = _units(config)
@@ -183,7 +187,16 @@ def generate_partitioned(
             reported = len(completed)
             progress(reported, count)
 
-    def generate_part(subconfig, identities, references, context, shared_context, received):
+    evidence_blocked = False
+
+    def check_evidence(identity, path):
+        nonlocal evidence_blocked
+        protected = partials[identity] if partials else ()
+        if reason := quality.preflight_evidence(rows[identity], route=path, protected=protected):
+            failed[identity] = reason
+            evidence_blocked = True
+
+    def group_presets(subconfig, identities):
         keys = {q.index for q in subconfig.questions}
         presets = []
         for index in identities:
@@ -198,6 +211,11 @@ def generate_partitioned(
                     )
                 )
             presets.append(selected)
+        return presets
+
+    def generate_part(subconfig, identities, references, context, shared_context, received):
+        keys = {q.index for q in subconfig.questions}
+        presets = group_presets(subconfig, identities)
 
         def qualify(identity, value):
             index = identities[identity - 1]
@@ -238,28 +256,18 @@ def generate_partitioned(
             _transform=qualify if quality else None,
         )
 
-    def generate(subconfig, identities, *, on_record, references=None, context=None, shared_context=None):
+    def generate(
+        subconfig,
+        identities,
+        *,
+        on_record,
+        references=None,
+        context=None,
+        shared_context=None,
+        fits_one=False,
+    ):
         if context is None:
             context = [{"response_number": identity + 1} for identity in identities]
-        from .ai import _estimate_profile_size
-        from .ai_context import pack_history
-
-        shared, profiles = pack_history(
-            shared_context or {}, {str(i + 1): item for i, item in enumerate(context)}
-        )
-        request_size = (
-            len(
-                json.dumps(
-                    [asdict(subconfig), shared, profiles, references, instructions], ensure_ascii=False
-                ).encode()
-            )
-            + 4_500
-        )
-        needs_batches = (
-            len(identities) > batch_size
-            or len(identities) * _estimate_profile_size(subconfig, instructions, references or []) > 24_000
-            or request_size > 28_000
-        )
 
         delivered = set()
 
@@ -276,22 +284,47 @@ def generate_partitioned(
                 finally:
                     save_progress()
 
-        if len(identities) <= 4 or not needs_batches:
+        def finish_part(part_ids, result):
             try:
-                values = generate_part(
+                values = result()
+            except GenerationError as error:
+                receive(part_ids, error.partial_records)
+                if not error.failed_records:
+                    raise
+                failed.update((part_ids[i], reason) for i, reason in error.failed_records.items())
+                return
+            receive(part_ids, dict(enumerate(values)))
+            if len(values) != len(part_ids):
+                raise GenerationError("A generated group is missing response records.")
+
+        def needs_batches():
+            from .ai import _estimate_profile_size
+            from .ai_context import pack_history
+
+            if (
+                len(identities) > batch_size
+                or len(identities) * _estimate_profile_size(subconfig, instructions, references or [])
+                > 24_000
+            ):
+                return True
+            shared, profiles = pack_history(
+                shared_context or {}, {str(i + 1): item for i, item in enumerate(context)}
+            )
+            candidate = [asdict(subconfig), shared, profiles, references, instructions]
+            return len(json.dumps(candidate, ensure_ascii=False).encode()) + 4_500 > 28_000
+
+        if len(identities) <= 4 or fits_one or not needs_batches():
+            finish_part(
+                identities,
+                lambda: generate_part(
                     subconfig,
                     identities,
                     references,
                     context,
                     shared_context,
                     lambda records: receive(identities, records),
-                )
-            except GenerationError as error:
-                receive(identities, getattr(error, "partial_records", {}))
-                raise
-            receive(identities, dict(enumerate(values)))
-            if len(values) != len(identities):
-                raise GenerationError("A generated group is missing response records.")
+                ),
+            )
             return
         middle = (len(identities) + 1) // 2
         offsets = (0, middle, len(identities))
@@ -312,14 +345,7 @@ def generate_partitioned(
         def consume(future):
             consumed.add(future)
             start, end = futures[future]
-            try:
-                result = future.result()
-            except GenerationError as error:
-                receive(identities[start:end], getattr(error, "partial_records", {}))
-                raise
-            receive(identities[start:end], dict(enumerate(result)))
-            if len(result) != end - start:
-                raise GenerationError("A generated group is missing response records.")
+            finish_part(identities[start:end], future.result)
 
         try:
             for future in as_completed(futures):
@@ -337,9 +363,25 @@ def generate_partitioned(
             raise
 
     try:
+        if routes.enabled:
+            for identity, row in enumerate(rows):
+                if paths[identity] is not None:
+                    continue
+                try:
+                    path = routes.known_path(row)
+                    if path is None:
+                        continue
+                    routes.require_supported({q.index for page in path for q in routes.questions[page]})
+                    paths[identity] = tuple(path)
+                except ValueError as exc:
+                    failed[identity] = str(exc)
         save_progress()
+        if quality is not None:
+            for identity, path in enumerate(paths):
+                if identity not in failed:
+                    check_evidence(identity, path)
         routing_questions = [q for q in config.questions if q.branches or q.other_branch is not None]
-        pending = [identity for identity, path in enumerate(paths) if path is None]
+        pending = [identity for identity, path in enumerate(paths) if path is None and identity not in failed]
         if routing_questions and pending:
             route_config = _slice(config, routing_questions, count, set(range(1, len(routes.questions) + 1)))
             route_config.questions = [replace(q, required=False) for q in route_config.questions]
@@ -393,74 +435,37 @@ def generate_partitioned(
                     ],
                     on_record=accept_route,
                 )
-                invalid = [identity for identity in pending if paths[identity] is None]
+                invalid = [
+                    identity for identity in pending if paths[identity] is None and identity not in failed
+                ]
                 if not invalid:
                     break
                 if attempt == max_retries:
-                    raise GenerationError("ChatGPT could not select supported terminating routes.")
+                    failed.update(
+                        (identity, "Could not choose a supported route through the form.")
+                        for identity in invalid
+                    )
+                    break
                 pending = invalid
                 route_config.form_description += (
                     "\nPrior routing choices formed a loop or entered an unsupported section. Correct them."
                 )
 
         paths = [
-            path if path is not None else tuple(routes.walk(row))
-            for path, row in zip(paths, rows, strict=True)
+            path if path is not None or identity in failed else tuple(routes.walk(row))
+            for identity, (path, row) in enumerate(zip(paths, rows, strict=True))
         ]
         revision += 1
         save_progress()
-        tasks = [[unit for page in path for unit in units[page]] for path in paths]
+        if quality is not None:
+            for identity, path in enumerate(paths):
+                if identity not in failed:
+                    check_evidence(identity, path)
+        tasks = [[unit for page in (path or ()) for unit in units[page]] for path in paths]
         reference_active = [routes.active(row) for row in (reference or [])]
 
-        def finish(identity):
-            if identity in completed or positions[identity] != len(tasks[identity]):
-                return
-            answer = validate_answer(config, rows[identity], routing=routes)
-            _preserve_presets(answer, fixed, partials[identity] if partials else None)
-            completed[identity] = answer
-            if progress and checkpoint is None:
-                progress(len(completed), count)
-
-        for identity in range(count):
-            finish(identity)
-
-        while len(completed) < count:
-            waiting = defaultdict(list)
-            for identity, position in enumerate(positions):
-                if identity in completed:
-                    continue
-                if position == len(tasks[identity]):
-                    finish(identity)
-                else:
-                    questions, _ = tasks[identity][position]
-                    waiting[tuple(q.index for q in questions)].append(identity)
-            if not waiting:
-                break
-            # Let other branches catch up before generating their shared tail.
-            # Individually terminating routes can still form a cyclic union;
-            # in that case keep making progress with the largest ready group.
-            later = {
-                tuple(q.index for q in unit[0])
-                for identity, task in enumerate(tasks)
-                for unit in task[positions[identity] + 1 :]
-            }
-            ready = [identities for key, identities in waiting.items() if key not in later]
-            identities = max(ready or waiting.values(), key=len)
-            questions, total, steps = [], 0, 0
-            while True:
-                next_units = [
-                    tasks[i][positions[i] + steps] if positions[i] + steps < len(tasks[i]) else None
-                    for i in identities
-                ]
-                unit = next_units[0]
-                if unit is None or any(other is None or other[0] != unit[0] for other in next_units[1:]):
-                    break
-                group, size = unit
-                if questions and total + size > _GROUP_BYTES:
-                    break
-                questions.extend(group)
-                total += size
-                steps += 1
+        def group_context(groups, identities):
+            questions = [q for group, _ in groups for q in group]
             pages = {q.page for q in questions}
             subset = _slice(config, questions, len(identities), pages)
             keys = {q.index for q in questions}
@@ -469,8 +474,6 @@ def generate_partitioned(
                 for row, reached in zip(reference or [], reference_active, strict=True)
                 if keys <= reached
             ]
-            from .ai_context import history_keys, selected_history
-
             relevant = history_keys(config, questions, instructions)
             context = [
                 {
@@ -487,15 +490,105 @@ def generate_partitioned(
             shared = {
                 "previous_questions": {str(q.index): q.text for q in config.questions if q.index in known}
             }
-            if config.sections and len(config.sections) > 1:
+            if len(config.sections) > 1:
                 reached = {page for i in identities for page in paths[i]}
                 shared.update(
                     original_question_sections={str(q.index): q.page for q in questions},
                     route_section_titles={
                         page: title for page, title in enumerate(config.sections, 1) if page in reached
                     },
-                    route_scope="Interpret prior-branch questions at their original section. Separate gates do not indicate switching a branch.",
+                    route_scope=(
+                        "Interpret prior-branch questions at their original section. "
+                        "Separate gates do not indicate switching a branch."
+                    ),
                 )
+            return subset, keys, guide, context, shared
+
+        def group_capacity(group, identities):
+            subset, _, guide, context, shared = group
+            return _generation_capacity(
+                subset,
+                reference=guide,
+                instructions=instructions,
+                batch_size=batch_size,
+                timeout=timeout,
+                max_retries=max_retries,
+                partials=group_presets(subset, identities),
+                _profile_context=context,
+                _context=shared,
+                quality=quality,
+            )
+
+        def finish(identity):
+            if identity in completed or identity in failed or positions[identity] != len(tasks[identity]):
+                return
+            answer = validate_answer(config, rows[identity], routing=routes)
+            _preserve_presets(answer, fixed, partials[identity] if partials else None)
+            completed[identity] = answer
+            if progress and checkpoint is None:
+                progress(len(completed), count)
+
+        for identity in range(count):
+            finish(identity)
+
+        while len(completed) < count:
+            waiting = defaultdict(list)
+            for identity, position in enumerate(positions):
+                if identity in completed or identity in failed:
+                    continue
+                if position == len(tasks[identity]):
+                    finish(identity)
+                else:
+                    questions, _ = tasks[identity][position]
+                    waiting[tuple(q.index for q in questions)].append(identity)
+            if not waiting:
+                break
+            # Let other branches catch up before generating their shared tail.
+            # Individually terminating routes can still form a cyclic union;
+            # in that case keep making progress with the largest ready group.
+            later = {
+                tuple(q.index for q in unit[0])
+                for identity, task in enumerate(tasks)
+                if identity not in failed
+                for unit in task[positions[identity] + 1 :]
+            }
+            ready = [identities for key, identities in waiting.items() if key not in later]
+            identities = max(ready or waiting.values(), key=len)
+            groups, total, steps = [], 0, 0
+            while True:
+                offset = len(groups)
+                next_units = [
+                    tasks[i][positions[i] + offset] if positions[i] + offset < len(tasks[i]) else None
+                    for i in identities
+                ]
+                unit = next_units[0]
+                if unit is None or any(other is None or other[0] != unit[0] for other in next_units[1:]):
+                    break
+                _, size = unit
+                # Bound the amount of speculative prompt building.
+                if groups and total + size > _GROUP_BYTES * 2:
+                    break
+                if not groups or total + size <= _GROUP_BYTES:
+                    steps = offset + 1
+                groups.append(unit)
+                total += size
+            group = group_context(groups[:steps], identities)
+            capacity = group_capacity(group, identities) if len(groups) > 1 else None
+            if len(groups) > steps:
+                larger = group_context(groups, identities)
+                if len(larger[2]) == len(group[2]):
+                    # Wider groups should not force extra reply batches for the same profiles.
+                    larger_capacity = group_capacity(larger, identities)
+                    if larger_capacity == len(identities):
+                        steps, group, capacity = len(groups), larger, larger_capacity
+            # Reached answers, guide examples and instructions can exhaust the budget
+            # even when the rough question-only estimate was small.
+            while capacity == 0 and steps > 1:
+                steps //= 2
+                group = group_context(groups[:steps], identities)
+                if steps > 1:
+                    capacity = group_capacity(group, identities)
+            subset, keys, guide, context, shared = group
 
             def accept_group(identity, value, *, group=subset, group_keys=keys, advance=steps):
                 nonlocal revision
@@ -516,7 +609,12 @@ def generate_partitioned(
                 references=guide,
                 context=context,
                 shared_context=shared,
+                fits_one=capacity == len(identities),
                 on_record=accept_group,
+            )
+        if failed:
+            raise GenerationError.incomplete(
+                len(completed), count, failed, None if evidence_blocked else max_retries + 1
             )
         return [completed[i] for i in range(count)]
     except (GenerationError, ValueError, OSError) as error:
@@ -535,6 +633,7 @@ def generate_partitioned(
                 for identity, row in enumerate(rows)
                 if identity not in completed and row
             },
+            failed_records=getattr(error, "failed_records", None),
             provider_error=getattr(error, "provider_error", None),
         ) from error
     except KeyboardInterrupt:

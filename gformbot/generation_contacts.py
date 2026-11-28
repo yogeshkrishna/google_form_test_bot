@@ -33,8 +33,9 @@ _PHONE_SEQUENCE = "01234567890123456789"
 
 
 class ContactAnswerError(ValueError):
-    def __init__(self, problems: dict[int, str]):
+    def __init__(self, problems: dict[int, str], *, duplicates: dict[int, str] | None = None):
         self.keys = tuple(str(key) for key in problems)
+        self.duplicates = {str(key): value for key, value in (duplicates or {}).items()}
         super().__init__(" ".join(f"Q{key}: {reason}" for key, reason in problems.items()))
 
 

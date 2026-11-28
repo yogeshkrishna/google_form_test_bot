@@ -42,7 +42,7 @@ def test_start_is_persisted_once_without_changing_identity_or_response_states(sa
     assert current.payload["submission_started"] is True
     assert current.identity == identity and current.ids == ids
     assert current.journal.states() == {}
-    matches, _ = cli._saved_batches(started_only=True)
+    matches, _ = cli._saved_batches()
     assert len(matches) == 1
 
 
@@ -58,7 +58,7 @@ def test_connection_failure_before_first_submission_keeps_batch_discoverable(sav
     restored, rows = cli._load_plan(path)
     assert restored._submission_started and restored._submitted_indices == []
     assert rows == answers and restored._outcomes == {}
-    assert len(cli._saved_batches(started_only=True)[0]) == 1
+    assert len(cli._saved_batches()[0]) == 1
 
 
 def setup_runner(saved, monkeypatch):
@@ -83,6 +83,42 @@ def setup_runner(saved, monkeypatch):
     return c, answers, path
 
 
+@pytest.mark.parametrize(("requested", "confirmed"), [(2, 0), (3, 0), (3, 1)])
+def test_submission_summary_keeps_requested_and_confirmed_totals(
+    saved, monkeypatch, capsys, requested, confirmed
+):
+    config, answers, path = saved
+    path = cli._save_plan(config, answers, path.with_name("partial.json"))
+    if requested > config.count:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["requested_count"] = requested
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    previous = session((config, answers, path))
+    if confirmed:
+        previous.start()
+        previous.before_submit(1)
+        previous.confirm(1)
+    config, answers = cli._load_plan(path)
+    config, _, _ = setup_runner((config, answers, path), monkeypatch)
+
+    sent = []
+
+    def submit(self, answer, *, before_submit, **kwargs):
+        before_submit()
+        sent.append(answer)
+        return True, "Accepted"
+
+    monkeypatch.setattr(transport.Client, "submit", submit)
+    assert cli._run_submit(config, answers=answers[confirmed:])
+    assert sent == answers[confirmed:]
+    expected = (
+        "Finished: 2/2 submitted"
+        if requested == 2
+        else "Finished: 2 of 3 submitted · 1 skipped during generation"
+    )
+    assert expected in capsys.readouterr().out
+
+
 def test_uncertain_submit_is_not_silently_requeued(saved, monkeypatch):
     c, answers, path = setup_runner(saved, monkeypatch)
 
@@ -96,6 +132,58 @@ def test_uncertain_submit_is_not_silently_requeued(saved, monkeypatch):
     restored, rows = cli._load_plan(path)
     with pytest.raises(UncertainSubmission, match="previous outcome"):
         cli._track_plan(restored, rows, path, digest(path))
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_submission_persists_scoped_form_notes_in_batches(saved, monkeypatch, interrupted):
+    c, answers, path = setup_runner(saved, monkeypatch)
+    journal = c._session.journal
+    writes = []
+    record = Journal.record_followups
+
+    def track(self, response, observations, log_path, title):
+        writes.append((response, [(section, stage) for section, stage, _ in observations]))
+        record(self, response, observations, log_path, title)
+
+    monkeypatch.setattr(Journal, "record_followups", track)
+
+    def submit(self, answer, *, before_submit, observe):
+        response = answers.index(answer) + 1
+        observe(0, "intro", [{"text": "Introduction"}])
+        observe(
+            1,
+            "section",
+            [{"text": "One"}, {"text": "Visit https://example.test/help?token=private."}],
+        )
+        observe(3, "section", [{"text": "Three"}])
+        if interrupted:
+            raise KeyboardInterrupt
+        before_submit()
+        assert journal.states()[response] == "attempted"
+        records = [item for item in journal.followups() if item["response"] == response]
+        assert [item["content"]["text"] for item in records] == [
+            "Introduction",
+            "One",
+            "Visit https://example.test/help?token=REDACTED.",
+            "Three",
+        ]
+        observe(0, "confirmation", [{"text": "Received"}])
+        assert journal.followups()[-1]["content"]["text"] == "Received"
+        return True, "Accepted"
+
+    monkeypatch.setattr(transport.Client, "submit", submit)
+    prep = [(0, "intro"), (1, "section"), (1, "section"), (3, "section")]
+    if interrupted:
+        with pytest.raises(KeyboardInterrupt):
+            cli._run_submit(c, answers=answers)
+        assert writes == [(1, prep)]
+        assert journal.states() == {}
+        assert [item["section"] for item in journal.followups()] == [0, 1, 1, 3]
+    else:
+        assert cli._run_submit(c, answers=answers)
+        assert writes == [(1, prep), (1, [(0, "confirmation")]), (2, prep), (2, [(0, "confirmation")])]
+        assert journal.states() == {1: "confirmed", 2: "confirmed"}
+    assert path.is_file()
 
 
 def test_missing_retention_policy_preserves_identity_progress_and_uncertainty(saved):

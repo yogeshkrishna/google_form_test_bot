@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+from dataclasses import asdict
 from threading import Barrier, current_thread
 
 import pytest
@@ -9,6 +10,74 @@ import pytest
 from gformbot import ai, ai_partition, chatgpt_http
 from gformbot.ai_partition import generate_partitioned
 from gformbot.config import QuestionConfig, RunConfig
+from gformbot.generation_quality import Quality
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_moderate_branching_form_fits_one_compact_turn_and_resumes(monkeypatch, interrupt):
+    branches = {f"Track {i}": i + 1 for i in range(1, 7)}
+    config = RunConfig(
+        "https://docs.google.com/forms/d/e/compact-branching/viewform",
+        count=5,
+        sections=["Start", *branches],
+        section_next=[2, 0, 0, 0, 0, 0, 0],
+        questions=[
+            QuestionConfig(1, "Which track applies?", "radio", True, list(branches), branches=branches)
+        ],
+    )
+    options = [f"Qualification {i}: foundations and practical workplace experience" for i in range(1, 9)]
+    for page in range(2, 8):
+        for _ in range(10):
+            index = len(config.questions) + 1
+            config.questions.append(
+                QuestionConfig(
+                    index, f"How do you apply skill {index} in your track?", "radio", True, options, page=page
+                )
+            )
+
+    requested, checkpoints = [], []
+    route_choices = [1, 1, 2, 3, 4]
+    partials = [{2: options[1]}, {}, {}, {}, {}]
+
+    def ask(self, messages, *, timeout):
+        task = json.loads(messages[-1]["content"])
+        identities = task["profile_numbers"]
+        requested.append(identities)
+        assert len(task["questions"]["rows"]) == len(config.questions)
+        assert task["routing"]["choices"]["1"] == {str(i): i + 1 for i in range(1, 7)}
+        replies = []
+        for number in identities:
+            route_choice = route_choices[number - 1]
+            answers = {
+                str(q.index): route_choice if q.index == 1 else 1 if q.page == route_choice + 1 else 0
+                for q in config.questions
+            }
+            if number == 1:
+                answers["2"] = 2
+            replies.append(json.dumps({"profile_id": number, "answers": answers}))
+        if interrupt and len(requested) == 1:
+            failure = KeyboardInterrupt()
+            failure.partial_content = replies[0]
+            raise failure
+        return "\n".join(replies)
+
+    monkeypatch.setattr(chatgpt_http.Client, "ask", ask)
+
+    def generate(state=None):
+        return ai.complete_responses(config, partials, resume_state=state, checkpoint=checkpoints.append)
+
+    resume = None
+    if interrupt:
+        with pytest.raises(KeyboardInterrupt):
+            generate()
+        resume = checkpoints[-1]
+        assert resume["strategy"] == "flat"
+        assert [profile["position"] for profile in resume["profiles"]] == [1, 0, 0, 0, 0]
+    rows = generate(resume)
+    assert requested == ([[1, 2, 3, 4, 5], [2, 3, 4, 5]] if interrupt else [[1, 2, 3, 4, 5]])
+    assert [row[1] for row in rows] == [f"Track {i}" for i in route_choices]
+    assert rows[0][2] == options[1]
+    assert all(row[2] == "" for row in rows[2:])
 
 
 @pytest.fixture
@@ -94,6 +163,129 @@ def test_partitions_follow_routes_preserve_presets_and_keep_grid_rows_together(c
     assert config.questions[0].branches == {"Left": 2, "Right": 3}
 
 
+def test_groups_can_exceed_rough_limit_when_the_complete_prompt_fits(monkeypatch):
+    config = RunConfig(
+        "https://docs.google.com/forms/d/e/group-capacity/viewform",
+        questions=[
+            QuestionConfig(i, f"Status {i}", "radio", required=True, options=["Ready", "Pending"])
+            for i in range(1, 41)
+        ],
+    )
+    sent = []
+
+    def ask(self, messages, *, timeout):
+        task = json.loads(messages[-1]["content"])
+        assert ai._escaped_bytes("\n".join(message["content"] for message in messages)) <= 32_000
+        keys = [item["key"] for item in task["questions"]]
+        sent.append([int(key) for key in keys])
+        return json.dumps({"profile_id": 1, "answers": {key: 1 for key in keys}})
+
+    monkeypatch.setattr(chatgpt_http.Client, "ask", ask)
+    assert generate_partitioned(config, 1) == [{q.index: "Ready" for q in config.questions}]
+    assert len(sent) < 3
+    sizes = {q.index: len(json.dumps([asdict(q)], ensure_ascii=False).encode()) for q in config.questions}
+    assert sum(sizes[key] for key in sent[0]) > ai_partition._GROUP_BYTES
+
+
+def test_capacity_check_uses_complete_wire_prompt_without_calling_provider(monkeypatch):
+    config = RunConfig(
+        "https://docs.google.com/forms/d/e/group-capacity/viewform",
+        count=4,
+        questions=[QuestionConfig(1, "Status", "text", required=True)],
+    )
+    monkeypatch.setattr(
+        chatgpt_http.Client, "ask", lambda *args, **kwargs: pytest.fail("Measuring capacity called the model")
+    )
+    assert ai._generation_capacity(config) == 4
+    assert ai._generation_capacity(config, instructions='"' * 3500, _prompt_budget=8000) == 0
+
+
+def test_over_budget_question_group_splits_before_contacting_provider(monkeypatch):
+    config = RunConfig(
+        "https://docs.google.com/forms/d/e/group-capacity/viewform",
+        questions=[QuestionConfig(i, f"Status {i}", "text", required=True) for i in range(1, 7)],
+    )
+    sent = []
+
+    def generate(group, count, **options):
+        sent.append([q.index for q in group.questions])
+        assert len(group.questions) <= 2
+        return [{q.index: "Ready" for q in group.questions}]
+
+    monkeypatch.setattr(ai, "_generation_capacity", lambda group, **kw: int(len(group.questions) <= 2))
+    monkeypatch.setattr(ai, "_generate_responses", generate)
+    assert generate_partitioned(config, 1) == [{q.index: "Ready" for q in config.questions}]
+    assert [key for group in sent for key in group] == list(range(1, 7))
+
+
+@pytest.mark.parametrize("fixed", [False, True])
+def test_known_routes_skip_route_generation(config, monkeypatch, fixed):
+    calls = fake_generator(monkeypatch)
+    if fixed:
+        config.questions[0].fixed_value = "Left"
+    rows = generate_partitioned(config, 1, partials=None if fixed else [{1: "Left"}])
+
+    assert rows == [{1: "Left", 2: "Left generated", 3: "", 4: "", 5: "End 1"}]
+    assert calls and all("Routing metadata:" not in group.form_description for group, _ in calls)
+    assert all(q.index not in {3, 4} for group, _ in calls for q in group.questions)
+
+
+def test_only_open_profiles_need_route_generation(config, monkeypatch):
+    calls = fake_generator(monkeypatch)
+    checkpoints = []
+    rows = generate_partitioned(config, 2, partials=[{}, {1: "Right"}], checkpoint=checkpoints.append)
+
+    routing = [options for group, options in calls if "Routing metadata:" in group.form_description]
+    assert [call["_profile_context"] for call in routing] == [[{"response_number": 1}]]
+    assert checkpoints[0]["profiles"][1]["route"] == [1, 3, 4]
+    assert [row[1] for row in rows] == ["Left", "Right"]
+    assert rows[0][3] == rows[1][2] == ""
+
+
+@pytest.mark.parametrize("invalid", ["option", "loop", "unsupported"])
+def test_invalid_preselected_routes_fail_without_generation(config, monkeypatch, invalid):
+    choice = "Left"
+    if invalid == "loop":
+        config.questions[0].branches["Left"] = 1
+    elif invalid == "unsupported":
+        config.questions[1].unsupported = ["Unsupported required left-side control"]
+    else:
+        choice = "Unknown"
+    monkeypatch.setattr(
+        ai, "_generate_responses", lambda *args, **kwargs: pytest.fail("Invalid known route generated")
+    )
+
+    with pytest.raises(ai.GenerationError) as caught:
+        generate_partitioned(config, 1, partials=[{1: choice}])
+    assert caught.value.failed_records.keys() == {0}
+
+
+def test_known_route_with_open_final_branch_control_resumes(config, monkeypatch):
+    close = config.questions[-1]
+    close.qtype, close.options, close.branches = "radio", ["Finish"], {"Finish": 1}
+    partials = [{1: "Right"}]
+    checkpoints = []
+
+    def stop(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(ai, "_generate_responses", stop)
+    with pytest.raises(KeyboardInterrupt):
+        generate_partitioned(config, 1, partials=partials, checkpoint=checkpoints.append)
+    state = checkpoints[-1]
+    assert state["profiles"] == [{"answers": {"1": "Right"}, "position": 0, "route": [1, 3, 4]}]
+
+    def finish(group, count, **options):
+        values = {1: "Right", 3: "One", 4: "Two", 5: "Finish"}
+        assert "Routing metadata:" not in group.form_description
+        return [{q.index: values[q.index] for q in group.questions}]
+
+    monkeypatch.setattr(ai, "_generate_responses", finish)
+    assert generate_partitioned(config, 1, partials=partials, resume_state=state) == [
+        {1: "Right", 2: "", 3: "One", 4: "Two", 5: "Finish"}
+    ]
+
+
 def test_partition_failure_exposes_only_complete_original_profiles(config, monkeypatch):
     fake_generator(monkeypatch, fail_right=True)
     progress = []
@@ -112,6 +304,34 @@ def test_branches_rejoin_before_generating_shared_tail(config, monkeypatch):
     tails = [(c.count, options) for c, options in calls if [q.index for q in c.questions] == [5]]
     assert len(tails) == 1 and tails[0][0] == 2
     assert [row[5] for row in rows] == ["End 1", "End 2"]
+
+
+def test_partition_finishes_other_profiles_when_one_contact_exhausts_retries(monkeypatch):
+    config = RunConfig(
+        "https://docs.google.com/forms/d/e/partition/viewform",
+        count=6,
+        questions=[QuestionConfig(1, "Phone", "text"), QuestionConfig(2, "Reason", "text", True)],
+    )
+    snapshots = []
+    monkeypatch.setattr(ai_partition, "_GROUP_BYTES", 1)
+
+    def ask(self, messages, *, timeout):
+        task = json.loads(messages[-1]["content"])
+        key = task["questions"][0]["key"]
+        rows = []
+        for local in task["profile_numbers"]:
+            original = task["profile_context"][str(local)]["response_number"]
+            phone = 1 if original == 2 else original
+            answer = f"+1 303 555 010{phone}" if key == "1" else f"Reason {original}"
+            rows.append(json.dumps({"profile_id": local, "answers": {key: answer}}))
+        return "\n".join(rows)
+
+    monkeypatch.setattr(chatgpt_http.Client, "ask", ask)
+    with pytest.raises(ai.GenerationError, match=r"5/6.*Response 2: Q1:.*another response") as caught:
+        generate_partitioned(config, 6, batch_size=2, quality=Quality(config), checkpoint=snapshots.append)
+    assert caught.value.failed_records.keys() == {1}
+    assert set(caught.value.partial_records) == {0, 2, 3, 4, 5}
+    assert [profile["position"] for profile in snapshots[-1]["profiles"]] == [2, 0, 2, 2, 2, 2]
 
 
 def test_join_scheduler_handles_cyclic_union_of_terminating_routes(monkeypatch):
@@ -152,7 +372,7 @@ def test_routing_loops_receive_bounded_corrections_before_any_question_group(con
         return [{1: "Left"}]
 
     monkeypatch.setattr(ai, "_generate_responses", generate)
-    with pytest.raises(ai.GenerationError, match="supported terminating routes"):
+    with pytest.raises(ai.GenerationError, match="supported route through the form"):
         generate_partitioned(config, 1, max_retries=1)
     assert len(calls) == 2
 
