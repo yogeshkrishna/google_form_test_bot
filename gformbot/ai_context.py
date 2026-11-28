@@ -152,34 +152,27 @@ def selected_history(row: dict, keys: set[int], presets=()) -> dict:
 def pack_history(shared: dict, profiles: dict) -> tuple[dict, dict]:
     """Pool exact prior answers across only the profiles in this request."""
     titles = shared.get("previous_questions", {})
-    present = {key for profile in profiles.values() for key in profile.get("earlier_answers", {})}
+    prior = {identity: profile.get("earlier_answers", {}) for identity, profile in profiles.items()}
+    present = dict.fromkeys(key for answers in prior.values() for key in answers)
     keys = dict.fromkeys(key for key in titles if key in present)
-    for profile in profiles.values():
-        keys.update(dict.fromkeys(profile.get("earlier_answers", {})))
-    columns, indexes = [], []
+    keys.update(present)
+    packed = {identity: {**profile, "earlier_answers": []} for identity, profile in profiles.items()}
+    columns = []
     for key in keys:
         values, signatures = [], {}
-        for profile in profiles.values():
-            answers = profile.get("earlier_answers", {})
+        for identity, answers in prior.items():
+            cells = packed[identity]["earlier_answers"]
             if key not in answers:
+                cells.append(0)
                 continue
             value = answers[key]
             signature = _signature(value)
-            if signature not in signatures:
+            index = signatures.get(signature)
+            if index is None:
                 values.append(value)
-                signatures[signature] = len(values)
+                signatures[signature] = index = len(values)
+            cells.append(index)
         columns.append([key, titles.get(key, ""), values])
-        indexes.append(signatures)
-    packed = {}
-    for identity, profile in profiles.items():
-        answers = profile.get("earlier_answers", {})
-        packed[identity] = {
-            **profile,
-            "earlier_answers": [
-                indexes[index][_signature(answers[key])] if key in answers else 0
-                for index, key in enumerate(keys)
-            ],
-        }
     context = {key: value for key, value in shared.items() if key != "previous_questions"}
     context["history"] = {
         "columns": columns,

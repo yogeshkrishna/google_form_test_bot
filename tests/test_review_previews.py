@@ -52,19 +52,16 @@ def test_saved_previews_sorted_by_creation_not_edit_time_and_found_from_other_fo
         return choices[0].value
 
     monkeypatch.setattr(cli, "_ask_select", select)
-    selected = cli._select_saved_preview(config)
+    selected = cli._select_saved_preview()
     assert selected.path == new
     assert [c.value.path for c in seen if isinstance(c.value, cli.SavedPreview)] == [new, old]
 
 
-def test_missing_corrupt_and_other_form_previews_are_skipped(batch, monkeypatch, tmp_path):
+def test_missing_and_corrupt_previews_are_skipped(batch, monkeypatch, tmp_path):
     config, answers = batch
     path = cli._save_plan(config, answers, tmp_path / "plan.json")
     path.unlink()
     (tmp_path / "broken.json").write_text("bad")
-    config.url = config.url.replace("test", "other")
-    cli._save_plan(config, answers, tmp_path / "other.json")
-    config.url = config.url.replace("other", "test")
     monkeypatch.chdir(tmp_path)
 
     def select(message, choices, **kwargs):
@@ -72,18 +69,7 @@ def test_missing_corrupt_and_other_form_previews_are_skipped(batch, monkeypatch,
         return "back"
 
     monkeypatch.setattr(cli, "_ask_select", select)
-    assert cli._select_saved_preview(config) is None
-
-
-def test_own_data_saved_choice_avoids_file_picker(batch, monkeypatch, tmp_path):
-    config, answers = batch
-    path = cli._save_plan(config, answers, tmp_path / "plan.json")
-    selections = iter(["saved"])
-    monkeypatch.setattr(cli, "_ask_select", lambda *a, **kw: next(selections))
-    monkeypatch.setattr(cli, "_select_saved_preview", lambda c: cli.SavedPreview(path, c, answers))
-    monkeypatch.setattr(cli, "_select_csv", lambda: pytest.fail("No file picker"))
-    selected = cli._prepare_source(config, "own")
-    assert selected.path == path and selected.answers == answers
+    assert cli._select_saved_preview() is None
 
 
 def test_saved_preview_selection_through_real_interactive_menu(batch, monkeypatch, tmp_path):
@@ -94,7 +80,7 @@ def test_saved_preview_selection_through_real_interactive_menu(batch, monkeypatc
     with create_pipe_input() as pipe:
         with create_app_session(input=pipe, output=DummyOutput()):
             pipe.send_text("\r")
-            selected = cli._select_saved_preview(config)
+            selected = cli._select_saved_preview()
     assert isinstance(selected, cli.SavedPreview)
     assert selected.path == path and selected.answers == answers
 

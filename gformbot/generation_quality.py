@@ -63,6 +63,7 @@ _MEDIA_DEPENDENCY = re.compile(
 _PHONE = re.compile(r"\+?[\d(). \-]+")
 _WORDS = re.compile(r"[^\W_]+", re.UNICODE)
 _UNOBSERVED = {"not checked", "not observed", "not verified", "unknown"}
+_CONTACT_GUIDANCE_BYTES = 4_500
 
 
 def _filled(value):
@@ -135,6 +136,7 @@ class Quality:
             and (kind := contact_kind(q))
         }
         self._contact_owners = {}
+        self._generated_contacts = set()
         self._contact_lock = Lock()
         self.facts.update(key for key, rule in self.fields.items() if rule.keys() & _SOURCES)
         self.coverage = self._keys(spec.get("coverage", []), "Quality coverage")
@@ -160,6 +162,15 @@ class Quality:
         self.facts.update(self.coverage)
         self._media_keys = {
             q.index for q in config.questions if _MEDIA_DEPENDENCY.search(f"{q.text}\n{q.description}")
+        }
+        self._required_media = {
+            key
+            for key in self._media_keys
+            if (q := self.questions[key]).required
+            and not (
+                q.qtype in CHOICE_TYPES - {"checkbox"}
+                and any(option.strip().casefold() in _UNOBSERVED for option in q.options)
+            )
         }
 
     def _key(self, value):
@@ -197,12 +208,17 @@ class Quality:
             raise ValueError(f"Q{key} dependencies must name at least one other question.")
         return keys
 
-    def remember_contacts(self, row, response_number):
-        """Reserve previously accepted or supplied contacts without changing them."""
+    def remember_contacts(self, row, response_number, *, synthetic=False, protected=()):
+        """Reserve saved contacts and restore known synthetic hints when eligible."""
         with self._contact_lock:
             for key, kind in self.contacts.items():
                 if identity := contact_identity(kind, _read(row, key)):
-                    self._contact_owners.setdefault((key, identity), response_number)
+                    contact = key, identity
+                    if contact in self._contact_owners:
+                        continue
+                    self._contact_owners[contact] = response_number
+                    if synthetic and not self.has_reference and key not in protected:
+                        self._generated_contacts.add(contact)
 
     def accept_contacts(self, row, response_number, *, keys=None, protected=()):
         """Claim all new contacts together, even when generation workers overlap."""
@@ -220,14 +236,23 @@ class Quality:
         if not (claims or problems):
             return
         with self._contact_lock:
+            duplicates = {}
             for key, identity, kind in claims:
                 if self._contact_owners.get((key, identity), response_number) != response_number:
                     label = "email address" if kind == "email" else "phone number"
                     problems[key] = (
                         f"Use a distinct realistic {label} because another response used this one."
                     )
+                    if (key, identity) in self._generated_contacts:
+                        duplicates[key] = identity
             if problems:
-                raise ContactAnswerError(problems)
+                raise ContactAnswerError(problems, duplicates=duplicates)
+            if not self.has_reference:
+                self._generated_contacts.update(
+                    (key, identity)
+                    for key, identity, _ in claims
+                    if (key, identity) not in self._contact_owners
+                )
             self._contact_owners.update({(key, identity): response_number for key, identity, _ in claims})
 
     def _checked_value(self, key, value):
@@ -468,11 +493,37 @@ class Quality:
                 failures[key] = f"Enter a phone value with at least {rule['min_digits']} digits."
         return failures
 
-    def evidence_issues(self, row, *, route=(), protected=()):
+    def _missing_evidence(self, protected):
+        if not self._media_keys:
+            return set()
         provided = {int(key) for key in protected}
         provided.update(q.index for q in self.questions.values() if q.fixed_value is not None)
         provided.update(key for key, rule in self.fields.items() if "exact" in rule or "approved" in rule)
-        missing = self._media_keys - self.evidence.keys() - self.placeholders - provided
+        return self._media_keys - self.evidence.keys() - self.placeholders - provided
+
+    def needs_evidence(self, protected):
+        return self._required_media & self._missing_evidence(protected)
+
+    def preflight_evidence(self, row, *, route=None, protected=()):
+        """Report a missing required observation on a definitively selected route."""
+        missing = self.needs_evidence(protected)
+        if not missing:
+            return None
+        if route is None:
+            route = self.routing.known_path(row)
+        if route is None:
+            return None
+        reached = missing & self._active(route)
+        if reached:
+            key = min(reached)
+            return (
+                f"Q{key} ({self.questions[key].text}): Answer depends on media. "
+                f"Add Q{key}: your observation to the extra instructions or supply it in --quality."
+            )
+        return None
+
+    def evidence_issues(self, row, *, route=(), protected=()):
+        missing = self._missing_evidence(protected)
         if not missing:
             return {}
         return {
@@ -522,7 +573,7 @@ class Quality:
             )
         )
 
-    def brief(self, questions, accepted=()):
+    def brief(self, questions, accepted=(), *, include_contacts=False):
         questions = tuple(questions)
         keys = {q.index for q in questions}
         instructions = [
@@ -561,6 +612,23 @@ class Quality:
                 f"Q{key} may use a test placeholder. Do not describe it as a verified observation."
             )
         result = {"purpose": self.purpose, "writing_guidance": instructions}
+        if include_contacts:
+            contacts, remaining = {}, _CONTACT_GUIDANCE_BYTES
+            with self._contact_lock:
+                for key, identity in reversed(self._contact_owners):
+                    if key not in keys or (key, identity) not in self._generated_contacts:
+                        continue
+                    cost = len(identity.encode("utf-8")) + 12
+                    if cost > remaining:
+                        break
+                    contacts.setdefault(str(key), []).append(identity)
+                    remaining -= cost
+            if contacts:
+                result["used_synthetic_contacts"] = contacts
+                instructions.append(
+                    "When used_synthetic_contacts is present, those values are already assigned to earlier test profiles. "
+                    "For the listed question IDs choose different values; changing punctuation does not make a new contact."
+                )
         evidence = {str(key): value for key, value in self.evidence.items() if key in keys}
         if evidence:
             result["supplied_evidence"] = evidence

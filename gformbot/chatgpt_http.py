@@ -7,6 +7,7 @@ import json
 import math
 import re
 import time
+from contextlib import nullcontext
 from copy import copy
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -23,6 +24,8 @@ _CONVERSATION = "/backend-anon/f/conversation"
 _USER_AGENT = "ChatGPT/1.2026.265 (Android 14; Mobile; 2626541)"
 _JSON_LIMIT = 128_000
 _STREAM_LIMIT = 2_000_000
+_STREAM_TAIL_SECONDS = 0.05
+_STREAM_TAIL_BYTES = 8_192
 _DONE_EVENT = re.compile(rb"(?:^|(?<=[\r\n]))data:[ \t]*\[DONE\][ \t]*\r?\n\r?\n")
 
 
@@ -146,10 +149,15 @@ def _provider_error(payload, *, status=None, stage="generation", headers=None):
     )
 
 
-def _parse_stream(body: bytearray, *, failure: ChatHTTPError | None = None, headers=None) -> str:
+def _parse_stream(
+    body: bytearray, *, failure: ChatHTTPError | None = None, headers=None, on_output=None
+) -> str:
     pieces: list[str] = []
     completed = False
-    for line in body.splitlines():
+    offset = 0
+    for line in body.splitlines(keepends=on_output is not None):
+        if on_output is not None:
+            offset += len(line)
         if not line.startswith(b"data:"):
             continue
         data = line[5:].strip()
@@ -200,6 +208,9 @@ def _parse_stream(body: bytearray, *, failure: ChatHTTPError | None = None, head
                     pieces = [fragment]
         if isinstance(value, str) and not any(event.get(key) for key in ("o", "p", "type")):
             pieces.append(value)
+        if on_output is not None and any(part.strip() for part in pieces):
+            on_output(offset)
+            on_output = None
     if failure is None:
         failure = ChatHTTPError("ChatGPT HTTPS ended without a complete answer.", retryable=not completed)
     failure.partial_content = "".join(pieces)
@@ -213,10 +224,34 @@ def _token(body: dict, key: str, stage: str) -> str:
     return value
 
 
+def _finish_stream_body(response, deadline, cancelled):
+    """Give a completed SSE reply a short chance to reach the HTTP body boundary."""
+    connection = getattr(response, "connection", None)
+    sock = getattr(connection, "sock", None)
+    if sock is None:
+        return
+    tail_deadline = min(deadline, time.monotonic() + _STREAM_TAIL_SECONDS)
+    remaining_bytes = _STREAM_TAIL_BYTES
+    try:
+        read_timeout = sock.gettimeout()
+        while remaining_bytes and response.connection is connection and not cancelled.is_set():
+            remaining = tail_deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            sock.settimeout(remaining if read_timeout is None else min(read_timeout, remaining))
+            chunk = response.read1(min(remaining_bytes, 2_048))
+            if not chunk:
+                return
+            remaining_bytes -= len(chunk)
+    except (urllib3.exceptions.HTTPError, OSError):
+        # A failed tail read cannot invalidate the complete SSE reply.
+        pass
+
+
 class Client:
     """Use one fresh guest identity and reusable connections for a batch of independent turns."""
 
-    def __init__(self, *, on_wait=None, max_wait=60, max_retries=2):
+    def __init__(self, *, on_wait=None, max_wait=60, max_retries=2, timing=None):
         if not isinstance(max_wait, (int, float)) or not math.isfinite(max_wait) or max_wait < 0:
             raise ValueError("ChatGPT cooldown budget must be finite and nonnegative.")
         if type(max_retries) is not int or not 0 <= max_retries <= 3:
@@ -230,6 +265,7 @@ class Client:
         self._limit_error = None
         self._serial = False
         self._on_wait = on_wait
+        self._timing = timing
         self._max_wait, self._max_retries = max_wait, max_retries
         self._pool = urllib3.PoolManager(
             maxsize=2,
@@ -246,6 +282,10 @@ class Client:
                 "oai-android-play-integrity-token-failed": "true",
             },
         )
+        if timing is not None:
+            from .generation_timing import time_connections
+
+            time_connections(self._pool)
 
     def cancel(self) -> None:
         self._cancelled.set()
@@ -275,7 +315,12 @@ class Client:
                     if enter:
                         self._active += 1
                     return
+                waiting = time.monotonic() if self._timing is not None else 0
                 self._condition.wait(min(remaining, cooldown) if cooldown > 0 else remaining)
+                if self._timing is not None:
+                    self._timing.wait(
+                        "cooldown" if cooldown > 0 else "connection_slot", time.monotonic() - waiting
+                    )
 
     def _leave(self):
         with self._condition:
@@ -308,6 +353,11 @@ class Client:
 
     def _post(self, path, data, deadline, stage, *, extra_headers=None):
         self._ready(deadline)
+        timing = self._timing.request(stage) if self._timing is not None else nullcontext()
+        with timing as stats:
+            return self._request(path, data, deadline, stage, extra_headers, stats)
+
+    def _request(self, path, data, deadline, stage, extra_headers, stats):
         pool = self._pool
         if pool is None:
             raise ChatHTTPError("The ChatGPT HTTPS session is closed.")
@@ -320,17 +370,25 @@ class Client:
         scan_from = 0
         failure = None
         response = None
+        arrivals = [] if streaming and stats is not None else None
+        started = time.monotonic()
         try:
+            payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
+            if stats is not None:
+                stats["request_bytes"] = len(payload)
             response = pool.request(
                 "POST",
                 _HOST + path,
-                body=json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode(),
+                body=payload,
                 headers={**pool.headers, **(extra_headers or {})},
                 timeout=urllib3.Timeout(total=remaining, connect=min(5, remaining), read=min(30, remaining)),
                 preload_content=False,
                 redirect=False,
                 retries=False,
             )
+            if stats is not None:
+                stats["headers_ms"] = round((time.monotonic() - started) * 1000, 2)
+                stats["status"] = response.status
             if response.status != 200:
                 error_body = bytearray()
                 try:
@@ -345,6 +403,8 @@ class Client:
                     payload = json.loads(error_body)
                 except (ValueError, RecursionError):
                     payload = {}
+                if stats is not None:
+                    stats["response_bytes"] = len(error_body)
                 error = _provider_error(
                     payload, status=response.status, stage=stage, headers=response.headers
                 )
@@ -366,10 +426,17 @@ class Client:
                 if not chunk:
                     break
                 body.extend(chunk)
+                if arrivals is not None:
+                    elapsed_ms = int((time.monotonic() - started) * 200) * 5
+                    if arrivals and arrivals[-1][1] == elapsed_ms:
+                        arrivals[-1] = (len(body), elapsed_ms)
+                    else:
+                        arrivals.append((len(body), elapsed_ms))
                 if len(body) > limit:
                     raise ChatHTTPError("ChatGPT HTTPS exceeded the response size limit.")
                 if streaming and b"\n" in chunk:
                     if _DONE_EVENT.search(body, scan_from):
+                        _finish_stream_body(response, deadline, self._cancelled)
                         break
                     # Retain the last line in case the event's blank separator arrives next.
                     last_newline = body.rfind(b"\n")
@@ -389,9 +456,23 @@ class Client:
             failure = ChatHTTPError(f"ChatGPT HTTPS connection failed during {stage}.", retryable=True)
         finally:
             if response is not None:
+                # urllib3 releases fully consumed replies itself. Close any connection still held.
                 response.close()
                 response.release_conn()
+            if stats is not None:
+                stats.setdefault("response_bytes", len(body))
         if streaming:
+            if arrivals:
+
+                def first_output(offset):
+                    stats["first_output_ms"] = next(elapsed for end, elapsed in arrivals if end >= offset)
+
+                return _parse_stream(
+                    body,
+                    failure=failure,
+                    headers=response.headers if response else None,
+                    on_output=first_output,
+                )
             return _parse_stream(body, failure=failure, headers=response.headers if response else None)
         if failure:
             raise failure

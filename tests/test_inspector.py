@@ -227,6 +227,86 @@ def test_sign_in_redirect_is_reported_as_access_requirement(monkeypatch):
         inspector.inspect_form(URL)
 
 
+@pytest.mark.parametrize("encoding", ["identity", "gzip"])
+def test_inspection_requests_compression_and_reads_both_encodings(monkeypatch, encoding):
+    import gzip
+    from email.message import Message
+    from io import BytesIO
+
+    from gformbot import inspector
+
+    html = document([item(1, "Name", 0)]).encode()
+    response = BytesIO(gzip.compress(html) if encoding == "gzip" else html)
+    response.url, response.status, response.headers = URL, 200, Message()
+    response.headers["Content-Encoding"] = encoding
+
+    def fetch(request, **kwargs):
+        assert request.get_header("Accept-encoding") == "gzip"
+        return response
+
+    monkeypatch.setattr(inspector, "urlopen", fetch)
+    assert inspector.inspect_form(URL).questions[0].text == "Name"
+    assert response.closed
+
+
+def test_inspection_limits_decompressed_form_size(monkeypatch):
+    import gzip
+    from email.message import Message
+    from io import BytesIO
+
+    from gformbot import inspector
+
+    response = BytesIO(gzip.compress(b" " * 1000))
+    response.url, response.status, response.headers = URL, 200, Message()
+    response.headers["Content-Encoding"] = "gzip"
+    monkeypatch.setattr(inspector, "urlopen", lambda *args, **kwargs: response)
+    monkeypatch.setattr(inspector, "_MAX_FORM_BYTES", 100)
+
+    with pytest.raises(ValueError, match="too large to inspect"):
+        inspector.inspect_form(URL)
+
+
+@pytest.mark.parametrize(("charset", "body"), [("utf-8", b"\xff"), ("invalid-text-codec", b"<html>")])
+def test_inspection_reports_unreadable_responder_text(monkeypatch, charset, body):
+    from email.message import Message
+    from io import BytesIO
+
+    from gformbot import inspector
+    from gformbot.access import FormAccessError
+
+    response = BytesIO(body)
+    response.url, response.status, response.headers = URL, 200, Message()
+    response.headers["Content-Type"] = f"text/html; charset={charset}"
+    monkeypatch.setattr(inspector, "urlopen", lambda *args, **kwargs: response)
+
+    with pytest.raises(FormAccessError) as failed:
+        inspector.inspect_form(URL)
+    assert failed.value.state == "temporary_failure"
+    assert response.closed
+
+
+def test_inspection_reports_an_incomplete_response(monkeypatch):
+    from email.message import Message
+    from http.client import IncompleteRead
+    from io import BytesIO
+
+    from gformbot import inspector
+    from gformbot.access import FormAccessError
+
+    class Response(BytesIO):
+        def read(self, size):
+            raise IncompleteRead(b"<ht")
+
+    response = Response()
+    response.url, response.status, response.headers = URL, 200, Message()
+    monkeypatch.setattr(inspector, "urlopen", lambda *args, **kwargs: response)
+
+    with pytest.raises(FormAccessError) as failed:
+        inspector.inspect_form(URL)
+    assert failed.value.state == "temporary_failure"
+    assert response.closed
+
+
 def policy_document(*, one_response=None, email=1, signin=False):
     data = json.loads(document([item(1, "Name", 0)]).split(" = ", 1)[1].removesuffix(";</script>"))
     data[1].extend([None] * (11 - len(data[1])))

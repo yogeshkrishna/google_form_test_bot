@@ -35,7 +35,7 @@ def batch_files(tmp_path, monkeypatch):
     return create
 
 
-def test_start_menu_offers_saved_batches_for_unstarted_answers(batch_files, monkeypatch):
+def test_start_menu_offers_continue_batches_for_unstarted_answers(batch_files, monkeypatch):
     batch_files()
     seen = []
     monkeypatch.setattr(cli, "_print_banner", lambda: None)
@@ -43,7 +43,7 @@ def test_start_menu_offers_saved_batches_for_unstarted_answers(batch_files, monk
         cli, "_ask_select", lambda message, choices, **kw: seen.extend(c.name for c in choices) or "exit"
     )
     cli._wizard()
-    assert seen == ["Quick submit", "Start a new form", "Saved batches", "More options", "Exit"]
+    assert seen == ["Quick submit", "Start a new form", "Continue batches", "More options", "Exit"]
 
 
 @pytest.mark.parametrize(
@@ -51,7 +51,7 @@ def test_start_menu_offers_saved_batches_for_unstarted_answers(batch_files, monk
 )
 def test_started_batch_is_available_without_regeneration(batch_files, monkeypatch, progress):
     path = batch_files(**progress)
-    selected, _ = cli._saved_batches(started_only=True)
+    selected, _ = cli._saved_batches()
     assert len(selected) == 1 and selected[0][1].path == path.resolve()
     managed = []
     menus = []
@@ -75,7 +75,7 @@ def test_started_batch_is_available_without_regeneration(batch_files, monkeypatc
         cli, "_generate", lambda *a, **kw: pytest.fail("Continuing submission must not regenerate answers")
     )
     cli._wizard()
-    assert "Saved batches" in menus[0]
+    assert "Continue batches" in menus[0]
     assert all("Survey" not in label for label in menus[1])
     assert managed[0][1] == [{1: f"Exact answer {i}"} for i in range(50)]
     assert managed[0][3] == {}
@@ -83,7 +83,7 @@ def test_started_batch_is_available_without_regeneration(batch_files, monkeypatc
 
 def test_recovery_labels_show_confirmed_progress_and_creation_time(batch_files):
     batch_files(confirmed=35, state="uncertain")
-    matches, _ = cli._saved_batches(started_only=True)
+    matches, _ = cli._saved_batches()
     created, batch = matches[0]
     timestamp = cli.datetime.fromtimestamp(created)
     assert cli._batch_label(batch, created) == f"35/50 submitted | {timestamp:%a, %d %b %Y %H:%M}"
@@ -98,13 +98,13 @@ def test_fully_submitted_and_legacy_ai_files_are_not_recovery_jobs(batch_files, 
     data = '{"kind":"gformbot-generation","responses":[null]}'
     old_job.write_text(data, encoding="utf-8")
     previews.remember(old_job)
-    assert cli._saved_batches(started_only=True) == ([], 0)
+    assert cli._saved_batches() == ([], 0)
     with pytest.raises(ValueError, match="Choose a GFormBot AI draft"):
         Draft.load(old_job, RunConfig("https://docs.google.com/forms/d/e/test/viewform"))
     assert old_job.read_text(encoding="utf-8") == data
 
 
-def test_prepared_answers_remain_available_to_own_data(batch_files, monkeypatch):
+def test_prepared_answers_remain_available_in_continue_batches(batch_files, monkeypatch):
     path = batch_files(count=2)
     monkeypatch.setattr(
         cli,
@@ -162,16 +162,37 @@ def test_quick_submit_backtracks_between_fields_before_submitting(monkeypatch):
     monkeypatch.setattr(cli, "_ask_number", lambda *a, **kw: next(counts))
     monkeypatch.setattr(cli, "_ask_text", instructions)
     monkeypatch.setattr(cli, "_ask_confirm", lambda *a, **kw: False)
-    monkeypatch.setattr(cli, "_submit_command", lambda *a, **kw: submitted.append((a, kw)))
+    config = RunConfig("FORM_URL")
+    answers = [{}]
+    monkeypatch.setattr(cli, "_run_inspect", lambda url, *, display: config)
+    monkeypatch.setattr(
+        cli,
+        "_prepare_ai_answers",
+        lambda config, reference, instructions: (
+            submitted.append((config.count, reference, instructions)) or answers
+        ),
+    )
+    monkeypatch.setattr(cli, "_save_plan", lambda *a, **kw: "PLAN_PATH")
+    monkeypatch.setattr(cli, "_submit_wizard_plan", lambda *a, **kw: submitted.append((a, kw)))
     cli._quick_submit()
-    assert submitted == ["back", (("FORM_URL", 7, "Fictional profiles", None, None), {"guided": True})]
+    assert submitted == [
+        "back",
+        (7, None, "Fictional profiles"),
+        ((config, answers, "PLAN_PATH"), {"automatic": True}),
+    ]
 
 
 def test_view_questions_returns_to_answer_sources(monkeypatch):
     config = RunConfig("https://docs.google.com/forms/d/e/test/viewform")
     selections = iter(["inspect", "own"])
     displayed = []
-    monkeypatch.setattr(cli, "_ask_select", lambda *a, **kw: next(selections))
+
+    def choose(message, choices, **kwargs):
+        assert message == "Where should the answers come from?"
+        assert any(choice.name == "View this form's questions" for choice in choices)
+        return next(selections)
+
+    monkeypatch.setattr(cli, "_ask_select", choose)
     monkeypatch.setattr(cli, "_show_form", displayed.append)
     monkeypatch.setattr(cli, "_prepare_source", lambda *a: [{1: "answer"}])
     monkeypatch.setattr(cli, "_save_plan", lambda *a, **kw: "saved.json")
@@ -190,7 +211,7 @@ def test_menu_pointer_uses_plain_ascii(monkeypatch):
 
     monkeypatch.setattr(inquirer, "select", select)
     monkeypatch.setattr(cli, "run_prompt", lambda _: "saved")
-    assert cli._ask_select("Choose", [cli._choice("saved", "Saved batches")]) == "saved"
+    assert cli._ask_select("Choose", [cli._choice("saved", "Continue batches")]) == "saved"
 
 
 @pytest.mark.parametrize("already_typing", [False, True])
@@ -243,6 +264,22 @@ def test_count_is_empty_while_typing_and_enter_uses_default(monkeypatch, keys, e
     text = inquirer.text
     monkeypatch.setattr(cli, "_INQUIRER", True)
     with create_pipe_input() as pipe:
-        monkeypatch.setattr(inquirer, "text", lambda **kw: text(**kw, input=pipe, output=DummyOutput()))
+
+        def open_prompt(**kwargs):
+            assert kwargs["message"] == "Number of responses"
+            return text(**kwargs, input=pipe, output=DummyOutput())
+
+        monkeypatch.setattr(inquirer, "text", open_prompt)
         pipe.send_text(keys)
         assert cli._ask_number("Number of responses", completed=True) == expected
+
+
+def test_form_url_prompt_retries_empty_and_editor_links(monkeypatch, capsys):
+    link = "https://docs.google.com/forms/d/e/example/viewform?usp=header"
+    inputs = iter(["", "https://docs.google.com/forms/d/e/example/edit", link])
+    monkeypatch.setattr(cli, "_clipboard_url", lambda: None)
+    monkeypatch.setattr(cli, "_ask_text", lambda *a, **kw: next(inputs))
+    assert cli._url_prompt() == link
+    output = " ".join(capsys.readouterr().out.split())
+    assert "Paste an HTTPS Google Forms responder URL" in output
+    assert "rather than the editor link" in output

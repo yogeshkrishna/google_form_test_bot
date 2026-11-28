@@ -16,6 +16,10 @@ SUPPORTED_TYPES = {
 }
 
 
+class NoTerminatingRoute(ValueError):
+    """The supplied restrictions prevent any supported route from submitting."""
+
+
 class Routing:
     def __init__(self, form):
         count = len(form.sections) or max((q.page for q in form.questions), default=1)
@@ -89,7 +93,7 @@ class Routing:
         if issues:
             raise ValueError("Unsupported form: cannot be filled reliably; " + "; ".join(issues))
 
-    def choose_route(self, preset):
+    def choose_route(self, preset, *, avoid_questions=frozenset()):
         """Find a supported terminating route without retries or enumerating profiles."""
         self.require_supported(())
         stack, seen = [(1, {})], set()
@@ -97,7 +101,9 @@ class Routing:
             page, chosen = stack.pop()
             if page == 0:
                 return chosen
-            if page in seen or any(q.index in self.blockers for q in self.questions[page]):
+            if page in seen or any(
+                q.index in self.blockers or q.index in avoid_questions for q in self.questions[page]
+            ):
                 continue
             seen.add(page)
             outcomes = {self.destinations[page - 1]: {}}
@@ -144,7 +150,9 @@ class Routing:
             for target, answers in reversed(list(outcomes.items())):
                 if target not in seen:
                     stack.append((target, {**chosen, **answers}))
-        raise ValueError("No supported terminating route matches the fixed answers and choice weights.")
+        raise NoTerminatingRoute(
+            "No supported terminating route matches the fixed answers and choice weights."
+        )
 
     def next(self, page, answer):
         # Google ignores choice navigation on the final physical section.
@@ -188,3 +196,17 @@ class Routing:
 
     def active(self, answer):
         return {q.index for page in self.walk(answer) for q in self.questions[page]}
+
+    def known_path(self, answer):
+        """Follow preselected navigation, stopping if a reached choice is still open."""
+        path = []
+        for page in self.walk(answer):
+            if page != len(self.questions) and any(
+                (q.branches or q.other_branch is not None)
+                and q.index not in answer
+                and str(q.index) not in answer
+                for q in self.questions[page]
+            ):
+                return None
+            path.append(page)
+        return path

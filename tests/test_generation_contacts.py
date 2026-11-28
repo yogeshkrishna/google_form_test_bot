@@ -6,9 +6,10 @@ from copy import deepcopy
 import pytest
 from click.testing import CliRunner
 
-from gformbot import chatgpt_http, cli, previews
+from gformbot import ai, chatgpt_http, cli, previews
 from gformbot.ai_draft import Draft
 from gformbot.config import QuestionConfig, RunConfig
+from gformbot.generation import Generation
 from gformbot.generation_contacts import ContactAnswerError, contact_identity, contact_kind, contact_problem
 from gformbot.generation_quality import Quality
 
@@ -95,6 +96,98 @@ def test_phone_duplicate_detection_keeps_calling_codes():
         quality.accept_contacts({3: "00 298 221783"}, 3)
 
 
+def test_restoring_same_field_never_shares_a_contact_reserved_by_a_preset():
+    config = _form(3)
+    quality = Quality(config)
+    quality.remember_contacts({3: "+1 303 555 0101"}, 1)
+    quality.remember_contacts({"3": "00 1 (303) 555-0101"}, 2, synthetic=True)
+
+    assert "used_synthetic_contacts" not in quality.brief(config.questions, include_contacts=True)
+    with pytest.raises(ContactAnswerError, match="another response") as caught:
+        quality.accept_contacts({3: "+1 303 555 0101"}, 3)
+    assert not caught.value.duplicates
+
+
+def test_stubborn_duplicate_phone_does_not_block_later_profiles(monkeypatch):
+    config = _form(6)
+    checkpoints, requests = [], []
+    fixed = False
+
+    def ask(self, messages, *, timeout):
+        task = json.loads(messages[-1]["content"])
+        rows = []
+        for i in task["profile_numbers"]:
+            requests.append(i)
+            phone = 1 if i == 2 and not fixed else i
+            row = {
+                "1": f"Fixture Person {i}",
+                "2": f"fixture.person84{i}@outlook.com",
+                "3": f"+1 303 555 010{phone}",
+                "4": "Denver",
+            }
+            rows.append(json.dumps({"profile_id": i, "answers": row}))
+        return "\n".join(rows)
+
+    monkeypatch.setattr(chatgpt_http.Client, "ask", ask)
+    with pytest.raises(ai.GenerationError, match=r"5/6.*Response 2: Q3:.*another response") as caught:
+        ai.generate_responses(config, 6, batch_size=2, checkpoint=checkpoints.append, quality=Quality(config))
+    assert caught.value.completed == 5
+    assert set(caught.value.partial_records) == {0, 2, 3, 4, 5}
+    assert requests.count(2) == 3
+    assert requests.count(6) == 1
+    saved = checkpoints[-1]
+    assert [profile["position"] for profile in saved["profiles"]] == [1, 0, 1, 1, 1, 1]
+
+    fixed = True
+    requests.clear()
+    quality = Quality(config)
+    for identity, profile in enumerate(saved["profiles"], 1):
+        quality.remember_contacts(profile["answers"], identity)
+    resumed = ai.generate_responses(config, 6, resume_state=saved, quality=quality)
+    assert requests == [2]
+    assert resumed[1][3] == "+1 303 555 0102"
+    assert all(resumed[i] == value for i, value in caught.value.partial_records.items())
+
+
+def test_duplicate_contact_repairs_avoid_each_generated_collision(monkeypatch):
+    config = _form(3)
+    original, another, replacement = "+1 303 555 0101", "+1 303 555 0102", "+1 303 555 0103"
+    expected = [
+        {"2": {"3": ["+13035550101"]}},
+        {"2": {"3": ["+13035550101", "+13035550102"]}},
+    ]
+    repairs = []
+
+    def ask(self, messages, *, timeout):
+        task = json.loads(messages[-1]["content"])
+        ids = task["profile_numbers"]
+        if "repair_fields" in task:
+            assert ids == [2]
+            exclusions = task.get("avoid_contact_values")
+            value = replacement if exclusions == expected[-1] else another
+            repairs.append(exclusions)
+            return json.dumps({"profile_id": 2, "answers": {"3": value}})
+        return "\n".join(
+            json.dumps(
+                {
+                    "profile_id": number,
+                    "answers": {
+                        "1": f"Fixture Person {number}",
+                        "2": f"fixture.person84{number}@outlook.com",
+                        "3": another if number == 3 else original,
+                        "4": "Denver",
+                    },
+                }
+            )
+            for number in ids
+        )
+
+    monkeypatch.setattr(chatgpt_http.Client, "ask", ask)
+    rows = ai.generate_responses(config, 3, quality=Quality(config))
+    assert repairs == expected
+    assert [row[3] for row in rows] == [original, replacement, another]
+
+
 def test_resume_repairs_only_contacts_that_repeat_saved_values(tmp_path, monkeypatch):
     config = _form(3)
     monkeypatch.chdir(tmp_path)
@@ -131,9 +224,11 @@ def test_resume_repairs_only_contacts_that_repeat_saved_values(tmp_path, monkeyp
         if "corrections" not in task:
             assert ids == [2, 3]
             assert "Gmail, Outlook or Yahoo" in str(task["generation_brief"])
+            assert "used_synthetic_contacts" not in task["generation_brief"]
             results = {2: first, 3: second}
         else:
             assert all("another response used this one" in message for message in task["corrections"])
+            assert "avoid_contact_values" not in task
             assert task["repair_fields"] == {str(i): list(repairs[i]) for i in ids}
             context = task["repair_context"]
             assert context["questions"]["1"] == "Full name"
@@ -155,6 +250,48 @@ def test_resume_repairs_only_contacts_that_repeat_saved_values(tmp_path, monkeyp
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     assert plan["batch_id"] == draft.identity
     assert plan["responses"] == [saved, {**first, **repairs[2]}, {**second, **repairs[3]}]
+
+
+@pytest.mark.parametrize("guided", [False, True])
+def test_resume_restores_only_known_synthetic_contact_guidance(monkeypatch, guided):
+    config = _form(2)
+    saved = {1: "Fixture One", 2: "supplied.contact@example.org", 3: "+1 303 555 0101", 4: "Denver"}
+    candidate = {1: "Fixture Two", 2: "fixture.two937@outlook.com", 3: "00 1 (303) 555-0101", 4: "Boulder"}
+    reference = [saved] if guided else None
+
+    def interrupt(self, messages, *, timeout):
+        exc = KeyboardInterrupt()
+        exc.partial_content = json.dumps({"profile_id": 1, "answers": saved})
+        raise exc
+
+    monkeypatch.setattr(chatgpt_http.Client, "ask", interrupt)
+    job = Generation(config, reference, "", partials=[{2: saved[2]}, {}])
+    with pytest.raises(KeyboardInterrupt):
+        job.run()
+
+    draft = Draft.read(job.draft.path)
+    turns = []
+
+    def finish(self, messages, *, timeout):
+        task = json.loads(messages[-1]["content"])
+        assert task["profile_numbers"] == [2]
+        assert saved[2] not in str(task["generation_brief"])
+        known = None if guided else {"3": ["+13035550101"]}
+        assert task["generation_brief"].get("used_synthetic_contacts") == known
+        if "repair_fields" in task:
+            assert task["repair_fields"] == {"2": ["3"]}
+            assert task.get("avoid_contact_values") == (None if guided else {"2": known})
+            turns.append("repair")
+            return '{"profile_id":2,"answers":{"3":"720 555 0102"}}'
+        turns.append("generate")
+        return json.dumps({"profile_id": 2, "answers": candidate})
+
+    monkeypatch.setattr(chatgpt_http.Client, "ask", finish)
+    resumed = Generation(
+        draft.config, draft.reference, draft.instructions, partials=draft.partials, draft=draft
+    )
+    assert resumed.run() == [saved, {**candidate, 3: "720 555 0102"}]
+    assert turns == ["generate", "repair"]
 
 
 def test_partition_resume_deduplicates_across_original_profile_ids(tmp_path, monkeypatch):

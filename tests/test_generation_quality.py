@@ -6,6 +6,26 @@ from gformbot.config import QuestionConfig, RunConfig
 from gformbot.generation_quality import Quality
 
 
+def test_contact_prompt_remembers_only_contacts_generated_in_this_run():
+    config = RunConfig(
+        "https://docs.google.com/forms/d/e/test/viewform",
+        questions=[QuestionConfig(1, "Email", "text"), QuestionConfig(2, "Phone", "text")],
+    )
+    restored = {1: "held.value87@outlook.com"}
+    generated = {1: "new.value92@outlook.com", 2: "+1 202 555 0132"}
+    policy = Quality(config)
+    policy.remember_contacts(restored, 1)
+    policy.accept_contacts({1: "provided.value94@outlook.com"}, 2, protected={1})
+    policy.accept_contacts(generated, 3)
+
+    context = policy.brief(config.questions, include_contacts=True)["used_synthetic_contacts"]
+    assert context == {"1": ["new.value92@outlook.com"], "2": ["+12025550132"]}
+    assert "used_synthetic_contacts" not in policy.brief(config.questions)
+    guided = Quality(config, reference=[restored])
+    guided.accept_contacts(generated, 1)
+    assert "used_synthetic_contacts" not in guided.brief(config.questions, include_contacts=True)
+
+
 def test_contact_rules_derive_from_name_and_preserve_supplied_answers():
     config = RunConfig(
         "https://docs.google.com/forms/d/e/test/viewform",

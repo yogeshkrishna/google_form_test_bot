@@ -83,3 +83,17 @@ def test_correction_names_only_pending_ids_and_explains_evidence_format(profiles
     assert "could not be validated" in correction[0]["content"]
     assert "copy quoted text verbatim from answers" in correction[0]["content"]
     assert set(json.loads(correction[1]["content"])["profiles"]) == {"18"}
+
+
+@pytest.mark.parametrize("kind", ["cross_answer", "contradiction"])
+def test_review_with_only_one_side_of_a_claim_cannot_block(profiles, kind):
+    issue = {**_finding(), "kind": kind, "reason": "Q5 says the asset is a camera."}
+    assert parse_review_response(_record(7, issue), profiles) == {
+        7: [{**issue, "kind": "relevance", "reason": "Unverified comparison. " + issue["reason"]}]
+    }
+
+
+def test_review_can_compare_two_verbatim_answers(profiles):
+    issue = {**_finding(), "kind": "cross_answer", "reason": "Q5 lists a gateway but Q6 describes a camera."}
+    issue["evidence"].append({"question": 5, "quote": "Gateway"})
+    assert parse_review_response(_record(7, issue), profiles) == {7: [issue]}

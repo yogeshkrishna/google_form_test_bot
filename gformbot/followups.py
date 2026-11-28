@@ -25,6 +25,7 @@ _SECRETS = {
 }
 _URL = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+_RECORD_WARNING = "Some form instructions could not be captured or saved. Submission status is unchanged."
 
 
 def safe_url(value: str, base: str, _depth: int = 0) -> str:
@@ -196,33 +197,42 @@ class Recorder:
         self.warning = ""
 
     def record(self, blocks, response, section, stage, base):
-        """Store scoped HTTP instructions using the shared privacy policy."""
-        try:
-            by_stage = defaultdict(list)
-            for raw in blocks:
-                block = _sanitize(raw, base)
-                if not block["text"] and not block["links"]:
-                    continue
-                observed_stage = raw.get("stage", stage)
-                observed_section = 0 if observed_stage in {"intro", "confirmation"} else section
-                key = (response, observed_section, observed_stage, json.dumps(block, sort_keys=True))
-                self.records[key] = {
-                    "batch": self.journal.identity,
-                    "response": response,
-                    "section": observed_section,
-                    "stage": observed_stage,
-                    "content": block,
-                    "title": self.title,
-                }
-                by_stage[observed_section, observed_stage].append(block)
-            for (observed_section, observed_stage), values in by_stage.items():
-                self.journal.record_followups(
-                    response, observed_section, observed_stage, values, self.log_path, self.title
+        self.record_many([(section, stage, blocks)], response, base)
+
+    def record_many(self, observations, response, base):
+        """Store the scoped instructions for one response in observation order."""
+        values = []
+        for section, stage, blocks in observations:
+            try:
+                by_stage = defaultdict(list)
+                for raw in blocks:
+                    block = _sanitize(raw, base)
+                    if not block["text"] and not block["links"]:
+                        continue
+                    observed_stage = raw.get("stage", stage)
+                    observed_section = 0 if observed_stage in {"intro", "confirmation"} else section
+                    key = (response, observed_section, observed_stage, json.dumps(block, sort_keys=True))
+                    self.records[key] = {
+                        "batch": self.journal.identity,
+                        "response": response,
+                        "section": observed_section,
+                        "stage": observed_stage,
+                        "content": block,
+                        "title": self.title,
+                    }
+                    by_stage[observed_section, observed_stage].append(block)
+                values.extend(
+                    (observed_section, observed_stage, block)
+                    for (observed_section, observed_stage), scoped in by_stage.items()
+                    for block in scoped
                 )
-        except Exception:
-            self.warning = (
-                "Some form instructions could not be captured or saved. Submission status is unchanged."
-            )
+            except Exception:
+                self.warning = _RECORD_WARNING
+        if values:
+            try:
+                self.journal.record_followups(response, values, self.log_path, self.title)
+            except Exception:
+                self.warning = _RECORD_WARNING
 
     def show(self, ui):
         display(list(self.records.values()), ui, warning=self.warning, log_path=self.log_path)
